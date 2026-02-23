@@ -334,6 +334,9 @@ manage_host_native_service() {
         box_line "  ${BOLD}2)${NC} Stop"
         box_line "  ${BOLD}3)${NC} Restart"
         box_line "  ${BOLD}4)${NC} Status (detailed)"
+        if [[ "$service" == "mlx" ]]; then
+            box_line "  ${BOLD}5)${NC} Sync Models (check/download)"
+        fi
 
         box_empty
         box_line "  ${DIM}This service runs on the host machine, not in a container.${NC}"
@@ -352,6 +355,12 @@ manage_host_native_service() {
             2) host_native_action "$service" "stop"; read -n 1 -s -r -p "Press any key to continue..." ;;
             3) host_native_action "$service" "restart"; read -n 1 -s -r -p "Press any key to continue..." ;;
             4) host_native_action "$service" "status"; read -n 1 -s -r -p "Press any key to continue..." ;;
+            5)
+                if [[ "$service" == "mlx" ]]; then
+                    host_native_action "$service" "sync"
+                    read -n 1 -s -r -p "Press any key to continue..."
+                fi
+                ;;
             b|B) return ;;
             m|M) return 1 ;;
         esac
@@ -396,19 +405,21 @@ manage_service() {
 
         # Backend-specific extras for Docker core-apps
         if [[ "$_CURRENT_BACKEND" == "docker" && "$service" == "core-apps" ]]; then
-            box_line "  ${BOLD}6)${NC} Rebuild Container (full Docker rebuild)"
-            box_line "  ${BOLD}7)${NC} Rebuild App (from source, no container restart)"
+            box_line "  ${BOLD}6)${NC} Rebuild App (from source, no container restart)"
 
             local current_mode
-            current_mode=$(docker inspect --format='{{join .Args " "}}' "${prefix}-core-apps" 2>/dev/null || echo "unknown")
-            if [[ "$current_mode" == "prod" ]]; then
-                box_line "  ${BOLD}8)${NC} Switch to Dev mode (Turbopack hot-reload)"
-                box_empty
-                box_line "  ${DIM}Currently running in ${BOLD}prod${NC}${DIM} mode (built, no hot-reload)${NC}"
+            current_mode=$(docker inspect --format='{{join .Args " "}}' "${prefix}-core-apps" 2>/dev/null || echo "prod")
+            if [[ "$current_mode" == "dev" ]]; then
+                box_line "  ${BOLD}7)${NC} Disable Core Developer Mode (switch to standalone, lower memory)"
             else
-                box_line "  ${BOLD}8)${NC} Switch to Prod mode (build + serve, lower CPU)"
-                box_empty
-                box_line "  ${DIM}Currently running in ${BOLD}dev${NC}${DIM} mode (Turbopack hot-reload)${NC}"
+                box_line "  ${BOLD}7)${NC} Enable Core Developer Mode (Turbopack hot-reload)"
+            fi
+
+            box_empty
+            if [[ "$current_mode" == "dev" ]]; then
+                box_line "  ${DIM}Developer Mode: ${BOLD}ON${NC}${DIM} (Turbopack hot-reload)${NC}"
+            else
+                box_line "  ${DIM}Developer Mode: ${BOLD}OFF${NC}${DIM} (standalone production build)${NC}"
             fi
         fi
 
@@ -487,47 +498,44 @@ manage_service() {
                 fi
                 read -n 1 -s -r -p "Press any key to continue..."
                 ;;
-            6) # Rebuild Container (Docker) or Deploy App (Proxmox) - core-apps only
+            6) # Rebuild App (Docker core-apps) or Deploy App (Proxmox core-apps)
                 if [[ "$service" != "core-apps" ]]; then
                     continue
                 fi
                 if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
-                    echo ""
-                    info "Rebuilding core-apps container (full Docker rebuild)..."
-                    cd "$REPO_ROOT"
-                    make docker-build SERVICE=core-apps ENV="$env" && make docker-up SERVICE=core-apps ENV="$env"
-                    read -n 1 -s -r -p "Press any key to continue..."
+                    _rebuild_app_submenu "$env" "$prefix"
                 elif [[ "$_CURRENT_BACKEND" == "proxmox" ]]; then
                     _deploy_core_app_submenu "$env"
                 fi
                 ;;
-            7) # Rebuild App (Docker core-apps only)
-                if [[ "$service" != "core-apps" ]] || [[ "$_CURRENT_BACKEND" != "docker" ]]; then
-                    continue
-                fi
-                _rebuild_app_submenu "$env" "$prefix"
-                ;;
-            8) # Switch mode (Docker core-apps only)
+            7) # Switch Core Developer Mode (Docker core-apps only)
                 if [[ "$service" != "core-apps" ]] || [[ "$_CURRENT_BACKEND" != "docker" ]]; then
                     continue
                 fi
                 echo ""
                 local current_mode
-                current_mode=$(docker inspect --format='{{join .Args " "}}' "${prefix}-core-apps" 2>/dev/null || echo "dev")
+                current_mode=$(docker inspect --format='{{join .Args " "}}' "${prefix}-core-apps" 2>/dev/null || echo "prod")
                 local new_mode
-                if [[ "$current_mode" == "prod" ]]; then
-                    new_mode="dev"
-                    info "Switching core-apps to dev mode..."
-                else
+                if [[ "$current_mode" == "dev" ]]; then
                     new_mode="prod"
-                    info "Switching core-apps to prod mode..."
-                    warn "This will build both apps before starting."
+                    info "Disabling Core Developer Mode (switching to standalone production build)..."
+                    info "Memory usage will be significantly lower. Hot-reload will be disabled."
+                else
+                    new_mode="dev"
+                    info "Enabling Core Developer Mode (Turbopack hot-reload)..."
+                    warn "Higher memory and CPU usage. Code changes will apply without restart."
                 fi
+                # Persist the new mode to the state file so it survives restarts
+                set_core_apps_mode "$new_mode"
                 cd "$REPO_ROOT"
                 export CORE_APPS_MODE="$new_mode"
                 make docker-up SERVICE="core-apps"
                 echo ""
-                success "core-apps now running in ${new_mode} mode"
+                if [[ "$new_mode" == "dev" ]]; then
+                    success "Core Developer Mode ENABLED (hot-reload active)"
+                else
+                    success "Core Developer Mode DISABLED (standalone production build)"
+                fi
                 read -n 1 -s -r -p "Press any key to continue..."
                 ;;
             b|B) return ;;
@@ -552,9 +560,20 @@ _rebuild_app_submenu() {
         docker exec -e APP_NAME="$app_name" "${prefix}-core-apps" bash -lc '
             set -euo pipefail
 
+            # Monorepo mode: app lives at /srv/busibox-frontend/apps/<name>
+            MONOREPO_PATH="/srv/busibox-frontend/apps/${APP_NAME}"
+            if [[ -d "$MONOREPO_PATH" ]]; then
+                echo "Rebuilding ${APP_NAME} in monorepo..."
+                cd /srv/busibox-frontend
+                pnpm install --frozen-lockfile 2>/dev/null || pnpm install
+                exit 0
+            fi
+
+            # Legacy mode: search for standalone app directories
             APP_PATH=""
             for candidate in \
                 "/srv/${APP_NAME}" \
+                "/srv/busibox-${APP_NAME}" \
                 "/srv/apps/${APP_NAME}" \
                 /srv/apps/*/"${APP_NAME}" \
                 /srv/*/"${APP_NAME}"
@@ -566,17 +585,13 @@ _rebuild_app_submenu() {
             done
 
             if [[ -z "$APP_PATH" && -x /usr/local/bin/entrypoint.sh ]]; then
-                case "$APP_NAME" in
-                    busibox-portal) DEPLOY_REF="${BUSIBOX_PORTAL_GITHUB_REF:-main}" ;;
-                    busibox-agents) DEPLOY_REF="${BUSIBOX_AGENTS_GITHUB_REF:-main}" ;;
-                    busibox-appbuilder) DEPLOY_REF="${BUSIBOX_APPBUILDER_GITHUB_REF:-main}" ;;
-                    *) DEPLOY_REF="main" ;;
-                esac
+                DEPLOY_REF="main"
                 echo "App not present; deploying ${APP_NAME} (ref: ${DEPLOY_REF})..."
-                /usr/local/bin/entrypoint.sh deploy "$APP_NAME" "$DEPLOY_REF"
+                /usr/local/bin/entrypoint.sh deploy "busibox-${APP_NAME}" "$DEPLOY_REF"
 
                 for candidate in \
                     "/srv/${APP_NAME}" \
+                    "/srv/busibox-${APP_NAME}" \
                     "/srv/apps/${APP_NAME}" \
                     /srv/apps/*/"${APP_NAME}" \
                     /srv/*/"${APP_NAME}"
@@ -590,7 +605,6 @@ _rebuild_app_submenu() {
 
             if [[ -z "$APP_PATH" ]]; then
                 echo "${APP_NAME} source directory not found in core-apps container"
-                echo "Checked: /srv/${APP_NAME}, /srv/apps/${APP_NAME}, /srv/apps/*/${APP_NAME}, /srv/*/${APP_NAME}"
                 exit 1
             fi
 
@@ -598,16 +612,19 @@ _rebuild_app_submenu() {
         '
     }
 
+    local -a CORE_APPS=("portal" "agents" "admin" "chat" "appbuilder" "media" "documents")
+
     clear
     box_start 70 double "$CYAN"
     box_header "REBUILD APP"
     box_empty
     box_line "  ${BOLD}Select app to rebuild:${NC}"
     box_empty
-    box_line "    ${BOLD}1)${NC} busibox-portal"
-    box_line "    ${BOLD}2)${NC} busibox-agents"
-    box_line "    ${BOLD}3)${NC} busibox-appbuilder"
-    box_line "    ${BOLD}4)${NC} all (portal + agents + appbuilder)"
+    local i
+    for i in "${!CORE_APPS[@]}"; do
+        box_line "    ${BOLD}$((i+1)))${NC} ${CORE_APPS[$i]}"
+    done
+    box_line "    ${BOLD}a)${NC} all apps"
     box_empty
     box_line "  ${DIM}b = back${NC}"
     box_empty
@@ -617,78 +634,48 @@ _rebuild_app_submenu() {
     read -n 1 -s -r -p "Select app: " app_choice
     echo ""
 
-    case "$app_choice" in
-        1)
-            echo ""
-            info "Rebuilding busibox-portal from source..."
-            if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
-                _docker_rebuild_core_app_from_source "busibox-portal"
-                docker restart "${prefix}-core-apps"
-                _refresh_nginx_after_core_app_change
-            else
-                cd "${REPO_ROOT}/provision/ansible"
-                make deploy-busibox-portal INV="inventory/${env}"
-                _refresh_nginx_after_core_app_change
-            fi
-            read -n 1 -s -r -p "Press any key to continue..."
-            ;;
-        2)
-            echo ""
-            info "Rebuilding busibox-agents from source..."
-            if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
-                _docker_rebuild_core_app_from_source "busibox-agents"
-                docker restart "${prefix}-core-apps"
-                _refresh_nginx_after_core_app_change
-            else
-                cd "${REPO_ROOT}/provision/ansible"
-                make deploy-busibox-agents INV="inventory/${env}"
-                _refresh_nginx_after_core_app_change
-            fi
-            read -n 1 -s -r -p "Press any key to continue..."
-            ;;
-        3)
-            echo ""
-            info "Rebuilding busibox-appbuilder from source..."
-            if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
-                _docker_rebuild_core_app_from_source "busibox-appbuilder"
+    if [[ "$app_choice" == "b" || "$app_choice" == "B" ]]; then
+        return
+    fi
+
+    if [[ "$app_choice" == "a" || "$app_choice" == "A" ]]; then
+        echo ""
+        if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
+            for app_name in "${CORE_APPS[@]}"; do
+                info "Rebuilding ${app_name} from source..."
+                _docker_rebuild_core_app_from_source "${app_name}"
                 echo ""
-                docker restart "${prefix}-core-apps"
-                _refresh_nginx_after_core_app_change
-            else
-                cd "${REPO_ROOT}/provision/ansible"
-                make deploy-busibox-appbuilder INV="inventory/${env}"
-                _refresh_nginx_after_core_app_change
-            fi
-            read -n 1 -s -r -p "Press any key to continue..."
-            ;;
-        4)
-            echo ""
-            info "Rebuilding busibox-portal from source..."
-            if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
-                _docker_rebuild_core_app_from_source "busibox-portal"
+            done
+            docker restart "${prefix}-core-apps"
+            _refresh_nginx_after_core_app_change
+        else
+            cd "${REPO_ROOT}/provision/ansible"
+            for app_name in "${CORE_APPS[@]}"; do
+                info "Rebuilding ${app_name} from source..."
+                make "deploy-busibox-${app_name}" INV="inventory/${env}" || true
                 echo ""
-                info "Rebuilding busibox-agents from source..."
-                _docker_rebuild_core_app_from_source "busibox-agents"
-                echo ""
-                info "Rebuilding busibox-appbuilder from source..."
-                _docker_rebuild_core_app_from_source "busibox-appbuilder"
-                docker restart "${prefix}-core-apps"
-                _refresh_nginx_after_core_app_change
-            else
-                cd "${REPO_ROOT}/provision/ansible"
-                make deploy-busibox-portal INV="inventory/${env}"
-                echo ""
-                info "Rebuilding busibox-agents from source..."
-                make deploy-busibox-agents INV="inventory/${env}"
-                echo ""
-                info "Rebuilding busibox-appbuilder from source..."
-                make deploy-busibox-appbuilder INV="inventory/${env}"
-                _refresh_nginx_after_core_app_change
-            fi
-            read -n 1 -s -r -p "Press any key to continue..."
-            ;;
-        b|B) ;;
-    esac
+            done
+            _refresh_nginx_after_core_app_change
+        fi
+        read -n 1 -s -r -p "Press any key to continue..."
+        return
+    fi
+
+    if [[ "$app_choice" =~ ^[1-7]$ ]]; then
+        local selected_app="${CORE_APPS[$((app_choice-1))]}"
+        echo ""
+        info "Rebuilding ${selected_app} from source..."
+        if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
+            _docker_rebuild_core_app_from_source "${selected_app}"
+            docker restart "${prefix}-core-apps"
+            _refresh_nginx_after_core_app_change
+        else
+            cd "${REPO_ROOT}/provision/ansible"
+            make "deploy-busibox-${selected_app}" INV="inventory/${env}"
+            _refresh_nginx_after_core_app_change
+        fi
+        read -n 1 -s -r -p "Press any key to continue..."
+    fi
 }
 
 # Deploy core app submenu (Proxmox only - select app + release/branch)

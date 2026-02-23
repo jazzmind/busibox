@@ -57,7 +57,7 @@ run_health_checks() {
             "minio:9000"
             "milvus:19530"
             "authz-api:8010"
-            "agent-api:4111"
+            "agent-api:8000"
             "data-api:8002"
             "search-api:8003"
             "litellm:4000"

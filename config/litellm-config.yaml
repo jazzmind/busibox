@@ -1,7 +1,7 @@
 # LiteLLM Configuration - Generated from model_registry.yml
 # Environment: development
 # Backend: mlx
-# Generated: 2026-02-19T23:19:52-05:00
+# Generated: 2026-02-22T11:57:22-05:00
 # DO NOT EDIT - regenerate with: scripts/llm/generate-litellm-config.sh
 
 model_list:
@@ -11,7 +11,9 @@ model_list:
       api_base: http://host.docker.internal:8080/v1
       api_key: local
     model_info:
+      display_name: "Default"
       description: "Primary agent/chat/tool-calling model (4B params, 128K ctx, Hermes tools)"
+      tool_calling: true
 
   - model_name: test
     litellm_params:
@@ -19,7 +21,9 @@ model_list:
       api_base: http://host.docker.internal:18081/v1
       api_key: local
     model_info:
+      display_name: "Test"
       description: "Tiny test model with reasoning (0.6B params, has <think> mode)"
+      tool_calling: true
 
   - model_name: fast
     litellm_params:
@@ -27,7 +31,9 @@ model_list:
       api_base: http://host.docker.internal:18081/v1
       api_key: local
     model_info:
+      display_name: "Fast"
       description: "Tiny test model with reasoning (0.6B params, has <think> mode)"
+      tool_calling: true
 
   - model_name: classify
     litellm_params:
@@ -35,7 +41,29 @@ model_list:
       api_base: http://host.docker.internal:18081/v1
       api_key: local
     model_info:
+      display_name: "Classify"
       description: "Tiny test model with reasoning (0.6B params, has <think> mode)"
+      tool_calling: true
+
+  - model_name: cleanup
+    litellm_params:
+      model: openai/mlx-community/Qwen3-1.7B-4bit
+      api_base: http://host.docker.internal:8080/v1
+      api_key: local
+    model_info:
+      display_name: "Cleanup"
+      description: "Small Qwen3 for classification and simple tasks (1.7B params)"
+      tool_calling: true
+
+  - model_name: parsing
+    litellm_params:
+      model: openai/mlx-community/Qwen3-4B-Instruct-2507-4bit
+      api_base: http://host.docker.internal:8080/v1
+      api_key: local
+    model_info:
+      display_name: "Parsing"
+      description: "Primary agent/chat/tool-calling model (4B params, 128K ctx, Hermes tools)"
+      tool_calling: true
 
   - model_name: agent
     litellm_params:
@@ -43,7 +71,9 @@ model_list:
       api_base: http://host.docker.internal:8080/v1
       api_key: local
     model_info:
+      display_name: "Agent"
       description: "Primary agent/chat/tool-calling model (4B params, 128K ctx, Hermes tools)"
+      tool_calling: true
 
   - model_name: chat
     litellm_params:
@@ -51,7 +81,9 @@ model_list:
       api_base: http://host.docker.internal:8080/v1
       api_key: local
     model_info:
+      display_name: "Chat"
       description: "Primary agent/chat/tool-calling model (4B params, 128K ctx, Hermes tools)"
+      tool_calling: true
 
   - model_name: frontier
     litellm_params:
@@ -59,7 +91,9 @@ model_list:
       api_base: http://host.docker.internal:8080/v1
       api_key: local
     model_info:
+      display_name: "Frontier"
       description: "Frontier local model for complex reasoning (8B params, 128K ctx)"
+      tool_calling: true
 
   - model_name: tool_calling
     litellm_params:
@@ -67,30 +101,36 @@ model_list:
       api_base: http://host.docker.internal:8080/v1
       api_key: local
     model_info:
+      display_name: "Tool Calling"
       description: "Primary agent/chat/tool-calling model (4B params, 128K ctx, Hermes tools)"
+      tool_calling: true
 
   - model_name: video
     litellm_params:
       model: openai/sora-2
       api_base: http://host.docker.internal:8080/v1
       api_key: local
+    model_info:
+      display_name: "Video"
 
   - model_name: image
     litellm_params:
-      model: openai/flux-schnell
+      model: openai/flux2-klein-4b
       api_base: http://host.docker.internal:8083/v1
       api_key: local
     model_info:
-      description: "Fast local image generation model (FLUX Schnell)"
+      display_name: "Image"
+      description: "Lightweight image generation (FLUX.2 Klein 4B Q4)"
       mode: "image_generation"
 
   - model_name: transcribe
     litellm_params:
-      model: openai/mlx-community/whisper-large-v3-mlx
-      api_base: http://host.docker.internal:8081/v1
+      model: openai/mlx-community/whisper-tiny-mlx
+      api_base: http://host.docker.internal:8084/v1
       api_key: local
     model_info:
-      description: "Speech-to-text transcription (Whisper Large v3)"
+      display_name: "Transcribe"
+      description: "Speech-to-text transcription (Whisper Tiny ~150 MB for dev)"
       mode: "audio_transcription"
 
   - model_name: voice
@@ -99,6 +139,7 @@ model_list:
       api_base: http://host.docker.internal:8082/v1
       api_key: local
     model_info:
+      display_name: "Voice"
       description: "Text-to-speech voice generation (Kokoro 82M)"
       mode: "audio_speech"
 
@@ -109,6 +150,7 @@ model_list:
       api_key: local
     model_info:
       description: "Primary agent/chat/tool-calling model (4B params, 128K ctx, Hermes tools)"
+      tool_calling: true
 
   - model_name: qwen3-0.6b
     litellm_params:
@@ -117,6 +159,16 @@ model_list:
       api_key: local
     model_info:
       description: "Tiny test model with reasoning (0.6B params, has <think> mode)"
+      tool_calling: true
+
+  - model_name: qwen3-1.7b
+    litellm_params:
+      model: openai/mlx-community/Qwen3-1.7B-4bit
+      api_base: http://host.docker.internal:8080/v1
+      api_key: local
+    model_info:
+      description: "Small Qwen3 for classification and simple tasks (1.7B params)"
+      tool_calling: true
 
   - model_name: qwen3-8b
     litellm_params:
@@ -125,6 +177,7 @@ model_list:
       api_key: local
     model_info:
       description: "Frontier local model for complex reasoning (8B params, 128K ctx)"
+      tool_calling: true
 
   - model_name: sora-2
     litellm_params:
@@ -132,22 +185,22 @@ model_list:
       api_base: http://host.docker.internal:8080/v1
       api_key: local
 
-  - model_name: flux-schnell
+  - model_name: flux2-klein-4b
     litellm_params:
-      model: openai/flux-schnell
+      model: openai/flux2-klein-4b
       api_base: http://host.docker.internal:8083/v1
       api_key: local
     model_info:
-      description: "Fast local image generation model (FLUX Schnell)"
+      description: "Lightweight image generation (FLUX.2 Klein 4B Q4)"
       mode: "image_generation"
 
-  - model_name: whisper-large-v3
+  - model_name: whisper-tiny
     litellm_params:
-      model: openai/mlx-community/whisper-large-v3-mlx
-      api_base: http://host.docker.internal:8081/v1
+      model: openai/mlx-community/whisper-tiny-mlx
+      api_base: http://host.docker.internal:8084/v1
       api_key: local
     model_info:
-      description: "Speech-to-text transcription (Whisper Large v3)"
+      description: "Speech-to-text transcription (Whisper Tiny ~150 MB for dev)"
       mode: "audio_transcription"
 
   - model_name: kokoro-82m

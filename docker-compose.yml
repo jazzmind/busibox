@@ -304,7 +304,9 @@ services:
 
   # LiteLLM - Unified LLM Gateway
   litellm:
-    image: ghcr.io/berriai/litellm:main-latest
+    build:
+      context: .
+      dockerfile: provision/docker/litellm.Dockerfile
     container_name: ${CONTAINER_PREFIX:-dev}-litellm
     hostname: litellm
     labels:
@@ -379,9 +381,8 @@ services:
       # General model cache for huggingface, etc.
       - model_cache:/root/.cache/huggingface
     environment:
-      # FastEmbed model - use bge-large for consistency with production
-      # Override with FASTEMBED_MODEL=BAAI/bge-small-en-v1.5 for faster dev (384-d, ~134MB vs 1024-d, ~1.3GB)
-      FASTEMBED_MODEL: ${FASTEMBED_MODEL:-BAAI/bge-large-en-v1.5}
+      # FastEmbed model - bge-small for dev (384-d, ~134MB), override to bge-large for production (1024-d, ~1.3GB)
+      FASTEMBED_MODEL: ${FASTEMBED_MODEL:-BAAI/bge-small-en-v1.5}
       EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-32}
       # Cache directory inside container - matches mounted volume
       FASTEMBED_CACHE_DIR: /root/.cache/fastembed
@@ -534,7 +535,7 @@ services:
       LLM_CLEANUP_ENABLED: ${LLM_CLEANUP_ENABLED:-false}
       # Embedding API - dedicated embedding service (no local model loading)
       EMBEDDING_API_URL: http://embedding-api:8005
-      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-384}
       # Neo4j (optional graph database)
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: ${NEO4J_USER:-neo4j}
@@ -615,7 +616,7 @@ services:
       TEST_DOC_REPO_PATH: /testdocs
       # Embedding API - dedicated embedding service (no local model loading)
       EMBEDDING_API_URL: http://embedding-api:8005
-      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-384}
       # AuthZ (for encryption/decryption during processing)
       AUTHZ_BASE_URL: http://authz-api:8010
       AUTHZ_JWKS_URL: http://authz-api:8010/.well-known/jwks.json
@@ -1259,6 +1260,48 @@ services:
       start_period: 120s
       retries: 5
     restart: unless-stopped
+    networks:
+      - busibox-net
+
+# ===========================================================================
+  # MANAGER CONTAINER (Ephemeral)
+  # ===========================================================================
+  # Runs make install, make manage, and other orchestration commands inside
+  # a container with guaranteed dependencies (Ansible, Docker CLI, vault tools).
+  # Invoked via: docker compose run --rm manager <command>
+  # Never starts with `docker compose up` -- uses a profile.
+  manager:
+    profiles: ["manager"]
+    build:
+      context: .
+      dockerfile: provision/docker/manager.Dockerfile
+    image: busibox-manager:latest
+    container_name: ${CONTAINER_PREFIX:-dev}-manager
+    working_dir: /busibox
+    stdin_open: true
+    tty: true
+    volumes:
+      # Docker socket -- same model as deploy-api
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Busibox repo -- read-only except state/profile directories
+      - .:/busibox:ro
+      # State and profile files -- read-write
+      - ./.busibox:/busibox/.busibox:rw
+      # SSH keys for Proxmox backend
+      - ~/.ssh:/root/.ssh:ro
+    environment:
+      # Host path so docker compose volume mounts resolve correctly
+      BUSIBOX_HOST_PATH: ${BUSIBOX_HOST_PATH:-.}
+      CONTAINER_PREFIX: ${CONTAINER_PREFIX:-dev}
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-dev-busibox}
+      BUSIBOX_ENV: ${BUSIBOX_ENV:-development}
+      # Pass through HOME so vault password file paths resolve
+      HOST_HOME: ${HOME}
+      # Pass through any explicit env overrides
+      GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
+      CORE_APPS_MODE: ${CORE_APPS_MODE:-prod}
+      CORE_APPS_SOURCE: ${CORE_APPS_SOURCE:-legacy}
+      TERM: ${TERM:-xterm-256color}
     networks:
       - busibox-net
 

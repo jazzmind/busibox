@@ -26,8 +26,14 @@ _BACKEND_COMMON_LOADED=1
 # Service group display order (manage menu)
 BACKEND_SERVICE_GROUP_ORDER=("Frontend" "APIs" "LLM" "Infrastructure")
 
-# Detect if running on Apple Silicon
+# Detect if the LLM backend is MLX (Apple Silicon).
+# Checks LLM_BACKEND env var first (set by manager-run.sh to forward host
+# platform info into the manager container), then falls back to uname.
 is_apple_silicon() {
+    if [[ -n "${LLM_BACKEND:-}" ]]; then
+        [[ "$LLM_BACKEND" == "mlx" ]]
+        return
+    fi
     local os arch
     os=$(uname -s)
     arch=$(uname -m)
@@ -265,10 +271,47 @@ is_host_native_service() {
     esac
 }
 
-# Execute action on a host-native service
+# Check if we're running inside a container (manager or other)
+_is_inside_container() {
+    [[ -f /.dockerenv ]] || grep -q 'docker\|lxc' /proc/1/cgroup 2>/dev/null
+}
+
+# Get the host-agent base URL. From inside a container we reach the host
+# via host.docker.internal; on the host itself via localhost.
+_host_agent_url() {
+    local port="${HOST_AGENT_PORT:-8089}"
+    if _is_inside_container; then
+        echo "http://host.docker.internal:${port}"
+    else
+        echo "http://localhost:${port}"
+    fi
+}
+
+# Read HOST_AGENT_TOKEN from environment or .env file
+_host_agent_token() {
+    if [[ -n "${HOST_AGENT_TOKEN:-}" ]]; then
+        echo "$HOST_AGENT_TOKEN"
+        return
+    fi
+    local env_file="${REPO_ROOT}/.env.${CONTAINER_PREFIX:-dev}"
+    if [[ -f "$env_file" ]]; then
+        awk -F= '/^HOST_AGENT_TOKEN=/{val=substr($0, index($0,$2))} END{print val}' "$env_file" 2>/dev/null | tr -d '\r\n'
+    fi
+}
+
+# Execute action on a host-native service.
+# When running inside the manager container, delegates to the host-agent
+# HTTP API (since host processes aren't visible). On the host, falls back
+# to the make targets which use ps/pkill directly.
 host_native_action() {
     local service="$1"
     local action="$2"
+
+    # If we're inside a container, use host-agent API for MLX operations
+    if _is_inside_container && [[ "$service" == "mlx" ]]; then
+        _host_native_mlx_via_api "$action"
+        return $?
+    fi
 
     case "$action" in
         start)
@@ -299,6 +342,207 @@ host_native_action() {
             cd "$REPO_ROOT"
             make "${service}-restart" || { error "Failed to redeploy ${service}"; return 1; }
             ;;
+        sync)
+            cd "$REPO_ROOT"
+            make mlx-sync || { error "Failed to sync models"; return 1; }
+            ;;
+    esac
+}
+
+_display_media_status() {
+    local base_url="$1"
+    local auth_header="$2"
+
+    echo "=== Media Servers ==="
+    local media_response
+    media_response=$(eval curl -sf --max-time 5 ${auth_header} "'${base_url}/media/status'" 2>/dev/null)
+    if [[ -n "$media_response" ]]; then
+        echo "$media_response" | jq -r '
+            .servers | to_entries[] |
+            "  \(.value.label // .key) (\(.key)):" +
+            if .value.running then
+                " Running (port \(.value.port // "?"))" +
+                if .value.healthy then " [healthy]" else " [unhealthy]" end +
+                if .value.model then "\n    Model: \(.value.model)" else "" end
+            else
+                " Stopped" +
+                if .value.model then " (model: \(.value.model))" else "" end
+            end
+        ' 2>/dev/null || echo "$media_response"
+    else
+        echo "  (could not query media status)"
+    fi
+}
+
+# MLX management via host-agent HTTP API (used from inside containers)
+_host_native_mlx_via_api() {
+    local action="$1"
+    local base_url
+    base_url=$(_host_agent_url)
+    local token
+    token=$(_host_agent_token)
+
+    local auth_header=""
+    if [[ -n "$token" ]]; then
+        auth_header="-H 'Authorization: Bearer ${token}'"
+    fi
+
+    # Check host-agent reachability first
+    if ! curl -sf --max-time 2 "${base_url}/health" >/dev/null 2>&1; then
+        error "Host-agent is not running at ${base_url}"
+        info "Start it on the host with: make host-agent-start"
+        return 1
+    fi
+
+    case "$action" in
+        status)
+            echo ""
+            echo "=== MLX Server Status (via host-agent) ==="
+            local response
+            response=$(eval curl -sf --max-time 5 ${auth_header} "'${base_url}/mlx/status?target=all'" 2>/dev/null)
+            if [[ -n "$response" ]]; then
+                # Parse and display primary/fast status
+                local primary_running fast_running primary_model fast_model
+                primary_running=$(echo "$response" | jq -r '.primary.running // false' 2>/dev/null)
+                fast_running=$(echo "$response" | jq -r '.fast.running // false' 2>/dev/null)
+                primary_model=$(echo "$response" | jq -r '.primary.model // "none"' 2>/dev/null)
+                fast_model=$(echo "$response" | jq -r '.fast.model // "none"' 2>/dev/null)
+
+                if [[ "$primary_running" == "true" ]]; then
+                    echo "MLX Primary: Running (port 8080)"
+                    echo "  Active model: ${primary_model}"
+                    echo "  Health: Healthy"
+                else
+                    echo "MLX Primary: Not running"
+                fi
+
+                local fast_port="${MLX_FAST_PORT:-18081}"
+                if [[ "$fast_running" == "true" ]]; then
+                    echo "MLX Fast: Running (port ${fast_port})"
+                    echo "  Active model: ${fast_model}"
+                    echo "  Health: Healthy"
+                else
+                    echo "MLX Fast: Not running (port ${fast_port})"
+                fi
+            else
+                error "Failed to get MLX status from host-agent"
+                return 1
+            fi
+
+            echo ""
+            _display_media_status "$base_url" "$auth_header"
+
+            echo ""
+            echo "=== Host Agent ==="
+            echo "Host Agent: Running (${base_url})"
+            ;;
+        start)
+            info "Starting MLX via host-agent..."
+            local response
+            response=$(eval curl -sf --max-time 30 -X POST ${auth_header} \
+                -H "'Content-Type: application/json'" \
+                -d "'{\"model_type\": \"dual\"}'" \
+                "'${base_url}/mlx/start'" 2>/dev/null)
+            if [[ -n "$response" ]]; then
+                echo "$response" | bash "${REPO_ROOT}/scripts/lib/host-agent-format.sh" && \
+                    success "MLX server started" || error "Failed to start MLX"
+            else
+                error "No response from host-agent"
+                return 1
+            fi
+            ;;
+        stop)
+            info "Stopping MLX via host-agent..."
+            local response
+            response=$(eval curl -sf --max-time 10 -X POST ${auth_header} \
+                "'${base_url}/mlx/stop?target=all'" 2>/dev/null)
+            if [[ -n "$response" ]]; then
+                echo "$response" | bash "${REPO_ROOT}/scripts/lib/host-agent-format.sh" && \
+                    success "MLX server stopped" || error "Failed to stop MLX"
+            else
+                error "No response from host-agent"
+                return 1
+            fi
+            ;;
+        restart)
+            _host_native_mlx_via_api "stop"
+            sleep 2
+            _host_native_mlx_via_api "start"
+            echo ""
+            _display_media_status "$base_url" "$auth_header"
+            ;;
+        logs)
+            info "Logs not available for MLX via host-agent."
+            info "Use status to check current state."
+            ;;
+        redeploy)
+            _host_native_mlx_via_api "restart"
+            ;;
+        sync)
+            echo ""
+            echo "=== Model Cache Status ==="
+            local sync_response
+            sync_response=$(eval curl -sf --max-time 15 ${auth_header} "'${base_url}/models/required'" 2>/dev/null)
+            if [[ -z "$sync_response" ]]; then
+                error "Failed to query model status from host-agent"
+                return 1
+            fi
+
+            local tier
+            tier=$(echo "$sync_response" | jq -r '.tier // "unknown"' 2>/dev/null)
+
+            echo ""
+            echo "  LLM Models (tier: ${tier}):"
+            echo "$sync_response" | jq -r '
+                .models[] | select(.category == "llm") |
+                if .cached then
+                    "    [cached]  \(.role):\t\(.name) (\(.size_human // "?"))"
+                else
+                    "    [MISSING] \(.role):\t\(.name)"
+                end
+            ' 2>/dev/null
+
+            echo ""
+            echo "  Media Models:"
+            echo "$sync_response" | jq -r '
+                .models[] | select(.category == "media") |
+                if .cached then
+                    "    [cached]  \(.role):\t\(.name) (\(.size_human // "?"))"
+                else
+                    "    [MISSING] \(.role):\t\(.name)"
+                end
+            ' 2>/dev/null
+
+            local missing_count
+            missing_count=$(echo "$sync_response" | jq -r '.missing_count' 2>/dev/null)
+
+            echo ""
+            if [[ "$missing_count" == "0" ]]; then
+                success "All models are cached."
+            else
+                echo "${missing_count} model(s) missing."
+                echo -n "Download now? [y/N]: "
+                read -r answer
+                if [[ "$answer" =~ ^[Yy]$ ]]; then
+                    local missing_models
+                    missing_models=$(echo "$sync_response" | jq -r '.models[] | select(.cached == false) | .name' 2>/dev/null)
+                    while IFS= read -r model; do
+                        [[ -z "$model" ]] && continue
+                        info "Downloading ${model}..."
+                        eval curl -sf --max-time 600 -N -X POST ${auth_header} \
+                            -H "'Content-Type: application/json'" \
+                            -d "'{\"model\": \"${model}\"}'" \
+                            "'${base_url}/mlx/models/download'" 2>/dev/null | while IFS= read -r line; do
+                            local msg
+                            msg=$(echo "$line" | sed 's/^data: //' | jq -r '.message // empty' 2>/dev/null)
+                            [[ -n "$msg" ]] && echo "  $msg"
+                        done
+                    done <<< "$missing_models"
+                    echo ""
+                    success "Download complete."
+                fi
+            fi
+            ;;
     esac
 }
 
@@ -309,7 +553,7 @@ host_native_action() {
 validate_action() {
     local action="$1"
     case "$action" in
-        start|stop|restart|logs|status|redeploy) return 0 ;;
+        start|stop|restart|logs|status|redeploy|sync) return 0 ;;
         *) return 1 ;;
     esac
 }

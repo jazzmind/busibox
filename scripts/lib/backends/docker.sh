@@ -30,18 +30,24 @@ backend_get_service_status() {
     local prefix="${CONTAINER_PREFIX:-dev}"
     local container_name="${prefix}-$(get_container_for_service "$service")"
 
-    # Special case: MLX runs on host
+    # Special case: MLX runs on host (not in Docker).
+    # From inside a container, reach the host via host.docker.internal.
     if [[ "$service" == "mlx" ]]; then
+        local host_addr="localhost"
+        if _is_inside_container 2>/dev/null; then
+            host_addr="host.docker.internal"
+        fi
+
         local host_agent_port
         host_agent_port=$(get_state "HOST_AGENT_PORT" "8089" 2>/dev/null || echo "8089")
         local host_agent_token
-        host_agent_token=$(get_state "HOST_AGENT_TOKEN" "" 2>/dev/null || echo "")
+        host_agent_token="${HOST_AGENT_TOKEN:-$(get_state "HOST_AGENT_TOKEN" "" 2>/dev/null || echo "")}"
 
         if [[ -n "$host_agent_token" ]]; then
             local response
-            response=$(curl -s -w "%{http_code}" -o /dev/null \
+            response=$(curl -s -w "%{http_code}" -o /dev/null --max-time 2 \
                 -H "Authorization: Bearer $host_agent_token" \
-                "http://localhost:${host_agent_port}/mlx/status" 2>/dev/null || echo "000")
+                "http://${host_addr}:${host_agent_port}/mlx/status" 2>/dev/null || echo "000")
             if [[ "$response" == "200" ]]; then
                 echo "running"
                 return
@@ -50,7 +56,7 @@ backend_get_service_status() {
 
         local mlx_response
         mlx_response=$(curl -s -w "%{http_code}" -o /dev/null --max-time 2 \
-            "http://localhost:8080/v1/models" 2>/dev/null || echo "000")
+            "http://${host_addr}:8080/v1/models" 2>/dev/null || echo "000")
         if [[ "$mlx_response" == "200" ]]; then
             echo "running"
         else
@@ -141,13 +147,14 @@ backend_service_action() {
             ;;
 
         restart)
-            # core-apps mode switching support
-            if [[ "$svc_container" == "core-apps" && -n "${CORE_APPS_MODE:-}" ]]; then
-                info "Restarting core-apps in ${BOLD}${CORE_APPS_MODE}${NC} mode..."
+            # core-apps mode/source switching support
+            if [[ "$svc_container" == "core-apps" && ( -n "${CORE_APPS_MODE:-}" || -n "${CORE_APPS_SOURCE:-}" ) ]]; then
+                info "Restarting core-apps (mode=${CORE_APPS_MODE:-auto}, source=${CORE_APPS_SOURCE:-auto})..."
                 cd "$REPO_ROOT"
                 export CORE_APPS_MODE
+                export CORE_APPS_SOURCE
                 make docker-up SERVICE="core-apps" ENV="$env"
-                success "core-apps restarted in ${CORE_APPS_MODE} mode"
+                success "core-apps restarted"
                 return $?
             fi
 
@@ -181,12 +188,13 @@ backend_service_action() {
             ;;
 
         redeploy)
-            if [[ "$svc_container" == "core-apps" && -n "${CORE_APPS_MODE:-}" ]]; then
-                info "Restarting core-apps in ${BOLD}${CORE_APPS_MODE}${NC} mode..."
+            if [[ "$svc_container" == "core-apps" && ( -n "${CORE_APPS_MODE:-}" || -n "${CORE_APPS_SOURCE:-}" ) ]]; then
+                info "Rebuilding core-apps (mode=${CORE_APPS_MODE:-auto}, source=${CORE_APPS_SOURCE:-auto})..."
                 cd "$REPO_ROOT"
                 export CORE_APPS_MODE
-                make docker-up SERVICE="core-apps" ENV="$env"
-                success "core-apps restarted in ${CORE_APPS_MODE} mode"
+                export CORE_APPS_SOURCE
+                make docker-build SERVICE="core-apps" ENV="$env" && make docker-up SERVICE="core-apps" ENV="$env"
+                success "core-apps redeployed"
                 return $?
             fi
 

@@ -2,15 +2,14 @@
 # Core Apps - Development Dockerfile
 # =============================================================================
 #
-# Runs all core Next.js apps in a single container for development.
-# This mirrors the Proxmox pattern where core-apps-lxc hosts multiple apps.
+# Runs both busibox-portal and busibox-agents in a single container for development.
+# This mirrors the Proxmox pattern where core-apps-lxc hosts multiple Next.js apps.
 #
 # Features:
-#   - Volume-mounted monorepo source code
-#   - Per-app dev/prod mode toggling via app-manager.js
-#   - Control API on port 9999 for runtime mode switching
-#   - Turbopack hot-reload for apps in dev mode
-#   - Standalone server for apps in prod mode (lower memory)
+#   - Volume-mounted source code for both apps
+#   - npm-linked busibox-app for live editing
+#   - Turbopack hot-reload for both apps
+#   - Uses concurrently to run both apps
 #
 # Usage (via docker-compose.local-dev.yml):
 #   docker compose -f docker-compose.yml -f docker-compose.local-dev.yml up
@@ -29,11 +28,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 make g++ curl bash \
     && rm -rf /var/lib/apt/lists/*
 
-# Install workspace package manager
-RUN npm install -g pnpm turbo
+# Install concurrently globally for running multiple processes
+RUN npm install -g concurrently
 
 # Create directories for apps
-RUN mkdir -p /srv/busibox-frontend \
+RUN mkdir -p /srv/busibox-portal /srv/busibox-agents /srv/busibox-appbuilder \
     /var/log
 
 # Set up npm authentication for private GitHub packages
@@ -46,13 +45,12 @@ RUN if [ -n "$GITHUB_AUTH_TOKEN" ]; then \
         echo "WARNING: GITHUB_AUTH_TOKEN not set - npm install may fail for @jazzmind packages"; \
     fi
 
-# Copy monorepo entrypoint script and process manager
-COPY provision/docker/core-apps-entrypoint-monorepo.sh /usr/local/bin/core-apps-entrypoint.sh
-COPY provision/docker/app-manager.js /usr/local/bin/app-manager.js
+# Copy entrypoint script
+COPY provision/docker/core-apps-entrypoint.sh /usr/local/bin/core-apps-entrypoint.sh
 RUN chmod +x /usr/local/bin/core-apps-entrypoint.sh
 
-# Expose app ports + control API port
-EXPOSE 3000 3001 3002 3003 3004 3005 3006 9999
+# Expose app ports
+EXPOSE 3000 3001 3004
 
 # Environment
 ENV NODE_ENV=development

@@ -77,8 +77,26 @@ _healthcheck_task: Optional[asyncio.Task] = None
 
 
 @asynccontextmanager
+def _cleanup_stale_pid_files():
+    """Remove PID files whose processes are no longer running."""
+    all_pid_files = [
+        MLX_PID_FILE, MLX_FAST_PID_FILE,
+        *[cfg["pid_file"] for cfg in MEDIA_SERVERS.values()],
+    ]
+    for pid_file in all_pid_files:
+        if not pid_file.exists():
+            continue
+        try:
+            pid = int(pid_file.read_text().strip())
+            os.kill(pid, 0)
+        except (OSError, ValueError):
+            logger.info(f"Removing stale PID file: {pid_file} (process gone)")
+            pid_file.unlink(missing_ok=True)
+
+
 async def lifespan(application: FastAPI):
     global _healthcheck_task
+    _cleanup_stale_pid_files()
     _healthcheck_task = asyncio.create_task(_mlx_healthcheck_loop())
     yield
     _healthcheck_task.cancel()
@@ -149,16 +167,19 @@ MLX_FAST_PORT = int(os.getenv("MLX_FAST_PORT", "18081"))
 
 # Media server config
 MEDIA_SCRIPT = BUSIBOX_ROOT / "scripts" / "llm" / "start-mlx-media-servers.sh"
-TRANSCRIBE_PORT = int(os.getenv("TRANSCRIBE_PORT", "8081"))
+TRANSCRIBE_PORT = int(os.getenv("TRANSCRIBE_PORT", "8084"))
 VOICE_PORT = int(os.getenv("VOICE_PORT", "8082"))
 IMAGE_PORT = int(os.getenv("IMAGE_PORT", "8083"))
+TRANSCRIBE_MODEL = os.getenv("TRANSCRIBE_MODEL_PATH", "mlx-community/whisper-tiny-mlx")
+VOICE_MODEL = os.getenv("VOICE_MODEL_PATH", "mlx-community/Kokoro-82M-bf16")
 MEDIA_SERVERS = {
     "transcribe": {
         "pid_file": Path("/tmp/mlx-openai-transcribe.pid"),
         "port": TRANSCRIBE_PORT,
         "kind": "on-demand",
         "label": "Transcribe / STT",
-        "memory_estimate_mb": 3072,
+        "memory_estimate_mb": 200,
+        "default_model": TRANSCRIBE_MODEL,
     },
     "voice": {
         "pid_file": Path("/tmp/mlx-openai-voice.pid"),
@@ -166,57 +187,112 @@ MEDIA_SERVERS = {
         "kind": "always-on",
         "label": "Voice / TTS",
         "memory_estimate_mb": 205,
+        "default_model": VOICE_MODEL,
     },
     "image": {
         "pid_file": Path("/tmp/mlx-openai-image.pid"),
         "port": IMAGE_PORT,
         "kind": "on-demand",
         "label": "Image Generation",
-        "memory_estimate_mb": 4096,
+        "memory_estimate_mb": 3584,
+        "default_model": None,
     },
 }
 
 
-def get_mlx_status_for_target(target: str = "primary") -> MLXStatusResponse:
-    """Check if target MLX server is running."""
-    pid_file = MLX_FAST_PID_FILE if target == "fast" else MLX_PID_FILE
-    port = MLX_FAST_PORT if target == "fast" else MLX_PORT
-
-    if not pid_file.exists():
-        return MLXStatusResponse(running=False)
-    
+def _find_pid_for_port(port: int) -> Optional[int]:
+    """Find PID of a process listening on the given port using lsof."""
     try:
-        pid = int(pid_file.read_text().strip())
-        # Check if process is running
-        os.kill(pid, 0)  # Raises OSError if not running
-        
-        # Check if responding to HTTP
-        import httpx
-        try:
-            response = httpx.get(f"http://localhost:{port}/v1/models", timeout=2.0)
-            healthy = response.status_code == 200
-            # Try to extract model name from response
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return int(result.stdout.strip().split("\n")[0])
+    except Exception:
+        pass
+    return None
+
+
+def _get_model_from_pid(pid: int) -> Optional[str]:
+    """Extract the --model argument from a process's command line."""
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "args="],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            cmdline = result.stdout.strip()
+            parts = cmdline.split()
+            for i, part in enumerate(parts):
+                if part == "--model" and i + 1 < len(parts):
+                    return parts[i + 1]
+    except Exception:
+        pass
+    return None
+
+
+def _probe_mlx_port(port: int, pid: Optional[int] = None) -> tuple:
+    """Probe an MLX-LM port. Returns (healthy: bool, model: str|None).
+
+    Determines the active model from the process command line (--model arg)
+    rather than the /v1/models list, which includes all cached models.
+    """
+    import httpx
+    try:
+        response = httpx.get(f"http://127.0.0.1:{port}/v1/models", timeout=2.0)
+        if response.status_code == 200:
             model = None
-            if healthy:
+            if pid is not None:
+                model = _get_model_from_pid(pid)
+            if model is None:
+                resolved_pid = _find_pid_for_port(port)
+                if resolved_pid is not None:
+                    model = _get_model_from_pid(resolved_pid)
+            if model is None:
                 try:
                     data = response.json()
                     if "data" in data and len(data["data"]) > 0:
                         model = data["data"][0].get("id")
-                except:
+                except Exception:
                     pass
-            return MLXStatusResponse(
-                running=True,
-                pid=pid,
-                port=port,
-                model=model,
-                healthy=healthy,
-            )
-        except:
-            return MLXStatusResponse(running=True, pid=pid, port=port, healthy=False)
-    except (OSError, ValueError):
-        # Process not running or invalid PID
-        pid_file.unlink(missing_ok=True)
-        return MLXStatusResponse(running=False)
+            return True, model
+    except Exception:
+        pass
+    return False, None
+
+
+def get_mlx_status_for_target(target: str = "primary") -> MLXStatusResponse:
+    """Check if target MLX server is running. Uses PID file, then falls back to port probing."""
+    pid_file = MLX_FAST_PID_FILE if target == "fast" else MLX_PID_FILE
+    port = MLX_FAST_PORT if target == "fast" else MLX_PORT
+
+    pid: Optional[int] = None
+
+    # Try PID file first
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text().strip())
+            os.kill(pid, 0)
+        except (OSError, ValueError):
+            pid_file.unlink(missing_ok=True)
+            pid = None
+
+    # Probe the port regardless — catches servers started without PID files
+    healthy, model = _probe_mlx_port(port, pid=pid)
+
+    if healthy:
+        if pid is None:
+            pid = _find_pid_for_port(port)
+            if pid is not None and model is None:
+                model = _get_model_from_pid(pid)
+        return MLXStatusResponse(running=True, pid=pid, port=port, model=model, healthy=True)
+
+    # Port not responding but process exists (starting up or hung)
+    if pid is not None:
+        return MLXStatusResponse(running=True, pid=pid, port=port, healthy=False)
+
+    return MLXStatusResponse(running=False)
 
 
 def get_mlx_status() -> MLXStatusResponse:
@@ -275,6 +351,7 @@ def get_media_server_status(name: str) -> Dict[str, Any]:
     pid_file: Path = cfg["pid_file"]
     port: int = cfg["port"]
 
+    default_model = cfg.get("default_model")
     base = {
         "name": name,
         "label": cfg["label"],
@@ -283,7 +360,7 @@ def get_media_server_status(name: str) -> Dict[str, Any]:
         "running": False,
         "healthy": False,
         "pid": None,
-        "model": None,
+        "model": default_model,
         "memory_mb": None,
         "memory_estimate_mb": cfg["memory_estimate_mb"],
     }
@@ -322,19 +399,23 @@ def get_all_media_status() -> Dict[str, Any]:
     statuses = {name: get_media_server_status(name) for name in MEDIA_SERVERS}
 
     mlx_servers = [
-        ("primary", MLX_PID_FILE, MLX_PORT),
-        ("fast", MLX_FAST_PID_FILE, MLX_FAST_PORT),
+        ("primary", MLX_PORT),
+        ("fast", MLX_FAST_PORT),
     ]
     mlx_memory: List[Dict[str, Any]] = []
-    for label, pid_file, port in mlx_servers:
-        if pid_file.exists():
-            try:
-                pid = int(pid_file.read_text().strip())
-                os.kill(pid, 0)
-                mem = _get_process_memory_mb(pid)
-                mlx_memory.append({"name": label, "port": port, "memory_mb": mem})
-            except (OSError, ValueError):
-                pass
+    for label, port in mlx_servers:
+        status = get_mlx_status_for_target(label)
+        entry: Dict[str, Any] = {
+            "name": label,
+            "port": port,
+            "running": status.running,
+            "healthy": status.healthy,
+            "model": status.model,
+            "memory_mb": None,
+        }
+        if status.running and status.pid:
+            entry["memory_mb"] = _get_process_memory_mb(status.pid)
+        mlx_memory.append(entry)
 
     total_media_mb = sum(
         (s.get("memory_mb") or 0) for s in statuses.values()
@@ -349,6 +430,9 @@ def get_all_media_status() -> Dict[str, Any]:
         "total_llm_memory_mb": total_llm_mb,
         "total_mlx_memory_mb": total_mlx_mb,
     }
+
+
+MEMORY_SAFETY_MARGIN_MB = int(os.getenv("MEMORY_SAFETY_MARGIN_MB", "500"))
 
 
 def _get_system_memory() -> Dict[str, Any]:
@@ -375,6 +459,49 @@ def _get_system_memory() -> Dict[str, Any]:
     except Exception:
         pass
     return result
+
+
+def _get_available_memory_mb() -> Optional[float]:
+    """Return available system memory in MB, or None if it can't be determined."""
+    try:
+        import psutil
+        return psutil.virtual_memory().available / (1024 * 1024)
+    except Exception:
+        pass
+    return None
+
+
+def _check_memory_budget(server: str) -> Optional[Dict[str, Any]]:
+    """Pre-flight memory check before starting a media server.
+
+    Returns None if memory is sufficient, or an error dict if not.
+    """
+    cfg = MEDIA_SERVERS.get(server)
+    if not cfg:
+        return None
+
+    estimate_mb = cfg["memory_estimate_mb"]
+    available_mb = _get_available_memory_mb()
+    if available_mb is None:
+        logger.warning(f"Could not determine available memory — skipping budget check for {server}")
+        return None
+
+    required_mb = estimate_mb + MEMORY_SAFETY_MARGIN_MB
+    if available_mb < required_mb:
+        return {
+            "error": "insufficient_memory",
+            "message": (
+                f"Not enough memory to start {cfg['label']}. "
+                f"Need ~{estimate_mb} MB + {MEMORY_SAFETY_MARGIN_MB} MB safety margin "
+                f"({required_mb} MB total), but only {available_mb:.0f} MB available. "
+                f"Free up memory or stop other services first."
+            ),
+            "available_mb": round(available_mb),
+            "required_mb": required_mb,
+            "estimate_mb": estimate_mb,
+            "safety_margin_mb": MEMORY_SAFETY_MARGIN_MB,
+        }
+    return None
 
 
 def _stop_mlx_target(target: str) -> Dict[str, Any]:
@@ -606,6 +733,114 @@ async def mlx_list_models(_: bool = Depends(verify_token)):
     }
 
 
+IMAGE_MODEL = os.getenv("IMAGE_MODEL_HF", "black-forest-labs/FLUX.2-klein-4B")
+GET_MODELS_SCRIPT = BUSIBOX_ROOT / "scripts" / "llm" / "get-models.sh"
+
+
+def _get_cached_models() -> set:
+    """Scan HuggingFace cache and return set of cached model names."""
+    cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+    cached = set()
+    if cache_dir.exists():
+        for d in cache_dir.iterdir():
+            if d.name.startswith("models--"):
+                cached.add(d.name[8:].replace("--", "/"))
+    return cached
+
+
+def _get_model_size(model_name: str) -> Optional[str]:
+    """Get human-readable size of a cached model."""
+    cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+    model_dir = cache_dir / f"models--{model_name.replace('/', '--')}"
+    if not model_dir.exists():
+        return None
+    total = sum(f.stat().st_size for f in model_dir.rglob("*") if f.is_file())
+    if total > 1024**3:
+        return f"{total / 1024**3:.1f}GB"
+    return f"{total / 1024**2:.0f}MB"
+
+
+async def _resolve_llm_model(role: str) -> Optional[str]:
+    """Resolve an LLM model name for a role via get-models.sh."""
+    if not GET_MODELS_SCRIPT.exists():
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bash", str(GET_MODELS_SCRIPT), role,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(BUSIBOX_ROOT),
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        if proc.returncode == 0:
+            return stdout.decode().strip()
+    except Exception:
+        pass
+    return None
+
+
+@app.get("/models/required")
+async def list_required_models(_: bool = Depends(verify_token)):
+    """List all models required for the current tier (LLM + media) with cache status."""
+    cached_models = _get_cached_models()
+
+    models = []
+
+    # Resolve LLM models for current tier
+    llm_roles = ["fast", "agent"]
+    tier_name = None
+    for role in llm_roles:
+        name = await _resolve_llm_model(role)
+        if name:
+            models.append({
+                "name": name,
+                "role": role,
+                "category": "llm",
+                "cached": name in cached_models,
+                "size_human": _get_model_size(name) if name in cached_models else None,
+            })
+
+    # Resolve tier name
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bash", str(GET_MODELS_SCRIPT), "all",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(BUSIBOX_ROOT),
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        if proc.returncode == 0:
+            for line in stdout.decode().splitlines():
+                if line.startswith("LLM_TIER="):
+                    tier_name = line.split("=", 1)[1]
+                    break
+    except Exception:
+        pass
+
+    # Media models from MEDIA_SERVERS config
+    for server_name, cfg in MEDIA_SERVERS.items():
+        model = cfg.get("default_model")
+        if server_name == "image":
+            model = IMAGE_MODEL
+        if model:
+            models.append({
+                "name": model,
+                "role": server_name,
+                "category": "media",
+                "cached": model in cached_models,
+                "size_human": _get_model_size(model) if model in cached_models else None,
+            })
+
+    missing_count = sum(1 for m in models if not m["cached"])
+
+    return {
+        "models": models,
+        "all_cached": missing_count == 0,
+        "missing_count": missing_count,
+        "tier": tier_name,
+    }
+
+
 @app.post("/mlx/models/download")
 async def mlx_download_model(
     request: DownloadModelRequest,
@@ -695,6 +930,10 @@ async def media_ensure(request: MediaToggleRequest, _: bool = Depends(verify_tok
     if status.get("running") and status.get("healthy"):
         return {"running": True, "started": False, "server": server, "status": status}
 
+    mem_err = _check_memory_budget(server)
+    if mem_err is not None:
+        raise HTTPException(status_code=503, detail=mem_err)
+
     if not MEDIA_SCRIPT.exists():
         raise HTTPException(status_code=500, detail=f"Media server script not found: {MEDIA_SCRIPT}")
 
@@ -734,6 +973,12 @@ async def media_toggle(request: MediaToggleRequest, _: bool = Depends(verify_tok
     server = request.server.lower()
     if server not in MEDIA_SERVERS:
         raise HTTPException(status_code=400, detail=f"Unknown media server: {server}. Valid: transcribe, voice, image")
+
+    current = get_media_server_status(server)
+    if not current.get("running"):
+        mem_err = _check_memory_budget(server)
+        if mem_err is not None:
+            raise HTTPException(status_code=503, detail=mem_err)
 
     if not MEDIA_SCRIPT.exists():
         raise HTTPException(status_code=500, detail=f"Media server script not found: {MEDIA_SCRIPT}")
@@ -815,6 +1060,7 @@ async def list_cached_models(_: bool = Depends(verify_token)):
 # Proactive MLX health check — auto-restarts MLX if it dies or hangs
 # ---------------------------------------------------------------------------
 MLX_HEALTHCHECK_INTERVAL = int(os.getenv("MLX_HEALTHCHECK_INTERVAL", "30"))
+MLX_AUTO_START = os.getenv("MLX_AUTO_START", "true").lower() in ("1", "true", "yes")
 # Run inference probe every N health-check cycles (default: every 4th = ~2min)
 MLX_INFERENCE_PROBE_EVERY = int(os.getenv("MLX_INFERENCE_PROBE_EVERY", "4"))
 MLX_INFERENCE_PROBE_TIMEOUT = float(os.getenv("MLX_INFERENCE_PROBE_TIMEOUT", "15"))
@@ -873,6 +1119,7 @@ async def _mlx_healthcheck_loop():
     inference_failures = 0
     cycle = 0
     was_running = False
+    first_check = True
     while True:
         try:
             status = get_all_mlx_status()
@@ -931,10 +1178,12 @@ async def _mlx_healthcheck_loop():
                     MLX_PID_FILE.exists()
                     or MLX_FAST_PID_FILE.exists()
                     or was_running
+                    or (first_check and MLX_AUTO_START)
                 )
                 if should_restart:
+                    reason = "auto-start on boot" if (first_check and MLX_AUTO_START and not was_running) else "was previously started"
                     logger.warning(
-                        "MLX primary/fast servers not running (was previously started) — "
+                        f"MLX primary/fast servers not running ({reason}) — "
                         "triggering dual restart"
                     )
                     was_running = False
@@ -942,6 +1191,7 @@ async def _mlx_healthcheck_loop():
                     inference_failures = 0
         except Exception:
             logger.exception("Error in MLX health-check loop")
+        first_check = False
         await asyncio.sleep(MLX_HEALTHCHECK_INTERVAL)
 
 

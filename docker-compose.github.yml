@@ -56,6 +56,10 @@ services:
       BUSIBOX_PORTAL_GITHUB_REF: ${BUSIBOX_PORTAL_GITHUB_REF:-main}
       BUSIBOX_AGENTS_GITHUB_REF: ${BUSIBOX_AGENTS_GITHUB_REF:-main}
       BUSIBOX_APPBUILDER_GITHUB_REF: ${BUSIBOX_APPBUILDER_GITHUB_REF:-main}
+      BUSIBOX_ADMIN_GITHUB_REF: ${BUSIBOX_ADMIN_GITHUB_REF:-main}
+      BUSIBOX_CHAT_GITHUB_REF: ${BUSIBOX_CHAT_GITHUB_REF:-main}
+      BUSIBOX_MEDIA_GITHUB_REF: ${BUSIBOX_MEDIA_GITHUB_REF:-main}
+      BUSIBOX_DOCUMENTS_GITHUB_REF: ${BUSIBOX_DOCUMENTS_GITHUB_REF:-main}
       # =========================================================================
       # Busibox Portal Environment (PORT 3000)
       # =========================================================================
@@ -84,7 +88,11 @@ services:
       NEXT_PUBLIC_BASE_PATH: /portal
       BUSIBOX_PORTAL_BASE_PATH: /portal
       BUSIBOX_AGENTS_BASE_PATH: /agents
+      BUSIBOX_ADMIN_BASE_PATH: /admin
+      BUSIBOX_CHAT_BASE_PATH: /chat
       BUSIBOX_APPBUILDER_BASE_PATH: /builder
+      BUSIBOX_MEDIA_BASE_PATH: /media
+      BUSIBOX_DOCUMENTS_BASE_PATH: /documents
       # Backend service URLs (for server-side API calls)
       DATA_API_URL: http://data-api:8002
       SEARCH_API_URL: http://search-api:8003
@@ -112,12 +120,20 @@ services:
       # Direct app ports (optional, for debugging)
       - "3000:3000"
       - "3001:3001"
+      - "3002:3002"
+      - "3003:3003"
       - "3004:3004"
+      - "3005:3005"
+      - "3006:3006"
     volumes:
       # Persistent app directories - apps survive container restarts
       - core-apps-portal:/srv/busibox-portal
       - core-apps-agent:/srv/busibox-agents
+      - core-apps-admin:/srv/busibox-admin
+      - core-apps-chat:/srv/busibox-chat
       - core-apps-appbuilder:/srv/busibox-appbuilder
+      - core-apps-media:/srv/busibox-media
+      - core-apps-documents:/srv/busibox-documents
       # Supervisor logs (optional, for debugging)
       - core-apps-logs:/var/log/supervisor
       # Dynamic app configs are managed by deploy-api in the proxy container.
@@ -151,8 +167,12 @@ services:
         aliases:
           - core-apps
           - busibox-portal      # Backward compatibility alias
-          - busibox-agents  # Backward compatibility alias
+          - busibox-agents      # Backward compatibility alias
+          - busibox-admin       # Backward compatibility alias
+          - busibox-chat        # Backward compatibility alias
           - busibox-appbuilder  # Backward compatibility alias
+          - busibox-media       # Backward compatibility alias
+          - busibox-documents   # Backward compatibility alias
 
 # Use the same network as the base compose
 # Note: Don't use external:true - let docker compose manage the network lifecycle
@@ -168,7 +188,15 @@ volumes:
     name: ${CONTAINER_PREFIX:-local}-core-apps-portal
   core-apps-agent:
     name: ${CONTAINER_PREFIX:-local}-core-apps-agent
+  core-apps-admin:
+    name: ${CONTAINER_PREFIX:-local}-core-apps-admin
+  core-apps-chat:
+    name: ${CONTAINER_PREFIX:-local}-core-apps-chat
   core-apps-appbuilder:
     name: ${CONTAINER_PREFIX:-local}-core-apps-appbuilder
+  core-apps-media:
+    name: ${CONTAINER_PREFIX:-local}-core-apps-media
+  core-apps-documents:
+    name: ${CONTAINER_PREFIX:-local}-core-apps-documents
   core-apps-logs:
     name: ${CONTAINER_PREFIX:-local}-core-apps-logs

@@ -129,15 +129,20 @@ main() {
         echo "  make manage SERVICE=authz ACTION=logs"
         echo "  make manage SERVICE=authz ACTION=status"
         echo ""
-        echo "Core-apps mode switching (dev mode with volume mounts only):"
-        echo "  CORE_APPS_MODE=prod make manage SERVICE=core-apps ACTION=restart"
-        echo "  CORE_APPS_MODE=dev  make manage SERVICE=core-apps ACTION=restart"
+        echo "Core Developer Mode (dev mode with volume mounts only):"
+        echo "  make manage SERVICE=core-apps  # Toggle via interactive menu (options 8, 9)"
+        echo "  CORE_APPS_MODE=dev  make manage SERVICE=core-apps ACTION=restart  # Force dev mode (hot-reload)"
+        echo "  CORE_APPS_MODE=prod make manage SERVICE=core-apps ACTION=restart  # Force prod mode (default)"
+        echo ""
+        echo "Core Apps Source (switch between monorepo and legacy repos):"
+        echo "  CORE_APPS_SOURCE=monorepo make manage SERVICE=core-apps ACTION=restart  # Use busibox-frontend"
+        echo "  CORE_APPS_SOURCE=legacy   make manage SERVICE=core-apps ACTION=restart  # Use separate repos"
         echo ""
         echo "Services: postgres, redis, minio, milvus, authz, agent, data,"
         echo "          search, deploy, docs, embedding, litellm, mlx,"
         echo "          core-apps, busibox-portal, busibox-agents, busibox-appbuilder, nginx"
         echo ""
-        echo "Actions: start, stop, restart, logs, status, redeploy"
+        echo "Actions: start, stop, restart, logs, status, redeploy, sync (mlx only)"
         echo ""
         exit 1
     fi
@@ -146,7 +151,7 @@ main() {
     if ! validate_action "$action"; then
         error "Unknown action: $action"
         echo ""
-        echo "Valid actions: start, stop, restart, logs, status, redeploy"
+        echo "Valid actions: start, stop, restart, logs, status, redeploy, sync"
         exit 1
     fi
 

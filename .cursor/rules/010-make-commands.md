@@ -90,16 +90,36 @@ make manage SERVICE=postgres,redis ACTION=status
 
 ## How It Works
 
+By default, all orchestration commands run inside an ephemeral **manager container**
+(`busibox-manager`), which provides guaranteed versions of Ansible, Docker CLI,
+vault tools, and SSH -- regardless of what is installed on the host.
+
 When you run a `make` command:
 
-1. **Reads State**: Gets current environment from `.busibox-state-*` file
-2. **Detects Backend**: Determines if using Docker or Proxmox
-3. **Loads Vault**: Accesses encrypted secrets via `~/.vault_pass`
-4. **Runs Ansible**: Executes the appropriate Ansible playbook with:
+1. **Manager Container**: Spins up the manager container (builds image on first run)
+2. **Reads State**: Gets current environment from `.busibox-state-*` file
+3. **Detects Backend**: Determines if using Docker or Proxmox
+4. **Loads Vault**: Accesses encrypted secrets via vault password files mounted from the host
+5. **Runs Ansible**: Executes the appropriate Ansible playbook with:
    - Correct inventory (docker/staging/production)
    - Correct tags for the requested service
    - Secrets injected as environment variables (never written to files)
-5. **Reports Status**: Shows deployment results
+6. **Reports Status**: Shows deployment results
+7. **Exits**: Container is removed after the operation completes
+
+### Manager Container
+
+The manager container eliminates host dependency issues (wrong Ansible version,
+missing Python packages, etc.). It is controlled by `USE_MANAGER`:
+
+```bash
+make install SERVICE=authz              # Runs inside manager container (default)
+make install SERVICE=authz USE_MANAGER=0  # Runs directly on host (legacy)
+make build-manager                      # Rebuild the manager image
+```
+
+If Docker is not available (e.g., bare-metal Proxmox host), `USE_MANAGER`
+automatically falls back to `0` (direct host execution).
 
 ## Environment Auto-Detection
 

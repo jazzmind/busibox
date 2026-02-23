@@ -44,7 +44,11 @@ RUN npm install -g tsx
 RUN mkdir -p \
     /srv/busibox-portal \
     /srv/busibox-agents \
+    /srv/busibox-admin \
+    /srv/busibox-chat \
     /srv/busibox-appbuilder \
+    /srv/busibox-media \
+    /srv/busibox-documents \
     /var/log/supervisor
 
 # Copy supervisord configuration for process management
@@ -60,8 +64,12 @@ WORKDIR /srv
 # Expose ports:
 #   3000 - Busibox Portal (direct access for debugging)
 #   3001 - Agent Manager (direct access for debugging)
+#   3002 - Admin (direct access for debugging)
+#   3003 - Chat (direct access for debugging)
 #   3004 - App Builder (direct access for debugging)
-EXPOSE 3000 3001 3004
+#   3005 - Media (direct access for debugging)
+#   3006 - Documents (direct access for debugging)
+EXPOSE 3000 3001 3002 3003 3004 3005 3006
 
 # Environment variables
 ENV NODE_ENV=production
@@ -69,7 +77,7 @@ ENV HOSTNAME=0.0.0.0
 
 # Health check all core app endpoints
 HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
-    CMD curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents/api/health && curl -f http://localhost:3004/builder/api/health || exit 1
+    CMD curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents/api/health && curl -f http://localhost:3002/admin/api/health && curl -f http://localhost:3003/chat/api/health && curl -f http://localhost:3004/builder/api/health && curl -f http://localhost:3005/media/api/health && curl -f http://localhost:3006/documents/api/health || exit 1
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["start"]

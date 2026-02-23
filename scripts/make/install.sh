@@ -1193,7 +1193,7 @@ wizard_admin() {
     
     if [[ "$ENVIRONMENT" != "development" ]]; then
         # Extract unique domains from admin emails for default
-        # E.g., "wes@sonnenreich.com,wes@maigent.ai" -> "sonnenreich.com,maigent.ai"
+        # E.g., "wes@sonnenreich.com" -> "sonnenreich.com"
         local default_domains=""
         local seen_domains=""
         IFS=',' read -ra emails <<< "$ADMIN_EMAIL"
@@ -1474,7 +1474,7 @@ generate_secrets() {
     # GitHub OAuth defaults (should be configured for production)
     export GITHUB_CLIENT_ID="${GITHUB_CLIENT_ID:-CHANGE_ME}"
     export GITHUB_CLIENT_SECRET="${GITHUB_CLIENT_SECRET:-CHANGE_ME}"
-    export GITHUB_REDIRECT_URI="${GITHUB_REDIRECT_URI:-https://localhost/portal/api/admin/github/callback}"
+    export GITHUB_REDIRECT_URI="${GITHUB_REDIRECT_URI:-https://localhost/admin/api/github/callback}"
     
     # Export configuration values for vault sync
     export SITE_DOMAIN
@@ -1521,7 +1521,8 @@ CONTAINER_PREFIX=${container_prefix}
 COMPOSE_PROJECT_NAME=${container_prefix}-busibox
 
 # Busibox host path (for volume mounts when deploy-api spawns containers)
-BUSIBOX_HOST_PATH="${REPO_ROOT}"
+# Prefer env var from manager container; fall back to REPO_ROOT on host
+BUSIBOX_HOST_PATH="${BUSIBOX_HOST_PATH:-${REPO_ROOT}}"
 
 # Docker Development Mode
 # - local-dev: Uses local directory mounts for hot-reload (development)
@@ -1564,9 +1565,11 @@ BUSIBOX_APPBUILDER_DIR=${BUSIBOX_APPBUILDER_DIR}
 BUSIBOX_APP_DIR=${BUSIBOX_APP_DIR}
 APPS_BASE_DIR=${APPS_BASE_DIR}
 
-# Core apps mode for docker-compose.local-dev.yml
-# dev = hot-reload (default behavior for developer deployments)
-CORE_APPS_MODE=dev
+# Core Developer Mode for docker-compose.local-dev.yml
+# prod = standalone build, memory-efficient (default)
+# dev  = Turbopack hot-reload (enable for active frontend development)
+# Toggle via: make manage SERVICE=core-apps -> Switch mode (option 8)
+CORE_APPS_MODE=prod
 
 # Local Development Apps Directory
 DEV_APPS_DIR=${DEV_APPS_DIR:-${APPS_BASE_DIR}}
@@ -1854,7 +1857,7 @@ bootstrap_docker_ansible() {
     # Set environment variables for Ansible
     export CONTAINER_PREFIX="$container_prefix"
     export COMPOSE_PROJECT_NAME="${container_prefix}-busibox"
-    export BUSIBOX_HOST_PATH="${REPO_ROOT}"
+    export BUSIBOX_HOST_PATH="${BUSIBOX_HOST_PATH:-${REPO_ROOT}}"
     export LLM_BACKEND="${LLM_BACKEND:-}"
     export GITHUB_AUTH_TOKEN="${GITHUB_AUTH_TOKEN:-}"
     export ADMIN_EMAIL="${ADMIN_EMAIL:-}"
@@ -2607,7 +2610,7 @@ bootstrap_docker() {
     export COMPOSE_PROJECT_NAME="${container_prefix}-busibox"
     
     # Set BUSIBOX_HOST_PATH for deploy-api (needed for volume mounts in spawned containers)
-    export BUSIBOX_HOST_PATH="${REPO_ROOT}"
+    export BUSIBOX_HOST_PATH="${BUSIBOX_HOST_PATH:-${REPO_ROOT}}"
     
     # Export LLM_BACKEND so deploy-api knows what hardware is on the host
     export LLM_BACKEND="${LLM_BACKEND:-}"
@@ -4689,6 +4692,11 @@ main() {
             # Set DEV_APPS_DIR (defaults to APPS_BASE_DIR if not set by wizard)
             DEV_APPS_DIR="${DEV_APPS_DIR:-$APPS_BASE_DIR}"
             set_dev_apps_dir "$DEV_APPS_DIR"
+            # Default Core Developer Mode to off (prod = standalone, memory-efficient)
+            # Can be toggled via: make manage SERVICE=core-apps -> Switch mode (option 8)
+            if [[ -z "$(get_state "CORE_APPS_MODE" "")" ]]; then
+                set_core_apps_mode "prod"
+            fi
         fi
     else
         # Staging/Production mode: deploy from GitHub releases

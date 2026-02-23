@@ -908,7 +908,7 @@ rebuild_containers() {
     export BUSIBOX_APP_DIR=$(get_state "BUSIBOX_APP_DIR" "")
     export APPS_BASE_DIR=$(get_state "APPS_BASE_DIR" "")
     export DEV_APPS_DIR=$(get_state "DEV_APPS_DIR" "$APPS_BASE_DIR")
-    export BUSIBOX_HOST_PATH="$REPO_ROOT"
+    export BUSIBOX_HOST_PATH="${BUSIBOX_HOST_PATH:-$REPO_ROOT}"
     
     # Build arguments
     local build_args=""
@@ -937,7 +937,7 @@ start_data_services() {
     
     export CONTAINER_PREFIX="$container_prefix"
     export COMPOSE_PROJECT_NAME="${container_prefix}-busibox"
-    export BUSIBOX_HOST_PATH="$REPO_ROOT"
+    export BUSIBOX_HOST_PATH="${BUSIBOX_HOST_PATH:-$REPO_ROOT}"
     
     local compose_files="-f docker-compose.yml -f docker-compose.local-dev.yml"
     
@@ -1017,7 +1017,7 @@ start_api_services() {
     
     export CONTAINER_PREFIX="$container_prefix"
     export COMPOSE_PROJECT_NAME="${container_prefix}-busibox"
-    export BUSIBOX_HOST_PATH="$REPO_ROOT"
+    export BUSIBOX_HOST_PATH="${BUSIBOX_HOST_PATH:-$REPO_ROOT}"
     
     # Load app directories for volume mounts
     export BUSIBOX_PORTAL_DIR=$(get_state "BUSIBOX_PORTAL_DIR" "")
@@ -1073,7 +1073,7 @@ start_frontend_services() {
     
     export CONTAINER_PREFIX="$container_prefix"
     export COMPOSE_PROJECT_NAME="${container_prefix}-busibox"
-    export BUSIBOX_HOST_PATH="$REPO_ROOT"
+    export BUSIBOX_HOST_PATH="${BUSIBOX_HOST_PATH:-$REPO_ROOT}"
     
     # Load app directories
     export BUSIBOX_PORTAL_DIR=$(get_state "BUSIBOX_PORTAL_DIR" "")
@@ -1175,7 +1175,7 @@ update_docker_ansible() {
     # Set environment variables for Ansible
     export CONTAINER_PREFIX="$container_prefix"
     export COMPOSE_PROJECT_NAME="${container_prefix}-busibox"
-    export BUSIBOX_HOST_PATH="${REPO_ROOT}"
+    export BUSIBOX_HOST_PATH="${BUSIBOX_HOST_PATH:-${REPO_ROOT}}"
     
     # Load GitHub token
     local github_token=""

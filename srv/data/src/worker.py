@@ -912,7 +912,7 @@ class IngestWorker:
         if not agent_api_url:
             # Try to construct from environment
             agent_host = os.environ.get("AGENT_API_HOST", "")
-            agent_port = os.environ.get("AGENT_API_PORT", "4111")
+            agent_port = os.environ.get("AGENT_API_PORT", "8000")
             if agent_host:
                 agent_api_url = f"http://{agent_host}:{agent_port}"
             else:

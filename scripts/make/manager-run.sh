@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Manager Container Runner
+# =============================================================================
+# Execution context: Admin workstation (host)
+# Purpose: Run a command inside the busibox manager container
+#
+# This script:
+#   1. Ensures the manager Docker image exists (builds if needed)
+#   2. Discovers vault password files on the host
+#   3. Launches an ephemeral container with proper volume mounts
+#   4. Passes the command through to execute inside the container
+#
+# Usage:
+#   bash scripts/make/manager-run.sh <command> [args...]
+#   bash scripts/make/manager-run.sh bash scripts/make/service-deploy.sh authz
+#   bash scripts/make/manager-run.sh --interactive bash scripts/make/launcher.sh
+#
+# =============================================================================
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+MANAGER_IMAGE="busibox-manager:latest"
+MANAGER_DOCKERFILE="provision/docker/manager.Dockerfile"
+
+# Parse flags
+INTERACTIVE=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --interactive|-it)
+            INTERACTIVE="yes"
+            shift
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+if [[ $# -eq 0 ]]; then
+    set -- bash
+fi
+
+# ─── Ensure manager image exists ─────────────────────────────────────────────
+if ! docker image inspect "${MANAGER_IMAGE}" >/dev/null 2>&1; then
+    echo "[manager] Building manager container image (first run)..."
+    docker build -t "${MANAGER_IMAGE}" \
+        -f "${REPO_ROOT}/${MANAGER_DOCKERFILE}" \
+        "${REPO_ROOT}" >&2
+    echo "[manager] Image built successfully." >&2
+fi
+
+# ─── Assemble docker run arguments ───────────────────────────────────────────
+# Mount the repo at the SAME path as on the host so that paths seen by the
+# Docker daemon (via socket mount) match the container's filesystem.  This
+# avoids build-context and volume-mount mismatches when docker compose is
+# invoked from inside the manager.
+DOCKER_ARGS=(
+    run --rm
+    --workdir "${REPO_ROOT}"
+)
+
+# Interactive TTY support
+if [[ -n "$INTERACTIVE" ]]; then
+    DOCKER_ARGS+=(-it)
+fi
+
+# ─── Volume mounts ───────────────────────────────────────────────────────────
+
+# Docker socket
+DOCKER_ARGS+=(-v /var/run/docker.sock:/var/run/docker.sock)
+
+# Busibox repo at its real host path (read-write -- install scripts write state/env/ssl files)
+DOCKER_ARGS+=(-v "${REPO_ROOT}:${REPO_ROOT}:rw")
+
+# SSH keys for Proxmox backend
+if [[ -d "${HOME}/.ssh" ]]; then
+    DOCKER_ARGS+=(-v "${HOME}/.ssh:/root/.ssh:ro")
+fi
+
+# Vault password files: mount each one found on the host
+for vf in "${HOME}"/.busibox-vault-pass-*; do
+    if [[ -f "$vf" ]]; then
+        local_basename="$(basename "$vf")"
+        DOCKER_ARGS+=(-v "${vf}:/root/${local_basename}:ro")
+    fi
+done
+
+# Legacy vault pass file
+if [[ -f "${HOME}/.vault_pass" ]]; then
+    DOCKER_ARGS+=(-v "${HOME}/.vault_pass:/root/.vault_pass:ro")
+fi
+
+# ─── Environment variables ───────────────────────────────────────────────────
+
+# Host path for docker compose volume resolution
+DOCKER_ARGS+=(-e "BUSIBOX_HOST_PATH=${REPO_ROOT}")
+
+# Container prefix and project name
+DOCKER_ARGS+=(-e "CONTAINER_PREFIX=${CONTAINER_PREFIX:-dev}")
+DOCKER_ARGS+=(-e "COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-dev-busibox}")
+DOCKER_ARGS+=(-e "BUSIBOX_ENV=${BUSIBOX_ENV:-development}")
+
+# HOME=/root inside the container so scripts find vault files at /root/.busibox-vault-pass-*
+DOCKER_ARGS+=(-e "HOME=/root")
+
+# Terminal
+DOCKER_ARGS+=(-e "TERM=${TERM:-xterm-256color}")
+
+# Auto-detect LLM_BACKEND from host platform if not already set
+if [[ -z "${LLM_BACKEND:-}" ]]; then
+    _host_os=$(uname -s)
+    _host_arch=$(uname -m)
+    if [[ "$_host_os" == "Darwin" && ("$_host_arch" == "arm64" || "$_host_arch" == "aarch64") ]]; then
+        LLM_BACKEND="mlx"
+    elif command -v nvidia-smi &>/dev/null && nvidia-smi -L &>/dev/null 2>&1; then
+        LLM_BACKEND="vllm"
+    fi
+fi
+
+# Auto-detect HOST_AGENT_TOKEN from .env file if not already set
+if [[ -z "${HOST_AGENT_TOKEN:-}" ]]; then
+    _env_prefix="${CONTAINER_PREFIX:-dev}"
+    _env_file="${REPO_ROOT}/.env.${_env_prefix}"
+    if [[ -f "$_env_file" ]]; then
+        HOST_AGENT_TOKEN=$(awk -F= '/^HOST_AGENT_TOKEN=/{val=substr($0, index($0,$2))} END{print val}' "$_env_file" 2>/dev/null | tr -d '\r\n')
+    fi
+fi
+
+# Pass through optional overrides if set in caller's environment
+for var in GITHUB_AUTH_TOKEN CORE_APPS_MODE CORE_APPS_SOURCE DEPLOY_REF \
+           USE_ANSIBLE_FOR_DOCKER USE_ANSIBLE VERBOSE DEV_APPS_DIR LLM_BACKEND HOST_AGENT_TOKEN; do
+    if [[ -n "${!var:-}" ]]; then
+        DOCKER_ARGS+=(-e "${var}=${!var}")
+    fi
+done
+
+# ─── Network ─────────────────────────────────────────────────────────────────
+# Try to join the busibox network if it exists (needed for service health checks).
+# During bootstrap the network may not exist yet, which is fine.
+NETWORK_NAME="${CONTAINER_PREFIX:-dev}-busibox-net"
+if docker network inspect "${NETWORK_NAME}" >/dev/null 2>&1; then
+    DOCKER_ARGS+=(--network "${NETWORK_NAME}")
+fi
+
+# Ensure host.docker.internal resolves inside the container (Linux hosts
+# without Docker Desktop need this; macOS Docker Desktop provides it natively).
+if [[ "$(uname -s)" == "Linux" ]]; then
+    DOCKER_ARGS+=(--add-host=host.docker.internal:host-gateway)
+fi
+
+# ─── Run ─────────────────────────────────────────────────────────────────────
+# Construct the full command string for bash -c
+CMD_STRING="$*"
+
+exec docker "${DOCKER_ARGS[@]}" "${MANAGER_IMAGE}" "${CMD_STRING}"

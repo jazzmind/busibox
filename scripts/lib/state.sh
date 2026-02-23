@@ -538,6 +538,44 @@ set_dev_apps_dir() {
     set_state "DEV_APPS_DIR" "$dir"
 }
 
+# Get core apps mode for Docker local dev
+# Returns: "dev" (Turbopack hot-reload) or "prod" (standalone, default)
+# Usage: mode=$(get_core_apps_mode)
+get_core_apps_mode() {
+    get_state "CORE_APPS_MODE" "prod"
+}
+
+# Set core apps mode for Docker local dev
+# Usage: set_core_apps_mode "dev"  # Enable Core Developer Mode (hot-reload)
+# Usage: set_core_apps_mode "prod" # Disable Core Developer Mode (standalone, memory-efficient)
+set_core_apps_mode() {
+    local mode="$1"
+    if [[ "$mode" != "dev" && "$mode" != "prod" ]]; then
+        echo "ERROR: core apps mode must be 'dev' or 'prod'" >&2
+        return 1
+    fi
+    set_state "CORE_APPS_MODE" "$mode"
+}
+
+# Get core apps source for Docker local dev
+# Returns: "legacy" (separate repos) or "monorepo" (busibox-frontend, default)
+# Usage: source=$(get_core_apps_source)
+get_core_apps_source() {
+    get_state "CORE_APPS_SOURCE" "legacy"
+}
+
+# Set core apps source for Docker local dev
+# Usage: set_core_apps_source "monorepo"  # Use busibox-frontend monorepo
+# Usage: set_core_apps_source "legacy"    # Use separate busibox-portal/busibox-agents repos
+set_core_apps_source() {
+    local source="$1"
+    if [[ "$source" != "legacy" && "$source" != "monorepo" ]]; then
+        echo "ERROR: core apps source must be 'legacy' or 'monorepo'" >&2
+        return 1
+    fi
+    set_state "CORE_APPS_SOURCE" "$source"
+}
+
 # Display current state (for debugging)
 show_state() {
     echo "=== Busibox State ==="

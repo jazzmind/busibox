@@ -387,6 +387,9 @@ async def recreate_user_apps_with_volumes(dev_app_ids: Set[str], logs: List[str]
         '--hostname', 'user-apps',
         '--network', network_name,
         '--restart', 'unless-stopped',
+        '--log-driver', 'json-file',
+        '--log-opt', 'max-size=10m',
+        '--log-opt', 'max-file=3',
         # Labels to associate with compose project
         '--label', f'com.docker.compose.project={compose_project}',
         '--label', f'com.docker.compose.service=user-apps',

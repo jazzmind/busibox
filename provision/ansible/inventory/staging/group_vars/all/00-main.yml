@@ -69,7 +69,7 @@ bridge_ip: "{{ network_base_octets }}.211"
 # ============================================================================
 # Domain Configuration - Staging
 # ============================================================================
-# full_domain is the complete domain for this environment (e.g., staging.ai.jaycashman.com)
+# full_domain is the complete domain for this environment (e.g., staging.busibox.com)
 # It comes from the SITE_DOMAIN value set during installation
 # IMPORTANT: staging/prod must use explicit site_domain (do not fall back to localhost).
 # SITE_DOMAIN env var can be used as a temporary override for one-off deploys.

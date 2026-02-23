@@ -158,6 +158,52 @@ print(model.get('mode', ''))
 " 2>/dev/null || echo ""
 }
 
+# Get multimodal capability for a model key
+get_model_multimodal() {
+    local model_key="$1"
+
+    python3 -c "
+import yaml
+with open('$MODEL_REGISTRY', 'r') as f:
+    data = yaml.safe_load(f)
+available = data.get('available_models', {})
+model = available.get('$model_key', {})
+val = model.get('multimodal', None)
+if val is not None:
+    print('true' if val else 'false')
+else:
+    print('')
+" 2>/dev/null || echo ""
+}
+
+# Get tool_calling capability for a model key
+get_model_tool_calling() {
+    local model_key="$1"
+
+    python3 -c "
+import yaml
+with open('$MODEL_REGISTRY', 'r') as f:
+    data = yaml.safe_load(f)
+available = data.get('available_models', {})
+model = available.get('$model_key', {})
+val = model.get('tool_calling', None)
+if val is not None:
+    print('true' if val else 'false')
+else:
+    print('')
+" 2>/dev/null || echo ""
+}
+
+# Get display name for a purpose (capitalize first letter of each word)
+get_purpose_display_name() {
+    local purpose="$1"
+    python3 -c "
+name = '$purpose'
+parts = name.replace('_', ' ').replace('-', ' ').split()
+print(' '.join(p.capitalize() for p in parts))
+" 2>/dev/null || echo "$purpose"
+}
+
 # Get api_base for a purpose and backend
 get_api_base_for_purpose() {
     local backend="$1"
@@ -167,7 +213,7 @@ get_api_base_for_purpose() {
     if [[ "$backend" == "mlx" ]]; then
         case "$purpose" in
             fast|test|classify) echo "http://host.docker.internal:${mlx_fast_port}/v1" ;;
-            transcribe) echo "http://host.docker.internal:8081/v1" ;;
+            transcribe) echo "http://host.docker.internal:8084/v1" ;;
             voice) echo "http://host.docker.internal:8082/v1" ;;
             image) echo "http://host.docker.internal:8083/v1" ;;
             *) echo "http://host.docker.internal:8080/v1" ;;
@@ -255,21 +301,38 @@ EOF
 EOF
         fi
         
-        # Add model metadata if available
-        if [[ -n "$description" || -n "$mode" ]]; then
-            cat >> "$OUTPUT_FILE" << EOF
+        # Fetch capability metadata from model registry
+        local multimodal
+        multimodal=$(get_model_multimodal "$model_key")
+        local tool_calling
+        tool_calling=$(get_model_tool_calling "$model_key")
+        local display_name
+        display_name=$(get_purpose_display_name "$purpose")
+        
+        # Always write model_info for purpose entries
+        cat >> "$OUTPUT_FILE" << EOF
     model_info:
+      display_name: "${display_name}"
 EOF
-            if [[ -n "$description" ]]; then
-                cat >> "$OUTPUT_FILE" << EOF
+        if [[ -n "$description" ]]; then
+            cat >> "$OUTPUT_FILE" << EOF
       description: "${description}"
 EOF
-            fi
-            if [[ -n "$mode" ]]; then
-                cat >> "$OUTPUT_FILE" << EOF
+        fi
+        if [[ -n "$mode" ]]; then
+            cat >> "$OUTPUT_FILE" << EOF
       mode: "${mode}"
 EOF
-            fi
+        fi
+        if [[ -n "$multimodal" ]]; then
+            cat >> "$OUTPUT_FILE" << EOF
+      multimodal: ${multimodal}
+EOF
+        fi
+        if [[ -n "$tool_calling" ]]; then
+            cat >> "$OUTPUT_FILE" << EOF
+      tool_calling: ${tool_calling}
+EOF
         fi
         
         echo "" >> "$OUTPUT_FILE"
@@ -335,7 +398,12 @@ EOF
 EOF
         fi
 
-        if [[ -n "$description" || -n "$mode" ]]; then
+        local multimodal
+        multimodal=$(get_model_multimodal "$model_key")
+        local tool_calling
+        tool_calling=$(get_model_tool_calling "$model_key")
+
+        if [[ -n "$description" || -n "$mode" || -n "$multimodal" || -n "$tool_calling" ]]; then
             cat >> "$OUTPUT_FILE" << EOF
     model_info:
 EOF
@@ -347,6 +415,16 @@ EOF
             if [[ -n "$mode" ]]; then
                 cat >> "$OUTPUT_FILE" << EOF
       mode: "${mode}"
+EOF
+            fi
+            if [[ -n "$multimodal" ]]; then
+                cat >> "$OUTPUT_FILE" << EOF
+      multimodal: ${multimodal}
+EOF
+            fi
+            if [[ -n "$tool_calling" ]]; then
+                cat >> "$OUTPUT_FILE" << EOF
+      tool_calling: ${tool_calling}
 EOF
             fi
         fi

@@ -253,8 +253,16 @@ class DockerManager:
             ])
             return {"success": True, "logs": result}
         except Exception as e:
+            error_str = str(e)
+            if "logging driver does not support reading" in error_str:
+                logger.warning(f"Container {container_name} uses a logging driver that doesn't support reading")
+                return {
+                    "success": False,
+                    "error": f"Container '{service}' uses a logging driver that doesn't support 'docker logs'. "
+                             f"Set logging.driver to 'json-file' in docker-compose.yml or daemon.json."
+                }
             logger.error(f"Failed to get logs for {service}: {e}")
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": error_str}
     
     async def get_system_health(self) -> Dict[str, Any]:
         """

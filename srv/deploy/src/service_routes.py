@@ -39,7 +39,10 @@ from pydantic import BaseModel
 from .auth import verify_admin_token, verify_service_or_admin_token
 from .config import config
 from .platform_detection import get_platform_info
-from .core_app_executor import is_docker_environment, execute_ssh_command
+from .core_app_executor import (
+    is_docker_environment, execute_ssh_command,
+    execute_docker_command, execute_in_core_apps,
+)
 
 # Import token exchange for agent-api calls
 from busibox_common import exchange_token_zero_trust
@@ -583,7 +586,7 @@ async def check_service_health(
         # Default to 'nginx' which works for both Docker (via alias) and Proxmox
         nginx_host = os.getenv('NGINX_HOST', 'nginx')
         
-        # When NGINX_PUBLIC_URL is set (e.g. https://staging.ai.jaycashman.com), use Host header
+        # When NGINX_PUBLIC_URL is set (e.g. https://staging.busibox.com), use Host header
         # so the request hits the domain server block (which has /health and proper app routing).
         # Without this, Host: nginx hits the default server which may route to wrong app.
         nginx_public_url = os.getenv('NGINX_PUBLIC_URL', '')
@@ -3086,3 +3089,98 @@ async def system_memory(_: dict = Depends(verify_admin_token)):
         raise HTTPException(status_code=e.response.status_code, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"System memory error: {e}")
+
+
+# =============================================================================
+# Core Apps - Per-App Dev Mode Control
+# =============================================================================
+# Proxies to the app-manager control API running inside the core-apps container
+# on port 9999.  Works for Docker (docker exec + curl) and Proxmox (SSH + curl).
+
+APP_MANAGER_PORT = 9999
+
+
+async def _app_manager_request(method: str, path: str, body: dict | None = None) -> dict:
+    """Send a request to the app-manager control API inside core-apps."""
+    if body:
+        body_arg = f"-d '{json.dumps(body)}' -H 'Content-Type: application/json'"
+    else:
+        body_arg = ""
+
+    curl_cmd = f"curl -sf -X {method} {body_arg} http://localhost:{APP_MANAGER_PORT}{path}"
+    stdout, stderr, code = await execute_in_core_apps(curl_cmd, timeout=300)
+
+    if code != 0:
+        raise HTTPException(
+            status_code=502,
+            detail=f"app-manager unreachable: {stderr or stdout}",
+        )
+
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=502,
+            detail=f"app-manager returned invalid JSON: {stdout[:500]}",
+        )
+
+
+class AppModeRequest(BaseModel):
+    app: str | None = None
+    mode: str | None = None
+    allApps: str | None = None
+
+
+class AppRestartRequest(BaseModel):
+    app: str
+
+
+@router.get("/core-apps/dev-mode")
+async def get_core_apps_dev_mode(_: dict = Depends(verify_admin_token)):
+    """Get per-app dev/prod mode status from the app-manager inside core-apps."""
+    try:
+        result = await _app_manager_request("GET", "/status")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get dev mode status: {e}")
+
+
+@router.post("/core-apps/dev-mode")
+async def set_core_apps_dev_mode(
+    req: AppModeRequest,
+    _: dict = Depends(verify_admin_token),
+):
+    """Toggle dev/prod mode for a specific app or all apps."""
+    body = {}
+    if req.allApps:
+        body["allApps"] = req.allApps
+    elif req.app and req.mode:
+        body["app"] = req.app
+        body["mode"] = req.mode
+    else:
+        raise HTTPException(status_code=400, detail="Provide {app, mode} or {allApps}")
+
+    try:
+        result = await _app_manager_request("POST", "/mode", body)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to set dev mode: {e}")
+
+
+@router.post("/core-apps/restart")
+async def restart_core_app(
+    req: AppRestartRequest,
+    _: dict = Depends(verify_admin_token),
+):
+    """Restart a specific core app without changing its mode."""
+    try:
+        result = await _app_manager_request("POST", "/restart", {"app": req.app})
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to restart app: {e}")
