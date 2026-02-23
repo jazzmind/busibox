@@ -88,10 +88,8 @@ run_pg_sql() {
         if [[ -z "$pg_host" ]]; then
             return 1
         fi
-        local sql_escaped
-        sql_escaped="$(printf "%q" "$sql")"
-        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${pg_host}" \
-            "sudo -u postgres psql -d ${db} -t -A -c ${sql_escaped}" 2>/dev/null
+        echo "$sql" | ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${pg_host}" \
+            "sudo -u postgres psql -d ${db} -t -A" 2>/dev/null
     else
         local prefix
         prefix="$(get_container_prefix "$env")"
