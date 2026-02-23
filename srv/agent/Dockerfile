@@ -21,6 +21,9 @@ WORKDIR /app
 # Copy requirements first (for caching)
 COPY agent/requirements.txt .
 
+# Install system dependencies (ffmpeg for audio format conversion)
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 

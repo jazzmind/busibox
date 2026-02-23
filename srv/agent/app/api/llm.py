@@ -14,7 +14,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -382,6 +382,46 @@ async def _litellm_generate_image(
         return resp.json()
 
 
+def _is_wav(data: bytes) -> bool:
+    return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WAVE"
+
+
+def _convert_to_wav(file_bytes: bytes) -> bytes:
+    """Convert any audio format to 16-bit PCM WAV using ffmpeg."""
+    import subprocess
+    import tempfile
+    import os
+
+    in_path = out_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".audio", delete=False) as inf:
+            inf.write(file_bytes)
+            in_path = inf.name
+        out_path = in_path + ".wav"
+
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", in_path,
+                "-ar", "16000", "-ac", "1", "-sample_fmt", "s16",
+                out_path,
+            ],
+            capture_output=True, timeout=30,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.decode(errors="replace")[:500]
+            raise RuntimeError(f"ffmpeg failed (rc={result.returncode}): {stderr}")
+
+        with open(out_path, "rb") as f:
+            return f.read()
+    finally:
+        for p in (in_path, out_path):
+            if p:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+
 async def _litellm_transcribe_audio(
     file_bytes: bytes,
     filename: str,
@@ -394,9 +434,26 @@ async def _litellm_transcribe_audio(
     headers = _get_litellm_headers()
     mp_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
 
+    if not _is_wav(file_bytes):
+        logger.info(
+            "Transcribe: input is not WAV (size=%d, header=%s), converting via ffmpeg",
+            len(file_bytes), file_bytes[:4].hex(),
+        )
+        try:
+            file_bytes = _convert_to_wav(file_bytes)
+            filename = "recording.wav"
+            content_type = "audio/wav"
+            logger.info("Transcribe: ffmpeg conversion succeeded, new size=%d", len(file_bytes))
+        except Exception as e:
+            logger.error("Transcribe: ffmpeg conversion failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Unsupported audio format and conversion failed: {e}",
+            )
+
     logger.info(
-        "Transcribe request: filename=%s content_type=%s model=%s size=%d base_url=%s",
-        filename, content_type, model, len(file_bytes), base_url,
+        "Transcribe request: filename=%s content_type=%s model=%s size=%d",
+        filename, content_type, model, len(file_bytes),
     )
 
     files = {
@@ -1907,6 +1964,275 @@ async def create_speech(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
         )
+
+
+# =============================================================================
+# Real-time Audio Transcription (WebSocket)
+# =============================================================================
+
+
+def _get_transcribe_backend() -> Tuple[str, str]:
+    """Resolve the transcribe model's api_base and backend type from LiteLLM config.
+
+    Returns (api_base, backend_type) where backend_type is 'vllm' or 'mlx'.
+    Raises HTTPException if no transcribe model is configured.
+    """
+    config = _read_local_litellm_config()
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="LiteLLM config not available; cannot discover transcribe backend",
+        )
+
+    for entry in config.get("model_list", []):
+        if entry.get("model_name") == "transcribe":
+            params = entry.get("litellm_params", {})
+            api_base = params.get("api_base", "")
+            model_id = params.get("model", "")
+
+            if "mlx-community" in model_id or "mlx" in model_id.lower():
+                backend_type = "mlx"
+            elif "vllm" in api_base.lower():
+                backend_type = "vllm"
+            else:
+                backend_type = "vllm"
+
+            return api_base.rstrip("/"), backend_type
+
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="No 'transcribe' model configured in LiteLLM",
+    )
+
+
+async def _validate_ws_token(token: str) -> bool:
+    """Validate a JWT using the same JWKS-based validation as regular API auth."""
+    from app.auth.tokens import validate_bearer
+    try:
+        await validate_bearer(token)
+        return True
+    except Exception as e:
+        logger.warning("WebSocket token validation failed: %s", e)
+        return False
+
+
+async def _proxy_vllm_realtime(ws_client: WebSocket, ws_upstream) -> None:
+    """Bidirectional proxy for vLLM's OpenAI Realtime WebSocket.
+
+    Both client and vLLM speak the same OpenAI Realtime event protocol,
+    so this is a near-passthrough.
+    """
+    import websockets
+
+    async def client_to_upstream():
+        try:
+            while True:
+                data = await ws_client.receive_text()
+                await ws_upstream.send(data)
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.debug("vLLM client->upstream ended: %s", e)
+
+    async def upstream_to_client():
+        try:
+            async for message in ws_upstream:
+                if isinstance(message, str):
+                    await ws_client.send_text(message)
+                else:
+                    await ws_client.send_bytes(message)
+        except websockets.exceptions.ConnectionClosed:
+            pass
+        except Exception as e:
+            logger.debug("vLLM upstream->client ended: %s", e)
+
+    tasks = [
+        asyncio.create_task(client_to_upstream()),
+        asyncio.create_task(upstream_to_client()),
+    ]
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for t in pending:
+        t.cancel()
+
+
+async def _proxy_mlx_realtime(ws_client: WebSocket, ws_upstream) -> None:
+    """Bidirectional proxy translating OpenAI Realtime events to MLX protocol.
+
+    Client speaks OpenAI Realtime events (JSON text frames).
+    MLX server expects: initial JSON config, then raw binary int16 PCM frames,
+    and returns JSON with {text, is_partial} fields.
+    """
+    import base64
+    import json as json_mod
+    import websockets
+
+    mlx_config_sent = False
+
+    async def client_to_upstream():
+        nonlocal mlx_config_sent
+        try:
+            while True:
+                data = await ws_client.receive_text()
+                event = json_mod.loads(data)
+                event_type = event.get("type", "")
+
+                if event_type == "session.update":
+                    cfg = {
+                        "model": event.get("model", ""),
+                        "language": event.get("language", "en"),
+                    }
+                    await ws_upstream.send(json_mod.dumps(cfg))
+                    mlx_config_sent = True
+
+                elif event_type == "input_audio_buffer.append":
+                    if not mlx_config_sent:
+                        await ws_upstream.send(json_mod.dumps({"language": "en"}))
+                        mlx_config_sent = True
+                    audio_b64 = event.get("audio", "")
+                    if audio_b64:
+                        pcm_bytes = base64.b64decode(audio_b64)
+                        await ws_upstream.send(pcm_bytes)
+
+                elif event_type == "input_audio_buffer.commit":
+                    pass
+
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.debug("MLX client->upstream ended: %s", e)
+
+    async def upstream_to_client():
+        try:
+            async for message in ws_upstream:
+                if isinstance(message, bytes):
+                    continue
+                try:
+                    mlx_event = json_mod.loads(message)
+                except (json_mod.JSONDecodeError, TypeError):
+                    continue
+
+                text = mlx_event.get("text", "")
+                is_partial = mlx_event.get("is_partial", True)
+
+                if is_partial:
+                    await ws_client.send_text(json_mod.dumps({
+                        "type": "transcription.delta",
+                        "delta": text,
+                    }))
+                else:
+                    await ws_client.send_text(json_mod.dumps({
+                        "type": "transcription.done",
+                        "text": text,
+                    }))
+
+        except websockets.exceptions.ConnectionClosed:
+            pass
+        except Exception as e:
+            logger.debug("MLX upstream->client ended: %s", e)
+
+    tasks = [
+        asyncio.create_task(client_to_upstream()),
+        asyncio.create_task(upstream_to_client()),
+    ]
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for t in pending:
+        t.cancel()
+
+
+@router.websocket("/transcribe/stream")
+async def transcribe_stream(websocket: WebSocket):
+    """Real-time audio transcription via WebSocket.
+
+    Exposes a unified OpenAI Realtime-compatible protocol and proxies to
+    either MLX Whisper or vLLM Whisper, translating as needed.
+
+    Authentication via ?token=<jwt> query parameter.
+    """
+    import json as json_mod
+    import uuid as uuid_mod
+    import websockets
+
+    await websocket.accept()
+
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.send_text(json_mod.dumps({
+            "type": "error", "message": "Authentication required. Pass token as query parameter.",
+        }))
+        await websocket.close(code=4001)
+        return
+
+    if not await _validate_ws_token(token):
+        await websocket.send_text(json_mod.dumps({
+            "type": "error", "message": "Invalid or expired token.",
+        }))
+        await websocket.close(code=4003)
+        return
+
+    try:
+        api_base, backend_type = _get_transcribe_backend()
+    except HTTPException as e:
+        await websocket.send_text(json_mod.dumps({
+            "type": "error", "message": e.detail,
+        }))
+        await websocket.close(code=4004)
+        return
+
+    if backend_type == "vllm":
+        upstream_url = api_base.replace("http://", "ws://").replace("https://", "wss://")
+        if upstream_url.endswith("/v1"):
+            upstream_url += "/realtime"
+        else:
+            upstream_url += "/v1/realtime"
+    else:
+        upstream_url = api_base.replace("http://", "ws://").replace("https://", "wss://")
+        if upstream_url.endswith("/v1"):
+            upstream_url += "/audio/transcriptions/realtime"
+        else:
+            upstream_url += "/v1/audio/transcriptions/realtime"
+
+    logger.info(
+        "Transcribe stream: backend=%s upstream=%s",
+        backend_type, upstream_url,
+    )
+
+    session_id = str(uuid_mod.uuid4())
+    await websocket.send_text(json_mod.dumps({
+        "type": "session.created",
+        "session_id": session_id,
+    }))
+
+    try:
+        async with websockets.connect(upstream_url) as upstream_ws:
+            if backend_type == "vllm":
+                await _proxy_vllm_realtime(websocket, upstream_ws)
+            else:
+                await _proxy_mlx_realtime(websocket, upstream_ws)
+    except websockets.exceptions.InvalidURI as e:
+        logger.error("Invalid upstream WebSocket URI %s: %s", upstream_url, e)
+        await websocket.send_text(json_mod.dumps({
+            "type": "error", "message": f"Cannot connect to transcription backend: {e}",
+        }))
+    except (ConnectionRefusedError, OSError) as e:
+        logger.error("Cannot connect to upstream WebSocket %s: %s", upstream_url, e)
+        await websocket.send_text(json_mod.dumps({
+            "type": "error", "message": "Transcription backend unavailable",
+        }))
+    except WebSocketDisconnect:
+        logger.debug("Client disconnected from transcribe stream")
+    except Exception as e:
+        logger.error("Transcribe stream error: %s", e)
+        try:
+            await websocket.send_text(json_mod.dumps({
+                "type": "error", "message": str(e),
+            }))
+        except Exception:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 # =============================================================================
