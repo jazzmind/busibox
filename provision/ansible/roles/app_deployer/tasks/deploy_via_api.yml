@@ -253,14 +253,15 @@
   systemd:
     daemon_reload: true
   when:
-    - systemd_service_file is changed
+    - app.process_manager | default('systemd') == 'systemd'
+    - status_result.json.status == 'completed'
   tags:
     - deploy_via_api
 
-- name: Start and enable application service
+- name: Restart and enable application service
   systemd:
     name: "{{ app.name }}"
-    state: started
+    state: restarted
     enabled: true
   when:
     - app.process_manager | default('systemd') == 'systemd'

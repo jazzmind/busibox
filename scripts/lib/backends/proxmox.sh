@@ -246,10 +246,11 @@ backend_service_action() {
             info "Redeploying ${service}..."
             cd "${REPO_ROOT}/provision/ansible"
 
-            # Core apps support deploying a specific ref (branch/tag)
             local deploy_ref="${DEPLOY_REF:-}"
+            local frontend_apps="busibox-portal busibox-admin busibox-agents busibox-chat busibox-appbuilder busibox-media busibox-documents"
+
             case "$service" in
-                busibox-portal|busibox-agents|busibox-appbuilder)
+                busibox-portal|busibox-admin|busibox-agents|busibox-chat|busibox-appbuilder|busibox-media|busibox-documents)
                     if [[ -n "$deploy_ref" ]]; then
                         info "Deploying ${service} at ref: ${BOLD}${deploy_ref}${NC}"
                         if ! make deploy-app-ref APP="$service" REF="$deploy_ref" INV="$inventory"; then
@@ -264,31 +265,19 @@ backend_service_action() {
                     fi
                     ;;
                 core-apps|apps)
-                    # For the "core-apps" group, deploy both apps
-                    # If a ref is provided, use deploy-app-ref for each
+                    # Deploy all 7 monorepo frontend apps
                     if [[ -n "$deploy_ref" ]]; then
-                        info "Deploying busibox-portal at ref: ${BOLD}${deploy_ref}${NC}"
-                        if ! make deploy-app-ref APP="busibox-portal" REF="$deploy_ref" INV="$inventory"; then
-                            error "Failed to redeploy busibox-portal"
-                            return 1
-                        fi
-                        echo ""
-                        info "Deploying busibox-agents at ref: ${BOLD}${deploy_ref}${NC}"
-                        if ! make deploy-app-ref APP="busibox-agents" REF="$deploy_ref" INV="$inventory"; then
-                            error "Failed to redeploy busibox-agents"
-                            return 1
-                        fi
-                        echo ""
-                        info "Deploying busibox-appbuilder at ref: ${BOLD}${deploy_ref}${NC}"
-                        if ! make deploy-app-ref APP="busibox-appbuilder" REF="$deploy_ref" INV="$inventory"; then
-                            error "Failed to redeploy busibox-appbuilder"
-                            return 1
-                        fi
+                        for app in $frontend_apps; do
+                            info "Deploying ${app} at ref: ${BOLD}${deploy_ref}${NC}"
+                            if ! make deploy-app-ref APP="$app" REF="$deploy_ref" INV="$inventory"; then
+                                error "Failed to redeploy ${app}"
+                                return 1
+                            fi
+                            echo ""
+                        done
                     else
-                        local make_target
-                        make_target=$(get_proxmox_make_target "$service")
-                        if ! make "$make_target" INV="$inventory"; then
-                            error "Failed to redeploy"
+                        if ! make deploy-frontend INV="$inventory"; then
+                            error "Failed to redeploy frontend"
                             return 1
                         fi
                     fi
