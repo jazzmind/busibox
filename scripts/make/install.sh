@@ -2870,16 +2870,13 @@ _run_pg_sql() {
     local db_user="${POSTGRES_USER:-busibox_user}"
     
     if [[ "$PLATFORM" == "proxmox" ]]; then
-        # For Proxmox, run SQL via SSH on pg-lxc container
-        # Use service registry for hostname (resolves via /etc/hosts on Proxmox host)
         local pg_host="${POSTGRES_HOST:-}"
         if [[ -z "$pg_host" ]]; then
             pg_host=$(get_service_ip "postgres" "$ENVIRONMENT" "proxmox")
         fi
-        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${pg_host}" \
-            "sudo -u postgres psql -d ${db} -t -A -c \"${sql}\"" 2>/dev/null
+        echo "$sql" | ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${pg_host}" \
+            "cd /tmp && sudo -u postgres psql -d ${db} -t -A" 2>/dev/null
     else
-        # For Docker, use docker exec
         local container_prefix="${CONTAINER_PREFIX:-local}"
         docker exec "${container_prefix}-postgres" psql -U "$db_user" -d "$db" -t -A -c "$sql" 2>/dev/null
     fi
@@ -2897,7 +2894,7 @@ _check_pg_ready() {
             pg_host=$(get_service_ip "postgres" "$ENVIRONMENT" "proxmox")
         fi
         ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${pg_host}" \
-            "pg_isready -U postgres" &>/dev/null
+            "cd /tmp && pg_isready -U postgres" &>/dev/null
     else
         local container_prefix="${CONTAINER_PREFIX:-local}"
         docker exec "${container_prefix}-postgres" pg_isready -U "$db_user" &>/dev/null

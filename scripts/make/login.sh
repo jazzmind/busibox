@@ -28,24 +28,25 @@ debug() {
 
 profile_init
 
+# ============================================================================
+# Environment Detection & Confirmation
+# ============================================================================
+
+_active_profile="$(profile_get_active)"
+
 get_current_env() {
-    local active_profile
-    active_profile="$(profile_get_active)"
-    if [[ -n "$active_profile" ]]; then
-        profile_get "$active_profile" "environment"
+    if [[ -n "$_active_profile" ]]; then
+        profile_get "$_active_profile" "environment"
         return
     fi
     get_state "ENVIRONMENT" "development"
 }
 
 get_backend_type() {
-    local active_profile
-    active_profile="$(profile_get_active)"
-    if [[ -n "$active_profile" ]]; then
-        profile_get "$active_profile" "backend"
+    if [[ -n "$_active_profile" ]]; then
+        profile_get "$_active_profile" "backend"
         return
     fi
-
     local env env_upper backend
     env="$(get_current_env)"
     if [[ "$env" == "development" ]]; then
@@ -56,6 +57,49 @@ get_backend_type() {
     backend="$(get_state "BACKEND_${env_upper}" "")"
     echo "${backend:-docker}"
 }
+
+confirm_environment() {
+    local env="$1"
+    local backend="$2"
+    local count
+
+    echo ""
+    if [[ -n "$_active_profile" ]]; then
+        local display
+        display="$(profile_get_display "$_active_profile")"
+        echo -e "  ${CYAN}Profile:${NC}     ${BOLD}${_active_profile}${NC} (${display})"
+    else
+        echo -e "  ${CYAN}Environment:${NC} ${BOLD}${env}${NC} (${backend})"
+    fi
+
+    count="$(profile_count)"
+    if [[ "$count" -gt 1 ]]; then
+        echo ""
+        echo -e "  ${DIM}Available profiles:${NC}"
+        profile_list
+        echo ""
+        read -r -p "  Press Enter to continue, or type profile number to switch: " choice
+        if [[ -n "$choice" && "$choice" =~ ^[0-9]+$ ]]; then
+            local target_id
+            target_id="$(profile_get_by_index "$choice" 2>/dev/null || true)"
+            if [[ -n "$target_id" ]]; then
+                profile_set_active "$target_id"
+                _active_profile="$target_id"
+                info "Switched to profile: $target_id ($(profile_get_display "$target_id"))"
+                return 1
+            else
+                warn "Invalid selection, using current profile."
+            fi
+        fi
+    else
+        echo ""
+    fi
+    return 0
+}
+
+# ============================================================================
+# Helpers
+# ============================================================================
 
 get_container_prefix() {
     local env="$1"
@@ -83,47 +127,6 @@ generate_uuid() {
     fi
 }
 
-run_pg_sql() {
-    local sql="$1"
-    local db="${2:-authz}"
-    local backend="$3"
-    local env="$4"
-    local db_user="${POSTGRES_USER:-busibox_user}"
-
-    debug "run_pg_sql: backend=${backend} env=${env} db=${db}"
-    debug "run_pg_sql: SQL=${sql}"
-
-    if [[ "$backend" == "proxmox" ]]; then
-        local pg_host
-        pg_host="$(get_service_ip "postgres" "$env" "proxmox" 2>/dev/null || true)"
-        if [[ -z "$pg_host" ]]; then
-            debug "run_pg_sql: FAILED - could not resolve postgres host"
-            return 1
-        fi
-        debug "run_pg_sql: pg_host=${pg_host} (via SSH)"
-        local result stderr_out exit_code
-        # Capture stderr separately so psql warnings (e.g. "could not change directory")
-        # don't pollute the result. Redirect psql stderr on the remote side.
-        result="$(echo "$sql" | ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${pg_host}" \
-            "cd /tmp && sudo -u postgres psql -d ${db} -t -A" 2>/dev/null)"
-        exit_code=$?
-        debug "run_pg_sql: exit_code=${exit_code} result='${result}'"
-        if [[ $exit_code -ne 0 ]]; then
-            # Re-run with stderr visible for debugging
-            stderr_out="$(echo "$sql" | ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${pg_host}" \
-                "cd /tmp && sudo -u postgres psql -d ${db} -t -A" 2>&1 >/dev/null)"
-            debug "run_pg_sql: FAILED with exit code ${exit_code}, stderr: ${stderr_out}"
-        fi
-        echo "$result"
-        return $exit_code
-    else
-        local prefix
-        prefix="$(get_container_prefix "$env")"
-        debug "run_pg_sql: docker container=${prefix}-postgres"
-        docker exec "${prefix}-postgres" psql -U "$db_user" -d "$db" -t -A -c "$sql" 2>/dev/null
-    fi
-}
-
 generate_totp_code() {
     if command -v python3 &>/dev/null; then
         python3 -c "import secrets; print(str(secrets.randbelow(1000000)).zfill(6))"
@@ -143,12 +146,55 @@ sha256_hash() {
     fi
 }
 
+# ============================================================================
+# SQL Execution
+# ============================================================================
+
+# Resolved once in main() and used by run_pg_sql
+_PG_HOST=""
+
+run_pg_sql() {
+    local sql="$1"
+    local db="${2:-authz}"
+    local backend="$3"
+    local env="$4"
+    local db_user="${POSTGRES_USER:-busibox_user}"
+
+    debug "run_pg_sql: backend=${backend} env=${env} db=${db} pg_host=${_PG_HOST}"
+    debug "run_pg_sql: SQL=${sql}"
+
+    if [[ "$backend" == "proxmox" ]]; then
+        local result exit_code
+        result="$(echo "$sql" | ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${_PG_HOST}" \
+            "cd /tmp && sudo -u postgres psql -d ${db} -t -A" 2>/dev/null)"
+        exit_code=$?
+        debug "run_pg_sql: exit_code=${exit_code} result='${result}'"
+        if [[ $exit_code -ne 0 ]]; then
+            local stderr_out
+            stderr_out="$(echo "$sql" | ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${_PG_HOST}" \
+                "cd /tmp && sudo -u postgres psql -d ${db} -t -A" 2>&1 >/dev/null)"
+            debug "run_pg_sql: FAILED stderr: ${stderr_out}"
+        fi
+        echo "$result"
+        return $exit_code
+    else
+        local prefix
+        prefix="$(get_container_prefix "$env")"
+        debug "run_pg_sql: docker container=${prefix}-postgres"
+        docker exec "${prefix}-postgres" psql -U "$db_user" -d "$db" -t -A -c "$sql" 2>/dev/null
+    fi
+}
+
+# ============================================================================
+# Main
+# ============================================================================
+
 main() {
     local env backend
     env="$(get_current_env)"
     backend="$(get_backend_type)"
 
-    debug "active_profile=$(profile_get_active)"
+    debug "active_profile=${_active_profile}"
     debug "env=${env} backend=${backend}"
     debug "hostname=$(hostname) uname=$(uname -n)"
 
@@ -156,6 +202,22 @@ main() {
         error "Login magic-link helper is not implemented for K8s backend yet."
         exit 1
     fi
+
+    # Show environment and let user confirm or switch profile
+    if ! confirm_environment "$env" "$backend"; then
+        # User switched profile — re-detect
+        env="$(get_current_env)"
+        backend="$(get_backend_type)"
+        debug "After switch: env=${env} backend=${backend}"
+    fi
+
+    # Resolve postgres host
+    _PG_HOST="$(get_service_ip "postgres" "$env" "$backend")"
+    if [[ -z "$_PG_HOST" ]]; then
+        error "Cannot resolve postgres host for env=${env}, backend=${backend}"
+        exit 1
+    fi
+    info "Database: ${_PG_HOST} (${env})"
 
     local admin_email
     admin_email="$(get_state "ADMIN_EMAIL" "")"
@@ -175,13 +237,13 @@ main() {
 
     info "Generating admin login credentials for ${email_lower} (${env}/${backend})..."
 
-    # Test DB connectivity first
+    # Test DB connectivity
     debug "Testing DB connectivity..."
     local db_test
     db_test="$(run_pg_sql "SELECT 'connected' as test;" authz "$backend" "$env" | head -1 | tr -d '[:space:]')"
     debug "DB connectivity test: '${db_test}'"
     if [[ "$db_test" != "connected" ]]; then
-        error "Cannot connect to authz database (backend=${backend}, env=${env})"
+        error "Cannot connect to authz database at ${_PG_HOST}"
         error "DB test returned: '${db_test}'"
         exit 1
     fi
@@ -222,26 +284,20 @@ main() {
     token="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-43)"
     token_sql="$(sql_escape "$token")"
     debug "Generated token: ${token}"
-    debug "Token SQL-escaped: ${token_sql}"
 
-    debug "Deleting old magic links..."
     run_pg_sql "DELETE FROM authz_magic_links WHERE user_id='${user_id}'::uuid;" authz "$backend" "$env" >/dev/null || true
-
-    debug "Inserting magic link..."
     run_pg_sql "INSERT INTO authz_magic_links (user_id, email, token, expires_at) VALUES ('${user_id}'::uuid, '${email_sql}', '${token_sql}', now() + interval '24 hours');" authz "$backend" "$env" >/dev/null || {
         error "Failed to insert magic link token."
         exit 1
     }
 
-    # Verify the token was actually saved
+    # Verify the token was saved
     local verify_token
     verify_token="$(run_pg_sql "SELECT token FROM authz_magic_links WHERE user_id='${user_id}'::uuid AND token='${token_sql}' LIMIT 1;" authz "$backend" "$env" | head -1 | tr -d '[:space:]')"
-    debug "Verification SELECT returned: '${verify_token}'"
     if [[ "$verify_token" != "$token" ]]; then
         error "Token verification FAILED - token was not saved to database!"
         error "Expected: '${token}'"
         error "Got:      '${verify_token}'"
-        error "Backend: ${backend}, Env: ${env}"
         exit 1
     fi
     debug "Token verified in DB"
@@ -265,14 +321,18 @@ main() {
     site_domain="$(get_state "SITE_DOMAIN" "")"
     [[ -z "$site_domain" ]] && site_domain="$(get_state "BASE_DOMAIN" "localhost")"
 
+    local encoded_email
+    encoded_email="$(python3 -c "import urllib.parse; print(urllib.parse.quote('${email_lower}'))" 2>/dev/null || echo "${email_lower}")"
+
     if [[ "$site_domain" == "localhost" || -z "$site_domain" ]]; then
         magic_link="https://localhost/portal/verify?token=${token}"
-        verify_url="https://localhost/portal/verify?email=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${email_lower}'))" 2>/dev/null || echo "${email_lower}")"
+        verify_url="https://localhost/portal/verify?email=${encoded_email}"
     else
         magic_link="https://${site_domain}/portal/verify?token=${token}"
-        verify_url="https://${site_domain}/portal/verify?email=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${email_lower}'))" 2>/dev/null || echo "${email_lower}")"
+        verify_url="https://${site_domain}/portal/verify?email=${encoded_email}"
     fi
 
+    echo ""
     success "Admin login credentials generated."
     echo ""
     echo -e "  ${BOLD}Magic Link${NC} (expires in 24h):"
