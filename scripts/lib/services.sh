@@ -298,24 +298,27 @@ get_service_ip() {
         fi
     fi
     
-    # Proxmox: Use DNS hostname (resolved via /etc/hosts)
-    # This avoids hardcoding IP addresses and network octets
-    local hostname
-    hostname=$(get_service_hostname "$service")
+    # Proxmox: compute IP from container ID (always environment-correct).
+    # /etc/hosts hostnames are NOT environment-qualified — they resolve to a
+    # single IP (typically production), so using them for staging would hit the
+    # wrong container. Prefer the computed IP; only fall back to hostname when
+    # the container ID is unavailable.
+    local container_id
+    container_id=$(get_service_container_id "$service" "$env" 2>/dev/null || true)
     
-    # Check if hostname is resolvable, fall back to computed IP if not
-    if getent hosts "$hostname" &>/dev/null 2>&1; then
-        echo "$hostname"
-    else
-        # Fallback: compute IP from container ID (legacy behavior)
-        # This handles cases where /etc/hosts isn't set up yet
-        local container_id
-        container_id=$(get_service_container_id "$service" "$env")
-        
+    if [[ -n "$container_id" ]]; then
         if [[ "$env" == "staging" ]]; then
             echo "10.96.201.$((container_id - 100))"
         else
             echo "10.96.200.$container_id"
+        fi
+    else
+        local hostname
+        hostname=$(get_service_hostname "$service")
+        if getent hosts "$hostname" &>/dev/null 2>&1; then
+            echo "$hostname"
+        else
+            return 1
         fi
     fi
 }
