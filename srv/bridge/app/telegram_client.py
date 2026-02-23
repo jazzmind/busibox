@@ -138,9 +138,11 @@ class TelegramClient:
                 logger.error("Telegram poll failed: %s", e)
                 await self._sleep(interval)
 
-    async def send_message(self, chat_id: str, text: str, parse_mode: Optional[str] = None) -> None:
-        """Send a message to a Telegram chat."""
-        payload = {"chat_id": chat_id, "text": text}
+    async def send_message(
+        self, chat_id: str, text: str, parse_mode: Optional[str] = None
+    ) -> Optional[int]:
+        """Send a message to a Telegram chat. Returns the message_id."""
+        payload: dict = {"chat_id": chat_id, "text": text}
         if parse_mode:
             payload["parse_mode"] = parse_mode
         response = await self.client.post(
@@ -148,6 +150,43 @@ class TelegramClient:
             json=payload,
         )
         response.raise_for_status()
+        result = (response.json() or {}).get("result") or {}
+        return int(result["message_id"]) if "message_id" in result else None
+
+    async def edit_message(
+        self,
+        chat_id: str,
+        message_id: int,
+        text: str,
+        parse_mode: Optional[str] = None,
+    ) -> None:
+        """Edit an existing message."""
+        payload: dict = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+        }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/editMessageText",
+                json=payload,
+            )
+            response.raise_for_status()
+        except Exception:
+            logger.debug("Failed to edit Telegram message %s", message_id)
+
+    async def delete_message(self, chat_id: str, message_id: int) -> None:
+        """Delete a message. Best-effort — failures are silently ignored."""
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/deleteMessage",
+                json={"chat_id": chat_id, "message_id": message_id},
+            )
+            response.raise_for_status()
+        except Exception:
+            logger.debug("Failed to delete Telegram message %s", message_id)
 
     async def send_typing_indicator(self, chat_id: str) -> None:
         """Show typing indicator in Telegram."""

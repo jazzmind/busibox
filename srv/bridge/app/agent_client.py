@@ -223,6 +223,7 @@ class AgentClient:
         agent_id: Optional[str] = None,
         delegation_token_override: Optional[str] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
+        channel: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Send a chat message and stream the response.
@@ -233,6 +234,8 @@ class AgentClient:
             enable_web_search: Enable web search
             enable_doc_search: Enable document search
             model: Model selection
+            channel: Bridge channel name (e.g. "telegram") — passed as metadata
+                     so the agent can tailor event filtering for bridge clients.
             
         Yields:
             Event dictionaries from the stream
@@ -240,7 +243,7 @@ class AgentClient:
         url = f"{self.base_url}/chat/message/stream/agentic"
         headers = await self._get_headers(delegation_token_override)
         
-        payload = {
+        payload: Dict[str, Any] = {
             "message": message,
             "model": model,
             "enable_web_search": enable_web_search,
@@ -251,6 +254,9 @@ class AgentClient:
         effective_agent_id = agent_id or self.default_agent_id
         if effective_agent_id:
             payload["agent_id"] = effective_agent_id
+
+        if channel:
+            payload["metadata"] = {"bridge_channels": [channel]}
         
         # Include conversation ID if we have one
         conversation_id = self.get_conversation_id(sender)

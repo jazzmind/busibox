@@ -11,6 +11,7 @@ Runs FastAPI + optional channel workers:
 import asyncio
 import httpx
 import logging
+import re
 import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -25,6 +26,7 @@ from .email_client import EmailClient
 from .email_inbound_client import EmailInboundClient
 from .signal_client import SignalClient, SignalMessage
 from .telegram_client import TelegramClient, TelegramMessage
+from .telegram_formatter import markdown_to_telegram_html
 from .whatsapp_client import WhatsAppClient
 
 logging.basicConfig(
@@ -154,10 +156,13 @@ class MessageProcessor:
         external_sender: str,
         text: str,
         attachments: Optional[List[Dict[str, Any]]] = None,
-        send_message: Callable[[str], Awaitable[None]],
+        send_message: Callable[[str], Awaitable[Any]],
         send_typing_start: Callable[[], Awaitable[None]] | None,
         send_typing_stop: Callable[[], Awaitable[None]] | None,
         agent_client: AgentClient,
+        edit_message: Callable[[int, str], Awaitable[None]] | None = None,
+        delete_message: Callable[[int], Awaitable[None]] | None = None,
+        format_content: Callable[[str], str] | None = None,
     ) -> None:
         text = text.strip()
         if not text:
@@ -219,6 +224,9 @@ class MessageProcessor:
             "send_typing_stop": send_typing_stop,
             "agent_client": agent_client,
             "delegation_token_override": delegation_token_override,
+            "edit_message": edit_message,
+            "delete_message": delete_message,
+            "format_content": format_content,
         }
 
         # Email flow expects synchronous completion in-process to capture chunks.
@@ -283,6 +291,10 @@ class MessageProcessor:
                 delegation_token_override=request["delegation_token_override"],
                 send_message=send_message,
                 cancel_event=cancel_event,
+                channel=channel,
+                edit_message=request.get("edit_message"),
+                delete_message=request.get("delete_message"),
+                format_content=request.get("format_content"),
             )
         except Exception as e:
             logger.error("Error processing %s message: %s", channel, e, exc_info=True)
@@ -299,11 +311,21 @@ class MessageProcessor:
         sender: str,
         agent_client: AgentClient,
         delegation_token_override: str | None,
-        send_message: Callable[[str], Awaitable[None]],
+        send_message: Callable[[str], Awaitable[Any]],
         cancel_event: asyncio.Event | None = None,
+        channel: str = "",
+        edit_message: Callable[[int, str], Awaitable[None]] | None = None,
+        delete_message: Callable[[int], Awaitable[None]] | None = None,
+        format_content: Callable[[str], str] | None = None,
     ) -> str:
         """
         Stream agent events and deliver user-visible content chunks incrementally.
+
+        When edit_message / delete_message callbacks are provided (e.g. Telegram),
+        telemetry events (thought, tool_start, tool_result) are consolidated into
+        a single editable status message that is deleted once real content arrives.
+
+        send_message may return an int (message_id) on channels that support it.
         """
         partial_buffer = ""
         collected_messages: List[str] = []
@@ -311,12 +333,32 @@ class MessageProcessor:
         last_emit_at = loop.time()
         debounce_seconds = 0.5
 
+        # Editable status message tracking (Telegram only)
+        status_message_id: int | None = None
+        supports_status_msg = edit_message is not None and delete_message is not None
+
+        def _apply_format(raw: str) -> str:
+            if format_content:
+                try:
+                    return format_content(raw)
+                except Exception:
+                    logger.debug("Content formatting failed, sending plain text")
+            return raw
+
+        async def _clear_status_message() -> None:
+            nonlocal status_message_id
+            if status_message_id is not None and delete_message is not None:
+                await delete_message(status_message_id)
+                status_message_id = None
+
         async def flush_partial_buffer() -> None:
             nonlocal partial_buffer, last_emit_at
             if not partial_buffer.strip():
                 partial_buffer = ""
                 return
-            for chunk in self._split_response(partial_buffer):
+            await _clear_status_message()
+            formatted = _apply_format(partial_buffer)
+            for chunk in self._split_response(formatted):
                 await send_message(chunk)
             collected_messages.append(partial_buffer)
             partial_buffer = ""
@@ -325,13 +367,13 @@ class MessageProcessor:
         async for event in agent_client.chat_message_stream(
             message=text,
             sender=sender,
-            # Bridge should not gate capabilities; the selected agent decides.
             enable_web_search=True,
             enable_doc_search=True,
             model=self.settings.default_model,
             agent_id=self.settings.default_agent_id or None,
             delegation_token_override=delegation_token_override,
             attachments=attachments,
+            channel=channel,
         ):
             if cancel_event and cancel_event.is_set():
                 break
@@ -343,7 +385,15 @@ class MessageProcessor:
 
             if event_type in ("thought", "tool_start", "tool_result"):
                 telemetry_msg = str(event.get("message") or "").strip()
-                if telemetry_msg:
+                if not telemetry_msg:
+                    continue
+                if supports_status_msg:
+                    status_text = f"💭 {telemetry_msg}"
+                    if status_message_id is not None:
+                        await edit_message(status_message_id, status_text)
+                    else:
+                        status_message_id = await send_message(status_text)
+                else:
                     await send_message(telemetry_msg)
                 continue
 
@@ -377,11 +427,14 @@ class MessageProcessor:
                 continue
 
             await flush_partial_buffer()
-            for chunk in self._split_response(message):
+            await _clear_status_message()
+            formatted = _apply_format(message)
+            for chunk in self._split_response(formatted):
                 await send_message(chunk)
             collected_messages.append(message)
 
         await flush_partial_buffer()
+        await _clear_status_message()
         return "\n".join(collected_messages).strip() or "No response generated."
 
     async def process_audio(
@@ -390,10 +443,13 @@ class MessageProcessor:
         channel: str,
         external_sender: str,
         audio_url: str,
-        send_message: Callable[[str], Awaitable[None]],
+        send_message: Callable[[str], Awaitable[Any]],
         send_typing_start: Callable[[], Awaitable[None]] | None,
         send_typing_stop: Callable[[], Awaitable[None]] | None,
         agent_client: AgentClient,
+        edit_message: Callable[[int, str], Awaitable[None]] | None = None,
+        delete_message: Callable[[int], Awaitable[None]] | None = None,
+        format_content: Callable[[str], str] | None = None,
     ) -> None:
         """
         Process an inbound voice/audio message by asking the chat agent to
@@ -413,6 +469,9 @@ class MessageProcessor:
             send_typing_start=send_typing_start,
             send_typing_stop=send_typing_stop,
             agent_client=agent_client,
+            edit_message=edit_message,
+            delete_message=delete_message,
+            format_content=format_content,
         )
 
     async def _exchange_access_token(
@@ -502,10 +561,13 @@ class MessageProcessor:
         attachment_url: str,
         attachment_filename: str,
         attachment_mime_type: str,
-        send_message: Callable[[str], Awaitable[None]],
+        send_message: Callable[[str], Awaitable[Any]],
         send_typing_start: Callable[[], Awaitable[None]] | None,
         send_typing_stop: Callable[[], Awaitable[None]] | None,
         agent_client: AgentClient,
+        edit_message: Callable[[int, str], Awaitable[None]] | None = None,
+        delete_message: Callable[[int], Awaitable[None]] | None = None,
+        format_content: Callable[[str], str] | None = None,
     ) -> None:
         binding = await self._resolve_sender_binding(channel, external_sender)
         subject_token = ""
@@ -543,6 +605,9 @@ class MessageProcessor:
             send_typing_start=send_typing_start,
             send_typing_stop=send_typing_stop,
             agent_client=agent_client,
+            edit_message=edit_message,
+            delete_message=delete_message,
+            format_content=format_content,
         )
 
     def _split_response(self, response: str) -> List[str]:
@@ -651,6 +716,46 @@ class TelegramBot:
         self.processor = processor
         self._running = False
 
+    @staticmethod
+    def _make_telegram_callbacks(
+        telegram_client: TelegramClient, chat_id: str
+    ) -> Dict[str, Any]:
+        """Build the set of Telegram-specific callbacks for a chat_id."""
+
+        async def _send(body: str) -> Optional[int]:
+            return await telegram_client.send_message(chat_id, body, parse_mode="HTML")
+
+        async def _send_plain(body: str) -> Optional[int]:
+            """Fallback sender without parse_mode (used when HTML fails)."""
+            return await telegram_client.send_message(chat_id, body)
+
+        async def _edit(message_id: int, body: str) -> None:
+            await telegram_client.edit_message(chat_id, message_id, body)
+
+        async def _delete(message_id: int) -> None:
+            await telegram_client.delete_message(chat_id, message_id)
+
+        def _format(raw: str) -> str:
+            return markdown_to_telegram_html(raw)
+
+        async def _safe_send(body: str) -> Optional[int]:
+            """Send with HTML formatting; fall back to plain text on error."""
+            try:
+                return await _send(body)
+            except Exception:
+                logger.debug("HTML send failed for Telegram, falling back to plain text")
+                plain = re.sub(r"<[^>]+>", "", body)
+                return await _send_plain(plain)
+
+        return {
+            "send_message": _safe_send,
+            "send_typing_start": lambda: telegram_client.send_typing_indicator(chat_id),
+            "send_typing_stop": None,
+            "edit_message": _edit,
+            "delete_message": _delete,
+            "format_content": _format,
+        }
+
     async def run(self):
         self._running = True
         allowed = set(self.settings.get_allowed_telegram_chat_ids())
@@ -670,15 +775,21 @@ class TelegramBot:
                         break
                     if allowed and msg.chat_id not in allowed:
                         continue
+
+                    cbs = self._make_telegram_callbacks(telegram_client, msg.chat_id)
+
                     if msg.audio_url and not (msg.text or "").strip():
                         await self.processor.process_audio(
                             channel="telegram",
                             external_sender=msg.sender_id,
                             audio_url=msg.audio_url,
-                            send_message=lambda body, chat_id=msg.chat_id: telegram_client.send_message(chat_id, body),
-                            send_typing_start=lambda chat_id=msg.chat_id: telegram_client.send_typing_indicator(chat_id),
-                            send_typing_stop=None,
+                            send_message=cbs["send_message"],
+                            send_typing_start=cbs["send_typing_start"],
+                            send_typing_stop=cbs["send_typing_stop"],
                             agent_client=agent_client,
+                            edit_message=cbs["edit_message"],
+                            delete_message=cbs["delete_message"],
+                            format_content=cbs["format_content"],
                         )
                         continue
 
@@ -690,10 +801,13 @@ class TelegramBot:
                             attachment_url=msg.attachment_url,
                             attachment_filename=msg.attachment_filename or "telegram-attachment",
                             attachment_mime_type=msg.attachment_mime_type or "application/octet-stream",
-                            send_message=lambda body, chat_id=msg.chat_id: telegram_client.send_message(chat_id, body),
-                            send_typing_start=lambda chat_id=msg.chat_id: telegram_client.send_typing_indicator(chat_id),
-                            send_typing_stop=None,
+                            send_message=cbs["send_message"],
+                            send_typing_start=cbs["send_typing_start"],
+                            send_typing_stop=cbs["send_typing_stop"],
                             agent_client=agent_client,
+                            edit_message=cbs["edit_message"],
+                            delete_message=cbs["delete_message"],
+                            format_content=cbs["format_content"],
                         )
                         continue
 
@@ -701,10 +815,13 @@ class TelegramBot:
                         channel="telegram",
                         external_sender=msg.sender_id,
                         text=msg.text,
-                        send_message=lambda body, chat_id=msg.chat_id: telegram_client.send_message(chat_id, body),
-                        send_typing_start=lambda chat_id=msg.chat_id: telegram_client.send_typing_indicator(chat_id),
-                        send_typing_stop=None,
+                        send_message=cbs["send_message"],
+                        send_typing_start=cbs["send_typing_start"],
+                        send_typing_stop=cbs["send_typing_stop"],
                         agent_client=agent_client,
+                        edit_message=cbs["edit_message"],
+                        delete_message=cbs["delete_message"],
+                        format_content=cbs["format_content"],
                     )
 
     def stop(self):

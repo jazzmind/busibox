@@ -99,6 +99,18 @@ TEST_SUITES = [
         "description": "Deploy API service tests",
         "estimatedDuration": 30,
     },
+    {
+        "id": "busibox-rls-security",
+        "name": "RLS Security (Data Isolation)",
+        "project": "busibox",
+        "service": "data",
+        "type": "security",
+        "framework": "pytest",
+        "makeArgs": "SERVICE=data ARGS='tests/integration/test_rls_isolation.py'",
+        "description": "Row-Level Security isolation tests — verifies multi-user data isolation across documents, chunks, embeds, and graph",
+        "estimatedDuration": 120,
+        "isSecurity": True,
+    },
 ]
 
 

@@ -183,13 +183,15 @@ async def _ensure_bootstrap_test_user() -> None:
     
     # Helper to create test user in a database
     async def create_test_user_in_db(pg_service, db_name: str):
-        # Get User role ID
+        # Get User and Admin role IDs
         user_role = await pg_service.get_role_by_name("User")
+        admin_role = await pg_service.get_role_by_name("Admin")
         if not user_role:
             logger.warning(f"User role not found in {db_name} - cannot assign to test user")
             return
         
         user_role_id = user_role["id"]
+        admin_role_id = admin_role["id"] if admin_role else None
         
         # Check if test user exists
         existing_user = await pg_service.get_user(str(TEST_USER_ID))
@@ -218,15 +220,31 @@ async def _ensure_bootstrap_test_user() -> None:
                     TEST_USER_ID,
                     uuid.UUID(user_role_id),
                 )
+                
+                # Assign Admin role (needed for test role management via admin API)
+                if admin_role_id:
+                    await conn.execute(
+                        """
+                        INSERT INTO authz_user_roles (user_id, role_id)
+                        VALUES ($1, $2)
+                        ON CONFLICT (user_id, role_id) DO NOTHING
+                        """,
+                        TEST_USER_ID,
+                        uuid.UUID(admin_role_id),
+                    )
             
             logger.info(f"Created test user in {db_name}", user_id=str(TEST_USER_ID), email=TEST_USER_EMAIL)
         else:
-            # User exists - ensure they have User role
+            # User exists - ensure they have User and Admin roles
             user_roles = await pg_service.get_user_roles(str(TEST_USER_ID))
             has_user_role = any(r["id"] == user_role_id for r in user_roles)
+            has_admin_role = any(r["id"] == admin_role_id for r in user_roles) if admin_role_id else True
             if not has_user_role:
                 await pg_service.add_user_role(user_id=str(TEST_USER_ID), role_id=user_role_id)
                 logger.info(f"Assigned User role to existing test user in {db_name}", user_id=str(TEST_USER_ID))
+            if not has_admin_role and admin_role_id:
+                await pg_service.add_user_role(user_id=str(TEST_USER_ID), role_id=admin_role_id)
+                logger.info(f"Assigned Admin role to existing test user in {db_name}", user_id=str(TEST_USER_ID))
     
     # Create in production database
     await create_test_user_in_db(_pg, "production")
