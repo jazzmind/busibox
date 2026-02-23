@@ -20,7 +20,7 @@ make install SERVICE=authz
 make manage SERVICE=authz ACTION=restart
 ```
 
-**Why**: Secrets are injected from Ansible Vault at runtime. Direct commands skip this and cause authentication failures.
+**Why**: Secrets are injected from Ansible Vault at runtime. Direct commands skip this and cause authentication failures. All orchestration runs inside a **manager container** with guaranteed dependencies.
 
 **Quick Reference**:
 - Deploy: `make install SERVICE=authz`
@@ -28,6 +28,8 @@ make manage SERVICE=authz ACTION=restart
 - Logs: `make manage SERVICE=authz ACTION=logs`
 - Status: `make manage SERVICE=authz ACTION=status`
 - Redeploy: `make manage SERVICE=authz ACTION=redeploy`
+- Rebuild manager: `make build-manager`
+- Skip manager: `make install SERVICE=authz USE_MANAGER=0`
 
 See `.cursor/rules/010-make-commands.md` for complete reference.
 

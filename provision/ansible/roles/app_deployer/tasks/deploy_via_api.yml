@@ -87,7 +87,7 @@
             (secrets.microsoft.tenant_id | default('')) if secret_key == 'microsoft_tenant_id' else
             (secrets.github.client_id | default('')) if secret_key == 'github_client_id' else
             (secrets.github.client_secret | default('')) if secret_key == 'github_client_secret' else
-            ('https://' ~ full_domain ~ '/portal/api/admin/github/callback') if secret_key == 'github_redirect_uri' else
+            ('https://' ~ full_domain ~ '/admin/api/github/callback') if secret_key == 'github_redirect_uri' else
             (secrets.openai.api_key | default('')) if secret_key == 'openai_api_key' else
             (secrets.resend_api_key | default('')) if secret_key == 'resend_api_key' else
             core_apps_ip if secret_key == 'current_container_ip' else
@@ -133,7 +133,7 @@
             (secrets.microsoft.tenant_id | default('')) if opt_secret_key == 'microsoft_tenant_id' else
             (secrets.github.client_id | default('')) if opt_secret_key == 'github_client_id' else
             (secrets.github.client_secret | default('')) if opt_secret_key == 'github_client_secret' else
-            ('https://' ~ full_domain ~ '/portal/api/admin/github/callback') if opt_secret_key == 'github_redirect_uri' else
+            ('https://' ~ full_domain ~ '/admin/api/github/callback') if opt_secret_key == 'github_redirect_uri' else
             (secrets.openai.api_key | default('')) if opt_secret_key == 'openai_api_key' else
             (secrets.resend_api_key | default('')) if opt_secret_key == 'resend_api_key' else
             core_apps_ip if opt_secret_key == 'current_container_ip' else

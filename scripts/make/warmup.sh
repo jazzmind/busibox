@@ -99,6 +99,17 @@ get_warmup_mlx_model() {
     echo "mlx-community/Qwen3-0.6B-4bit"
 }
 
+# Media models to cache for dev (Apple Silicon only)
+# These are downloaded via huggingface_hub so they're ready for first server start
+get_media_mlx_models() {
+    if [[ "$(uname -m)" != "arm64" || "$(uname)" != "Darwin" ]]; then
+        return
+    fi
+    echo "mlx-community/whisper-tiny-mlx"
+    echo "mlx-community/Kokoro-82M-bf16"
+    echo "black-forest-labs/FLUX.2-klein-4B"
+}
+
 # =============================================================================
 # VIRTUAL ENVIRONMENT SETUP (for MLX models only)
 # =============================================================================
@@ -260,6 +271,24 @@ show_cache_status() {
         fi
         echo ""
         
+        # Media models
+        local media_models
+        media_models=$(get_media_mlx_models)
+        if [[ -n "$media_models" ]]; then
+            echo -e "${BOLD}MLX Media Models:${NC}"
+            while IFS= read -r model; do
+                if [[ -n "$model" ]]; then
+                    if check_mlx_model "$model"; then
+                        echo -e "  ${GREEN}✓${NC} ${model}"
+                    else
+                        echo -e "  ${YELLOW}○${NC} ${model} ${DIM}(not cached)${NC}"
+                        MISSING_REQUIRED+=("mlx:${model}")
+                    fi
+                fi
+            done <<< "$media_models"
+            echo ""
+        fi
+
         # Show other cached models (informational)
         local other_models
         other_models=$(get_other_cached_mlx_models "$warmup_mlx_model")

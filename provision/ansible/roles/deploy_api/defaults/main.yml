@@ -50,10 +50,10 @@ deploy_api_proxmox_host: proxmox
 # Note: Use 'proxy' group (not 'nginx') - inventories use 'proxy' as the group name
 # Prefer DNS hostname 'nginx' (resolved via /etc/hosts from internal_dns role)
 deploy_api_nginx_host: nginx
-# Public domain for nginx health checks (e.g. staging.ai.jaycashman.com)
+# Public domain for nginx health checks (e.g. staging.busibox.com)
 # When set, deploy-api sends Host header so requests hit domain server block
 # Uses domain/full_domain from inventory, or env-specific fallback
-deploy_api_nginx_public_domain: "{{ domain | default(full_domain) | default('staging.ai.jaycashman.com' if (deployment_environment | default('')) == 'staging' else 'localhost') }}"
+deploy_api_nginx_public_domain: "{{ domain | default(full_domain) | default('staging.busibox.com' if (deployment_environment | default('')) == 'staging' else 'localhost') }}"
 # Location snippets are included inside the server block via:
 # include /etc/nginx/app-locations/*.conf;
 # This avoids the "location directive not allowed here" error that occurs

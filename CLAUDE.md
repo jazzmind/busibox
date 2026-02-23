@@ -14,6 +14,7 @@ All service operations MUST go through the unified `make` interface because:
 - Secrets are injected from Ansible Vault at runtime
 - Environment is auto-detected from state files
 - Works identically for Docker and Proxmox backends
+- Operations run inside a **manager container** with guaranteed dependencies (Ansible, Docker CLI, vault tools, SSH)
 
 See `.cursor/rules/010-make-commands.md` for complete details.
 
@@ -200,6 +201,28 @@ busibox/
 ├── specs/                 # Project specifications
 └── tools/                 # Utility tools
 ```
+
+### Manager Container
+
+All `make install`, `make manage`, and orchestration commands run inside an
+ephemeral **manager container** by default. This ensures consistent tool versions
+regardless of the host OS:
+
+```bash
+make install SERVICE=authz              # Runs inside manager (default)
+make install SERVICE=authz USE_MANAGER=0  # Direct host execution (legacy)
+make build-manager                      # Rebuild the manager image
+```
+
+The manager container includes Ansible, Docker CLI, SSH client, vault tools, and
+all required dependencies. It mounts the Docker socket, vault password files, SSH
+keys, and the busibox repo from the host. If Docker is unavailable (bare-metal
+Proxmox), it automatically falls back to direct host execution.
+
+**Key files**:
+- `provision/docker/manager.Dockerfile` - Manager image definition
+- `scripts/make/manager-run.sh` - Runner script (handles mounts, env vars)
+- `docker-compose.yml` - Manager service definition (profiles: ["manager"])
 
 ## Technology Stack
 

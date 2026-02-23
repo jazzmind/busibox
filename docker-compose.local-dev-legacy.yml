@@ -36,7 +36,7 @@ services:
   core-apps:
     build:
       context: ${BUSIBOX_DIR:-.}
-      dockerfile: provision/docker/core-apps.Dockerfile.dev
+      dockerfile: provision/docker/core-apps.Dockerfile.dev.legacy
       args:
         GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
     container_name: ${CONTAINER_PREFIX:-local}-core-apps
@@ -132,33 +132,22 @@ services:
       - "host.docker.internal:host-gateway"  # Access host's localhost from container
     ports:
       # Direct app ports (for debugging)
-      - "3000:3000"  # Busibox Portal (shell)
+      - "3000:3000"  # Busibox Portal
       - "3001:3001"  # Agent Manager
-      - "3002:3002"  # Admin
-      - "3003:3003"  # Chat
       - "3004:3004"  # App Builder
-      - "3005:3005"  # Media
-      - "3006:3006"  # Documents
     volumes:
-      # Mount monorepo directory
-      - ${BUSIBOX_FRONTEND_DIR:-../busibox-frontend}:/srv/busibox-frontend
+      # Mount core app directories
+      - ${BUSIBOX_PORTAL_DIR:-../busibox-portal}:/srv/busibox-portal
+      - ${BUSIBOX_AGENTS_DIR:-../busibox-agents}:/srv/busibox-agents
+      - ${BUSIBOX_APPBUILDER_DIR:-../busibox-appbuilder}:/srv/busibox-appbuilder
       # Preserve node_modules from container (installed during build)
-      - busibox-frontend-node-modules:/srv/busibox-frontend/node_modules
-      - busibox-portal-node-modules:/srv/busibox-frontend/apps/portal/node_modules
-      - busibox-agents-node-modules:/srv/busibox-frontend/apps/agents/node_modules
-      - busibox-admin-node-modules:/srv/busibox-frontend/apps/admin/node_modules
-      - busibox-chat-node-modules:/srv/busibox-frontend/apps/chat/node_modules
-      - busibox-appbuilder-node-modules:/srv/busibox-frontend/apps/appbuilder/node_modules
-      - busibox-media-node-modules:/srv/busibox-frontend/apps/media/node_modules
-      - busibox-documents-node-modules:/srv/busibox-frontend/apps/documents/node_modules
+      - busibox-portal-node-modules:/srv/busibox-portal/node_modules
+      - busibox-agents-node-modules:/srv/busibox-agents/node_modules
+      - busibox-appbuilder-node-modules:/srv/busibox-appbuilder/node_modules
       # Preserve .next build caches
-      - busibox-portal-next-cache:/srv/busibox-frontend/apps/portal/.next
-      - busibox-agents-next-cache:/srv/busibox-frontend/apps/agents/.next
-      - busibox-admin-next-cache:/srv/busibox-frontend/apps/admin/.next
-      - busibox-chat-next-cache:/srv/busibox-frontend/apps/chat/.next
-      - busibox-appbuilder-next-cache:/srv/busibox-frontend/apps/appbuilder/.next
-      - busibox-media-next-cache:/srv/busibox-frontend/apps/media/.next
-      - busibox-documents-next-cache:/srv/busibox-frontend/apps/documents/.next
+      - busibox-portal-next-cache:/srv/busibox-portal/.next
+      - busibox-agents-next-cache:/srv/busibox-agents/.next
+      - busibox-appbuilder-next-cache:/srv/busibox-appbuilder/.next
     depends_on:
       postgres:
         condition: service_healthy
@@ -213,21 +202,12 @@ services:
 # Named volumes for node_modules and .next cache
 # These preserve installed dependencies across container restarts
 volumes:
-  busibox-frontend-node-modules:
   busibox-portal-node-modules:
   busibox-portal-next-cache:
   busibox-agents-node-modules:
   busibox-agents-next-cache:
-  busibox-admin-node-modules:
-  busibox-admin-next-cache:
-  busibox-chat-node-modules:
-  busibox-chat-next-cache:
   busibox-appbuilder-node-modules:
   busibox-appbuilder-next-cache:
-  busibox-media-node-modules:
-  busibox-media-next-cache:
-  busibox-documents-node-modules:
-  busibox-documents-next-cache:
 
 # Use the same network as the base compose
 # Note: Don't use external:true - let docker compose manage the network lifecycle

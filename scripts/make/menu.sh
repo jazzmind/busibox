@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # Export host path for deploy-api to use when spawning containers
-export BUSIBOX_HOST_PATH="${REPO_ROOT}"
+export BUSIBOX_HOST_PATH="${BUSIBOX_HOST_PATH:-${REPO_ROOT}}"
 
 # Return code that signals "return to main status dashboard"
 # Used by 's' command from any submenu
@@ -923,16 +923,29 @@ host_service_menu() {
         esac
         
         echo ""
-        menu "Actions" \
-            "Start" \
-            "Stop" \
-            "Restart" \
-            "View Logs" \
-            "Check Status" \
-            "Back"
+        if [[ "$service" == "mlx" ]]; then
+            menu "Actions" \
+                "Start" \
+                "Stop" \
+                "Restart" \
+                "View Logs" \
+                "Check Status" \
+                "Sync Models (check/download)" \
+                "Back"
+            local max_choice=7
+        else
+            menu "Actions" \
+                "Start" \
+                "Stop" \
+                "Restart" \
+                "View Logs" \
+                "Check Status" \
+                "Back"
+            local max_choice=6
+        fi
         
         local choice=""
-        read -p "$(echo -e "${BOLD}Select action [1-6]:${NC} ")" choice
+        read -p "$(echo -e "${BOLD}Select action [1-${max_choice}]:${NC} ")" choice
         
         # Get token for host-agent authentication
         local token=""
@@ -1109,7 +1122,16 @@ host_service_menu() {
                 esac
                 pause
                 ;;
-            6|b|B|"")
+            6)
+                if [[ "$service" == "mlx" ]]; then
+                    echo ""
+                    (cd "$REPO_ROOT" && make mlx-sync)
+                    pause
+                else
+                    return 0
+                fi
+                ;;
+            7|b|B|"")
                 return 0
                 ;;
         esac
@@ -1261,19 +1283,19 @@ services_start_with_deps() {
         
         if [[ -n "$core_svcs" ]]; then
             info "Starting core services:$core_svcs"
-            (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$REPO_ROOT" docker compose -f docker-compose.yml up -d --no-deps $core_svcs)
+            (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$BUSIBOX_HOST_PATH" docker compose -f docker-compose.yml up -d --no-deps $core_svcs)
             sleep 2
         fi
         
         if [[ -n "$api_svcs" ]]; then
             info "Starting API services:$api_svcs"
-            (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$REPO_ROOT" docker compose -f docker-compose.yml up -d --no-deps $api_svcs)
+            (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$BUSIBOX_HOST_PATH" docker compose -f docker-compose.yml up -d --no-deps $api_svcs)
             sleep 2
         fi
         
         if [[ -n "$app_svcs" ]]; then
             info "Starting app services:$app_svcs"
-            (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$REPO_ROOT" docker compose -f docker-compose.yml up -d --no-deps $app_svcs)
+            (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$BUSIBOX_HOST_PATH" docker compose -f docker-compose.yml up -d --no-deps $app_svcs)
         fi
         
         success "$group_name started"
@@ -2239,7 +2261,7 @@ handle_databases() {
                 local embedding_container="${container_prefix}-embedding-api"
                 local milvus_container="${container_prefix}-milvus"
                 
-                (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$REPO_ROOT" docker compose -f docker-compose.yml --env-file .env.local up -d --force-recreate embedding-api) || {
+                (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$BUSIBOX_HOST_PATH" docker compose --project-directory "$BUSIBOX_HOST_PATH" -f docker-compose.yml --env-file .env.local up -d --force-recreate embedding-api) || {
                     error "Failed to restart embedding-api"
                     pause
                     return 1
@@ -2279,7 +2301,7 @@ handle_databases() {
                 (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local rm -f milvus) || true
                 docker volume rm busibox_milvus_data 2>/dev/null || true
                 
-                (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$REPO_ROOT" docker compose -f docker-compose.yml --env-file .env.local up -d milvus) || {
+                (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$BUSIBOX_HOST_PATH" docker compose -f docker-compose.yml --env-file .env.local up -d milvus) || {
                     error "Failed to start Milvus"
                     pause
                     return 1
@@ -2643,7 +2665,7 @@ connections.disconnect('default')
                         
                         info "Step 3/5: Starting fresh Milvus..."
                         # etcd and milvus-minio should already be running; just start milvus
-                        (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$REPO_ROOT" docker compose -f docker-compose.yml --env-file .env.local up -d milvus) || {
+                        (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$BUSIBOX_HOST_PATH" docker compose -f docker-compose.yml --env-file .env.local up -d milvus) || {
                             error "Failed to start Milvus"
                             pause
                             return 1

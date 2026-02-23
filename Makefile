@@ -9,7 +9,8 @@
         k8s-deploy k8s-sync k8s-build k8s-apply k8s-status k8s-delete k8s-secrets k8s-logs \
         k8s-gpu-up k8s-gpu-down k8s-gpu-status k8s-gpu-window \
         spot-check spot-swap spot-price \
-        connect disconnect k8s-connect-status
+        connect disconnect k8s-connect-status \
+        build-manager
 
 # Default target - interactive menu with health check
 .DEFAULT_GOAL := menu
@@ -27,6 +28,28 @@
 # Falls back to development if no profile is configured
 PROFILE_ENV := $(shell python3 -c "import json; d=json.load(open('.busibox/profiles.json')); p=d['profiles'][d['active']]; print(p['environment'])" 2>/dev/null)
 ENV ?= $(if $(PROFILE_ENV),$(PROFILE_ENV),development)
+
+# ============================================================================
+# MANAGER CONTAINER
+# ============================================================================
+# When USE_MANAGER=1 (default), orchestration commands (install, manage, menu)
+# run inside an ephemeral Docker container with guaranteed dependencies
+# (Ansible, Docker CLI, vault tools, SSH). Set USE_MANAGER=0 to run directly
+# on the host (legacy behavior, requires host-installed tools).
+#
+# Auto-detection: if Docker is not available, falls back to host execution.
+DOCKER_AVAILABLE := $(shell docker info >/dev/null 2>&1 && echo 1 || echo 0)
+USE_MANAGER ?= $(DOCKER_AVAILABLE)
+
+# Manager runner script -- handles image build, volume mounts, vault files
+MANAGER_RUN = bash scripts/make/manager-run.sh
+MANAGER_RUN_IT = bash scripts/make/manager-run.sh --interactive
+
+# Build the manager image (explicit rebuild)
+build-manager:
+	@echo "Building manager container image..."
+	@docker build -t busibox-manager:latest -f provision/docker/manager.Dockerfile .
+	@echo "Manager image built."
 
 # Service for targeted operations (comma-separated for multiple)
 SERVICE ?=
@@ -60,7 +83,8 @@ WORKER ?=
 #   development -> COMPOSE_DEV (volume mounts, npm link)
 #   demo/staging/production -> COMPOSE_GITHUB (built from GitHub)
 COMPOSE_FILE := docker-compose.yml
-COMPOSE_DEV := docker-compose.local-dev.yml
+COMPOSE_DEV_MONOREPO := docker-compose.local-dev.yml
+COMPOSE_DEV_LEGACY := docker-compose.local-dev-legacy.yml
 COMPOSE_GITHUB := docker-compose.github.yml
 
 # Environment-prefixed files (allows multiple installations to coexist)
@@ -76,6 +100,27 @@ STATE_FILE := .busibox-state-$(ENV_PREFIX)
 # This is set via: make configure -> Docker Configuration -> Configure Dev Apps Directory
 DEV_APPS_DIR := $(shell grep -s '^DEV_APPS_DIR=' $(STATE_FILE) 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
 export DEV_APPS_DIR
+
+# Core Apps Mode: controls whether core-apps run with Turbopack hot-reload (dev) or
+# as memory-efficient standalone builds (prod). Default is prod to minimize resource usage.
+# Override via environment variable or toggle via: make manage SERVICE=core-apps (option 8)
+# This is set via: make manage -> core-apps -> Switch mode (or CORE_APPS_MODE=dev make docker-up)
+CORE_APPS_MODE ?= $(shell grep -s '^CORE_APPS_MODE=' $(STATE_FILE) 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "prod")
+export CORE_APPS_MODE
+
+# Core Apps Source: controls whether core-apps use the busibox-frontend monorepo
+# or the legacy separate repos (busibox-portal, busibox-agents, busibox-appbuilder).
+# Toggle via: make manage SERVICE=core-apps (option 9)
+CORE_APPS_SOURCE ?= $(shell grep -s '^CORE_APPS_SOURCE=' $(STATE_FILE) 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "legacy")
+export CORE_APPS_SOURCE
+
+# Host path for Docker volume mounts.  The manager container mounts the repo
+# at its real host path, so $(PWD) is always correct.  BUSIBOX_HOST_PATH is
+# also exported by manager-run.sh as a convenience.
+BUSIBOX_HOST_PATH ?= $(PWD)
+
+# Select dev overlay based on CORE_APPS_SOURCE
+COMPOSE_DEV = $(if $(filter monorepo,$(CORE_APPS_SOURCE)),$(COMPOSE_DEV_MONOREPO),$(COMPOSE_DEV_LEGACY))
 
 # Automatically select overlay based on environment
 # development uses dev overlay, everything else uses github overlay
@@ -110,7 +155,11 @@ export BUSIBOX_ENV = $(ENV)
 # Usage: make              # Full interactive menu
 #        make ENV=staging  # Start with staging environment selected
 menu:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN_IT) bash scripts/make/launcher.sh
+else
 	@bash scripts/make/launcher.sh
+endif
 
 # ============================================================================
 # HELP
@@ -160,9 +209,14 @@ help:
 	@echo "    make docker-up ENV=demo                # Demo mode (prod-like, from GitHub)"
 	@echo "    make docker-up SERVICE=busibox-portal       # Start specific service"
 	@echo ""
-	@echo "  Core Apps mode (CORE_APPS_MODE variable, development ENV only):"
-	@echo "    make docker-up                         # Default: Turbopack hot-reload"
-	@echo "    CORE_APPS_MODE=prod make docker-up     # Build + serve (lower CPU, no hot-reload)"
+	@echo "  Core Developer Mode (CORE_APPS_MODE, development ENV only):"
+	@echo "    make docker-up                         # Default: prod mode (standalone, memory-efficient)"
+	@echo "    CORE_APPS_MODE=dev make docker-up      # Core developer mode (Turbopack hot-reload)"
+	@echo "    make manage SERVICE=core-apps          # Toggle mode interactively (options 8, 9)"
+	@echo ""
+	@echo "  Core Apps Source (CORE_APPS_SOURCE, development ENV only):"
+	@echo "    CORE_APPS_SOURCE=monorepo make docker-up  # Use busibox-frontend monorepo"
+	@echo "    CORE_APPS_SOURCE=legacy make docker-up    # Use separate repos (default)"
 	@echo ""
 	@echo "  Building:"
 	@echo "    make docker-build                      # Build for current ENV"
@@ -279,10 +333,18 @@ help:
 # SETUP & CONFIGURE
 # ============================================================================
 setup:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN_IT) bash scripts/make/setup.sh
+else
 	@bash scripts/make/setup.sh
+endif
 
 configure:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN_IT) bash scripts/make/configure.sh
+else
 	@bash scripts/make/configure.sh
+endif
 
 # ============================================================================
 # DEPLOY
@@ -290,10 +352,18 @@ configure:
 # Interactive: make deploy
 # Direct:      make deploy SERVICE=authz INV=staging
 deploy:
+ifeq ($(USE_MANAGER),1)
+ifdef SERVICE
+	@$(MANAGER_RUN) bash scripts/make/deploy.sh $(SERVICE) $(INV)
+else
+	@$(MANAGER_RUN_IT) bash scripts/make/deploy.sh
+endif
+else
 ifdef SERVICE
 	@bash scripts/make/deploy.sh $(SERVICE) $(INV)
 else
 	@bash scripts/make/deploy.sh
+endif
 endif
 
 # ============================================================================
@@ -466,14 +536,18 @@ ifneq ($(DEV_APPS_DIR),)
 	@echo "Dev Apps Directory: $(DEV_APPS_DIR)"
 endif
 ifdef SERVICE
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d $(SERVICE)
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(BUSIBOX_HOST_PATH)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d $(SERVICE)
 else
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(BUSIBOX_HOST_PATH)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d
 endif
 	@echo ""
 ifeq ($(ENV),development)
-	@echo "Development mode started. Use 'make docker-ps' to check status."
-	@echo "Next.js apps are volume-mounted with busibox-app npm-linked."
+	@echo "Development mode started (source=$(CORE_APPS_SOURCE)). Use 'make docker-ps' to check status."
+ifeq ($(CORE_APPS_SOURCE),monorepo)
+	@echo "Core apps: busibox-frontend monorepo (7 apps)"
+else
+	@echo "Core apps: legacy separate repos (portal + agents + appbuilder)"
+endif
 else
 	@echo "$(ENV) mode started. Use 'make docker-ps' to check status."
 	@echo "Next.js apps built from GitHub with npm-published busibox-app."
@@ -493,9 +567,9 @@ docker-start:
 	$(eval LITELLM_MASTER_KEY := $(or $(LITELLM_API_KEY),$(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_master_key 2>/dev/null || echo ""')))
 	$(eval LITELLM_SALT_KEY := $(or $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_salt_key 2>/dev/null || echo ""'),$(LITELLM_MASTER_KEY)))
 ifdef SERVICE
-	DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d --no-build $(SERVICE)
+	DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(BUSIBOX_HOST_PATH)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d --no-build $(SERVICE)
 else
-	DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d --no-build
+	DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(BUSIBOX_HOST_PATH)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d --no-build
 endif
 	@echo ""
 	@echo "Services started ($(ENV) mode). Use 'make docker-ps' to check status."
@@ -596,7 +670,7 @@ else
 	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) build $(SERVICE)
 endif
 	@echo "Recreating container to apply new image..."
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) BUSIBOX_HOST_PATH="$(PWD)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d --no-deps $(SERVICE)
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) BUSIBOX_HOST_PATH="$(BUSIBOX_HOST_PATH)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d --no-deps $(SERVICE)
 else
 ifdef NO_CACHE
 	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) build --no-cache
@@ -604,7 +678,7 @@ else
 	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) build
 endif
 	@echo "Recreating containers to apply new images..."
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) BUSIBOX_HOST_PATH="$(PWD)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) BUSIBOX_HOST_PATH="$(BUSIBOX_HOST_PATH)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d
 endif
 
 # View Docker logs (uses environment-based overlay)
@@ -685,16 +759,28 @@ docker-clean-all:
 # - Fresh install if no existing installation
 # - Continue/Full/Clean menu if existing installation detected
 install:
+ifeq ($(USE_MANAGER),1)
+ifdef SERVICE
+	@$(MANAGER_RUN) bash scripts/make/service-deploy.sh "$(SERVICE)"
+else
+	@USE_ANSIBLE_FOR_DOCKER=$(USE_ANSIBLE) $(MANAGER_RUN_IT) bash scripts/make/install-menu.sh $(if $(VERBOSE),-v)
+endif
+else
 ifdef SERVICE
 	@bash scripts/make/service-deploy.sh "$(SERVICE)"
 else
 	@USE_ANSIBLE_FOR_DOCKER=$(USE_ANSIBLE) bash scripts/make/install-menu.sh $(if $(VERBOSE),-v)
 endif
+endif
 
 # DEPRECATED: Use 'make manage' for service management or 'make install SERVICE=x' to redeploy.
 # Kept for backward compatibility - redirects to manage menu.
 update:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN_IT) bash scripts/make/update-services.sh
+else
 	@bash scripts/make/update-services.sh
+endif
 
 # Service management menu OR direct service action
 # Interactive menu for stopping/starting/redeploying services
@@ -705,39 +791,64 @@ update:
 #        make manage SERVICE=authz,agent ACTION=stop   # Stop multiple services
 #        make manage SERVICE=authz ACTION=logs         # View logs
 #
-# Core-apps mode switching (Docker dev env only):
-#        CORE_APPS_MODE=prod make manage SERVICE=core-apps ACTION=restart  # Prod mode
-#        CORE_APPS_MODE=dev  make manage SERVICE=core-apps ACTION=restart  # Dev mode
+# Core Developer Mode (Docker dev env only):
+#        make manage SERVICE=core-apps            # Toggle via interactive menu (option 8, persisted to state)
+#        CORE_APPS_MODE=dev  make manage SERVICE=core-apps ACTION=restart  # Force dev mode (hot-reload)
+#        CORE_APPS_MODE=prod make manage SERVICE=core-apps ACTION=restart  # Force prod mode (default)
 #
 # Actions: start, stop, restart, logs, redeploy, status
 # For core-app redeploy, pass REF= to select a specific branch/tag:
 #   make manage SERVICE=busibox-portal ACTION=redeploy REF=v1.0.0
 manage:
+ifeq ($(USE_MANAGER),1)
+ifdef SERVICE
+	@DEPLOY_REF="$(REF)" $(MANAGER_RUN) bash scripts/make/service-manage.sh "$(SERVICE)" "$(ACTION)"
+else
+	@$(MANAGER_RUN_IT) bash scripts/make/manage.sh
+endif
+else
 ifdef SERVICE
 	@DEPLOY_REF="$(REF)" bash scripts/make/service-manage.sh "$(SERVICE)" "$(ACTION)"
 else
 	@bash scripts/make/manage.sh
 endif
+endif
 
 # Generate admin magic link and open browser
 # Usage: make login
 login:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN) bash scripts/make/login.sh
+else
 	@bash scripts/make/login.sh
+endif
 
 # Rotate secrets (interactive)
 # Usage: make rotate-secrets
 rotate-secrets:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN_IT) bash scripts/make/rotate-secrets.sh
+else
 	@bash scripts/make/rotate-secrets.sh
+endif
 
 # Profile management (interactive)
 # Usage: make profile
 profile:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN_IT) bash scripts/make/launcher.sh --profile
+else
 	@bash scripts/make/launcher.sh --profile
+endif
 
 # Generate recovery magic link for admin access
 # Use when browser/passkey access is lost
 recover-admin:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN) bash scripts/make/recover-admin.sh
+else
 	@bash scripts/make/recover-admin.sh
+endif
 
 # ============================================================================
 # ANSIBLE-BASED DOCKER DEPLOYMENT
@@ -753,19 +864,39 @@ recover-admin:
 #        make docker-deploy-frontend     # Deploy frontend apps
 
 docker-deploy:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN) "cd provision/ansible && make docker CONTAINER_PREFIX=$(CONTAINER_PREFIX) BUSIBOX_ENV=$(ENV)"
+else
 	@cd provision/ansible && $(MAKE) docker CONTAINER_PREFIX=$(CONTAINER_PREFIX) BUSIBOX_ENV=$(ENV)
+endif
 
 docker-deploy-infra:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN) "cd provision/ansible && make docker-infrastructure CONTAINER_PREFIX=$(CONTAINER_PREFIX) BUSIBOX_ENV=$(ENV)"
+else
 	@cd provision/ansible && $(MAKE) docker-infrastructure CONTAINER_PREFIX=$(CONTAINER_PREFIX) BUSIBOX_ENV=$(ENV)
+endif
 
 docker-deploy-apis:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN) "cd provision/ansible && make docker-apis CONTAINER_PREFIX=$(CONTAINER_PREFIX) BUSIBOX_ENV=$(ENV)"
+else
 	@cd provision/ansible && $(MAKE) docker-apis CONTAINER_PREFIX=$(CONTAINER_PREFIX) BUSIBOX_ENV=$(ENV)
+endif
 
 docker-deploy-llm:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN) "cd provision/ansible && make docker-llm CONTAINER_PREFIX=$(CONTAINER_PREFIX) BUSIBOX_ENV=$(ENV)"
+else
 	@cd provision/ansible && $(MAKE) docker-llm CONTAINER_PREFIX=$(CONTAINER_PREFIX) BUSIBOX_ENV=$(ENV)
+endif
 
 docker-deploy-frontend:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN) "cd provision/ansible && make docker-frontend CONTAINER_PREFIX=$(CONTAINER_PREFIX) BUSIBOX_ENV=$(ENV)"
+else
 	@cd provision/ansible && $(MAKE) docker-frontend CONTAINER_PREFIX=$(CONTAINER_PREFIX) BUSIBOX_ENV=$(ENV)
+endif
 
 # ============================================================================
 # USER APP DEPLOYMENT
@@ -861,7 +992,11 @@ warmup:
 # Prerequisites: Docker Desktop, 16GB+ RAM
 # For offline mode: run 'make warmup' first
 demo:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN) bash scripts/make/install.sh --demo --no-prompt $(if $(VERBOSE),-v)
+else
 	@bash scripts/make/install.sh --demo --no-prompt $(if $(VERBOSE),-v)
+endif
 
 # Stop demo environment and remove containers
 # Use ARGS=--volumes to also remove data volumes
@@ -887,21 +1022,37 @@ demo-status:
 # ============================================================================
 # Generate .env.local from Ansible vault (single source of truth)
 vault-generate-env:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN) bash scripts/vault/generate-env-from-vault.sh
+else
 	@bash scripts/vault/generate-env-from-vault.sh
+endif
 
 # Migrate existing .env.local to Ansible vault (one-time operation)
 vault-migrate:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN_IT) bash scripts/vault/migrate-env-to-vault.sh
+else
 	@bash scripts/vault/migrate-env-to-vault.sh
+endif
 
 # Sync vault structure with vault.example.yml
 vault-sync:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN) bash scripts/vault/sync-vault.sh
+else
 	@bash scripts/vault/sync-vault.sh
+endif
 
 # Multi-vault setup: Create environment-specific vault files
 # Usage: make vault-setup           # Interactive wizard
 #        make vault-setup --status  # Show vault status
 vault-setup:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN_IT) bash scripts/vault-migrate.sh $(ARGS)
+else
 	@bash scripts/vault-migrate.sh $(ARGS)
+endif
 
 # ============================================================================
 # MLX & HOST-AGENT MANAGEMENT (Apple Silicon only)
@@ -946,10 +1097,23 @@ mlx-status:
 		echo "MLX Fast: Not running (port $$FAST_PORT)"; \
 	fi
 	@echo ""
+	@echo "=== Media Servers ==="
+	@TOKEN=$$(awk -F= '/^HOST_AGENT_TOKEN=/{val=substr($$0, index($$0,$$2))} END{print val}' $(ENV_FILE) 2>/dev/null | tr -d '\r\n'); \
+	if curl -sf http://localhost:8089/health >/dev/null 2>&1; then \
+		if [ -n "$$TOKEN" ]; then \
+			curl -sf "http://localhost:8089/media/status" -H "Authorization: Bearer $$TOKEN" 2>/dev/null | \
+			jq -r '.servers | to_entries[] | "  \(.value.label // .key) (\(.key)):" + if .value.running then " Running (port \(.value.port // "?"))" + if .value.healthy then " [healthy]" else " [unhealthy]" end + if .value.model then "\n    Model: \(.value.model)" else "" end else " Stopped" + if .value.model then " (model: \(.value.model))" else "" end end' 2>/dev/null || echo "  (failed to parse media status)"; \
+		else \
+			curl -sf "http://localhost:8089/media/status" 2>/dev/null | \
+			jq -r '.servers | to_entries[] | "  \(.value.label // .key) (\(.key)):" + if .value.running then " Running (port \(.value.port // "?"))" + if .value.healthy then " [healthy]" else " [unhealthy]" end + if .value.model then "\n    Model: \(.value.model)" else "" end else " Stopped" + if .value.model then " (model: \(.value.model))" else "" end end' 2>/dev/null || echo "  (failed to parse media status)"; \
+		fi; \
+	else \
+		echo "  (host-agent not running)"; \
+	fi
+	@echo ""
 	@echo "=== Host Agent Status ==="
 	@if curl -sf http://localhost:8089/health >/dev/null 2>&1; then \
 		echo "Host Agent: Running (port 8089)"; \
-		curl -sf "http://localhost:8089/mlx/status?target=all" 2>/dev/null || true; \
 	else \
 		echo "Host Agent: Not running"; \
 	fi
@@ -970,12 +1134,12 @@ mlx-start:
 			curl -sf -X POST http://localhost:8089/mlx/start \
 				-H "Content-Type: application/json" \
 				-H "Authorization: Bearer $$TOKEN" \
-				-d '{"model_type": "dual"}' && echo "MLX server started" || echo "Failed - check host-agent logs"; \
+				-d '{"model_type": "dual"}' | bash scripts/lib/host-agent-format.sh && echo "MLX server started" || echo "Failed - check host-agent logs"; \
 		else \
 			echo "Warning: HOST_AGENT_TOKEN not found in $(ENV_FILE)"; \
 			curl -sf -X POST http://localhost:8089/mlx/start \
 				-H "Content-Type: application/json" \
-				-d '{"model_type": "dual"}' || echo "Failed - authentication may be required"; \
+				-d '{"model_type": "dual"}' | bash scripts/lib/host-agent-format.sh || echo "Failed - authentication may be required"; \
 		fi; \
 		if ! curl -sf http://localhost:8080/v1/models >/dev/null 2>&1 || ! curl -sf http://localhost:$${MLX_FAST_PORT:-18081}/v1/models >/dev/null 2>&1; then \
 			echo "Host-agent start did not bring up both MLX servers. Falling back to direct dual startup..."; \
@@ -993,18 +1157,69 @@ mlx-stop:
 	if curl -sf http://localhost:8089/health >/dev/null 2>&1; then \
 		if [ -n "$$TOKEN" ]; then \
 			curl -sf -X POST http://localhost:8089/mlx/stop \
-				-H "Authorization: Bearer $$TOKEN" && echo "MLX server stopped" || echo "Failed - check host-agent logs"; \
+				-H "Authorization: Bearer $$TOKEN" | bash scripts/lib/host-agent-format.sh && echo "MLX server stopped" || echo "Failed - check host-agent logs"; \
 		else \
-			curl -sf -X POST http://localhost:8089/mlx/stop || echo "Failed - authentication may be required"; \
+			curl -sf -X POST http://localhost:8089/mlx/stop | bash scripts/lib/host-agent-format.sh || echo "Failed - authentication may be required"; \
 		fi; \
 	else \
 		pkill -f "mlx_lm.server" 2>/dev/null && echo "MLX server stopped" || echo "MLX server not running"; \
 	fi
 
-# Restart MLX server
-mlx-restart: mlx-stop
+# Restart MLX server (also restarts host-agent so it picks up config changes)
+mlx-restart: mlx-stop host-agent-restart
 	@sleep 2
 	@$(MAKE) mlx-start
+
+# Verify all required models are cached; offer to download missing ones
+mlx-sync:
+	@TOKEN=$$(awk -F= '/^HOST_AGENT_TOKEN=/{val=substr($$0, index($$0,$$2))} END{print val}' $(ENV_FILE) 2>/dev/null | tr -d '\r\n'); \
+	if ! curl -sf http://localhost:8089/health >/dev/null 2>&1; then \
+		echo "Host-agent not running. Starting..."; \
+		$(MAKE) host-agent-start >/dev/null; \
+		sleep 2; \
+	fi; \
+	AUTH=""; \
+	if [ -n "$$TOKEN" ]; then AUTH="-H \"Authorization: Bearer $$TOKEN\""; fi; \
+	RESP=$$(eval curl -sf --max-time 15 $$AUTH http://localhost:8089/models/required 2>/dev/null); \
+	if [ -z "$$RESP" ]; then \
+		echo "ERROR: Could not query model status from host-agent"; exit 1; \
+	fi; \
+	TIER=$$(echo "$$RESP" | jq -r '.tier // "unknown"'); \
+	echo ""; \
+	echo "=== Model Cache Status ==="; \
+	echo ""; \
+	echo "  LLM Models (tier: $$TIER):"; \
+	echo "$$RESP" | jq -r '.models[] | select(.category == "llm") | if .cached then "    [cached]  \(.role):\t\(.name) (\(.size_human // "?"))" else "    [MISSING] \(.role):\t\(.name)" end'; \
+	echo ""; \
+	echo "  Media Models:"; \
+	echo "$$RESP" | jq -r '.models[] | select(.category == "media") | if .cached then "    [cached]  \(.role):\t\(.name) (\(.size_human // "?"))" else "    [MISSING] \(.role):\t\(.name)" end'; \
+	echo ""; \
+	MISSING=$$(echo "$$RESP" | jq -r '.missing_count'); \
+	if [ "$$MISSING" = "0" ]; then \
+		echo "All models are cached."; \
+	else \
+		echo "$$MISSING model(s) missing."; \
+		printf "Download now? [y/N]: "; \
+		read answer; \
+		case "$$answer" in \
+			[Yy]*) \
+				echo "$$RESP" | jq -r '.models[] | select(.cached == false) | .name' | while IFS= read -r model; do \
+					[ -z "$$model" ] && continue; \
+					echo "Downloading $$model..."; \
+					CURL_ARGS=(-sf --max-time 600 -N -X POST -H "Content-Type: application/json"); \
+					if [ -n "$$TOKEN" ]; then CURL_ARGS+=(-H "Authorization: Bearer $$TOKEN"); fi; \
+					curl "$${CURL_ARGS[@]}" -d "{\"model\": \"$$model\"}" \
+						http://localhost:8089/mlx/models/download 2>/dev/null | while IFS= read -r line; do \
+						msg=$$(echo "$$line" | sed 's/^data: //' | jq -r '.message // empty' 2>/dev/null); \
+						[ -n "$$msg" ] && echo "  $$msg"; \
+					done; \
+				done; \
+				echo ""; \
+				echo "Download complete."; \
+				;; \
+			*) echo "Skipped." ;; \
+		esac; \
+	fi
 
 # Check MLX media servers status
 mlx-media-status:
@@ -1065,7 +1280,16 @@ host-agent-start:
 # Stop host-agent
 host-agent-stop:
 	@echo "Stopping host-agent..."
-	@pkill -f "host-agent.py" 2>/dev/null || echo "Host-agent not running"
+	@PLIST="$(HOME)/Library/LaunchAgents/com.busibox.host-agent.plist"; \
+	if [ -f "$$PLIST" ] && launchctl list 2>/dev/null | grep -q com.busibox.host-agent; then \
+		launchctl unload "$$PLIST" 2>/dev/null || true; \
+		echo "Host-agent service unloaded"; \
+	fi; \
+	pkill -f "host-agent.py" 2>/dev/null || true; \
+	sleep 1; \
+	if pgrep -f "host-agent.py" >/dev/null 2>&1; then \
+		pkill -9 -f "host-agent.py" 2>/dev/null || true; \
+	fi
 
 # Restart host-agent
 host-agent-restart: host-agent-stop

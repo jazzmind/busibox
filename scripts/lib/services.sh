@@ -374,9 +374,16 @@ get_service_category() {
     fi
 }
 
-# Detect which LLM backend to use based on platform
+# Detect which LLM backend to use based on platform.
+# Checks LLM_BACKEND env var first (forwarded by manager-run.sh from the host),
+# then falls back to runtime detection.
 # Returns: "mlx" for Apple Silicon, "vllm" for NVIDIA GPU, empty for cloud-only
 _detect_llm_backend() {
+    if [[ -n "${LLM_BACKEND:-}" ]]; then
+        echo "$LLM_BACKEND"
+        return
+    fi
+
     local os arch
     os=$(uname -s)
     arch=$(uname -m)
@@ -390,7 +397,6 @@ _detect_llm_backend() {
             echo "vllm"
         fi
     fi
-    # Returns empty for cloud-only setups
 }
 
 # Get all services in a category

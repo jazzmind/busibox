@@ -31,6 +31,10 @@ set -euo pipefail
 BUSIBOX_PORTAL_GITHUB_REF="${BUSIBOX_PORTAL_GITHUB_REF:-main}"
 BUSIBOX_AGENTS_GITHUB_REF="${BUSIBOX_AGENTS_GITHUB_REF:-main}"
 BUSIBOX_APPBUILDER_GITHUB_REF="${BUSIBOX_APPBUILDER_GITHUB_REF:-main}"
+BUSIBOX_ADMIN_GITHUB_REF="${BUSIBOX_ADMIN_GITHUB_REF:-main}"
+BUSIBOX_CHAT_GITHUB_REF="${BUSIBOX_CHAT_GITHUB_REF:-main}"
+BUSIBOX_MEDIA_GITHUB_REF="${BUSIBOX_MEDIA_GITHUB_REF:-main}"
+BUSIBOX_DOCUMENTS_GITHUB_REF="${BUSIBOX_DOCUMENTS_GITHUB_REF:-main}"
 
 # Logging functions
 log_info() {
@@ -151,6 +155,18 @@ deploy_app() {
             export NEXT_PUBLIC_APP_URL="${NEXT_PUBLIC_APP_URL:-https://localhost/builder}"
             export NEXT_PUBLIC_BUSIBOX_PORTAL_URL="${NEXT_PUBLIC_BUSIBOX_PORTAL_URL:-https://localhost/portal}"
             ;;
+        busibox-admin)
+            export NEXT_PUBLIC_BASE_PATH=/admin
+            ;;
+        busibox-chat)
+            export NEXT_PUBLIC_BASE_PATH=/chat
+            ;;
+        busibox-media)
+            export NEXT_PUBLIC_BASE_PATH=/media
+            ;;
+        busibox-documents)
+            export NEXT_PUBLIC_BASE_PATH=/documents
+            ;;
     esac
     
     if ! npm run build 2>&1; then
@@ -177,7 +193,7 @@ deploy_app() {
     if [ "${app_name}" = "busibox-portal" ] && [ -d "prisma" ]; then
         log_info "Running database migrations..."
         if [ -n "${DATABASE_URL:-}" ] && [ "${DATABASE_URL}" != "postgresql://dummy:dummy@localhost:5432/dummy" ]; then
-            npx prisma db push --accept-data-loss 2>&1 || {
+            npx prisma db push 2>&1 || {
                 log_error "prisma db push failed, continuing anyway..."
             }
         else
@@ -283,7 +299,11 @@ case "${1:-start}" in
         log_info "Checking app deployments..."
         deploy_if_needed "busibox-portal" "${BUSIBOX_PORTAL_GITHUB_REF}"
         deploy_if_needed "busibox-agents" "${BUSIBOX_AGENTS_GITHUB_REF}"
+        deploy_if_needed "busibox-admin" "${BUSIBOX_ADMIN_GITHUB_REF}"
+        deploy_if_needed "busibox-chat" "${BUSIBOX_CHAT_GITHUB_REF}"
         deploy_if_needed "busibox-appbuilder" "${BUSIBOX_APPBUILDER_GITHUB_REF}"
+        deploy_if_needed "busibox-media" "${BUSIBOX_MEDIA_GITHUB_REF}"
+        deploy_if_needed "busibox-documents" "${BUSIBOX_DOCUMENTS_GITHUB_REF}"
         
         log_success "Core apps started"
         

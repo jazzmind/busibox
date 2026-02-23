@@ -9,6 +9,7 @@ Provides:
 - Cloud model discovery from OpenAI/Anthropic APIs
 - Purpose-to-model mapping (read/update)
 """
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -261,6 +262,77 @@ def _get_litellm_headers() -> Dict[str, str]:
     return headers
 
 
+async def _ensure_media_server(server_name: str, principal: Principal, timeout: float = 120.0) -> None:
+    """Ensure an on-demand media server is running before proxying to LiteLLM.
+
+    Uses zero-trust token exchange to obtain a deploy-api scoped token from
+    the caller's JWT, then calls deploy-api POST /media/ensure and polls
+    GET /media/status until the server is healthy or the timeout expires.
+    """
+    from app.auth.token_exchange import exchange_token_zero_trust
+
+    deploy_url = (settings.deploy_api_url or "").rstrip("/")
+    if not deploy_url:
+        logger.debug("No deploy_api_url configured; skipping media ensure for %s", server_name)
+        return
+
+    if not principal.token:
+        logger.warning("No user token available for media ensure; skipping for %s", server_name)
+        return
+
+    exchange_result = await exchange_token_zero_trust(
+        subject_token=principal.token,
+        target_audience="deploy-api",
+        user_id=principal.sub,
+        scopes="services:manage",
+    )
+    if not exchange_result:
+        logger.warning("Token exchange for deploy-api failed; skipping media ensure for %s", server_name)
+        return
+
+    deploy_token = exchange_result.access_token if hasattr(exchange_result, "access_token") else str(exchange_result)
+
+    headers = {
+        "Authorization": f"Bearer {deploy_token}",
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            resp = await client.post(
+                f"{deploy_url}/api/v1/services/media/ensure",
+                headers=headers,
+                json={"server": server_name},
+            )
+            if resp.is_success:
+                body = resp.json()
+                if body.get("running") and not body.get("started"):
+                    return
+        except Exception as exc:
+            logger.warning("media/ensure call failed for %s: %s", server_name, exc)
+            return
+
+    deadline = asyncio.get_event_loop().time() + timeout
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        while asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(2.0)
+            try:
+                resp = await client.get(
+                    f"{deploy_url}/api/v1/services/media/status",
+                    headers=headers,
+                )
+                if resp.is_success:
+                    data = resp.json()
+                    server = (data.get("servers") or {}).get(server_name, {})
+                    if server.get("running") and server.get("healthy"):
+                        logger.info("Media server %s is healthy", server_name)
+                        return
+            except Exception:
+                pass
+
+    logger.warning("Timed out waiting for media server %s to become healthy", server_name)
+
+
 async def _litellm_generate_image(
     model: str,
     prompt: str,
@@ -322,6 +394,11 @@ async def _litellm_transcribe_audio(
     headers = _get_litellm_headers()
     mp_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
 
+    logger.info(
+        "Transcribe request: filename=%s content_type=%s model=%s size=%d base_url=%s",
+        filename, content_type, model, len(file_bytes), base_url,
+    )
+
     files = {
         "file": (filename, file_bytes, content_type or "application/octet-stream"),
     }
@@ -346,6 +423,16 @@ async def _litellm_transcribe_audio(
         return resp.json()
 
 
+_OPENAI_TO_KOKORO_VOICE: dict[str, str] = {
+    "alloy": "af_alloy",
+    "echo": "am_echo",
+    "fable": "bm_fable",
+    "onyx": "am_onyx",
+    "nova": "af_nova",
+    "shimmer": "af_sky",
+}
+
+
 async def _litellm_text_to_speech(
     model: str,
     input_text: str,
@@ -354,12 +441,13 @@ async def _litellm_text_to_speech(
     speed: float = 1.0,
 ) -> Tuple[bytes, str]:
     """Proxy a TTS request to LiteLLM /v1/audio/speech and return bytes + MIME."""
+    mapped_voice = _OPENAI_TO_KOKORO_VOICE.get(voice, voice)
     base_url = _get_litellm_base_url()
     headers = _get_litellm_headers()
     body = {
         "model": model,
         "input": input_text,
-        "voice": voice,
+        "voice": mapped_voice,
         "response_format": response_format,
         "speed": speed,
     }
@@ -376,6 +464,12 @@ async def _litellm_text_to_speech(
             raise HTTPException(
                 status_code=resp.status_code,
                 detail=f"Text-to-speech failed: {error_text}",
+            )
+        if len(resp.content) == 0:
+            logger.error("LiteLLM /audio/speech returned empty audio (0 bytes)")
+            raise HTTPException(
+                status_code=502,
+                detail="TTS returned empty audio — the voice name may be unsupported by the backend model",
             )
         content_type = resp.headers.get("content-type", "audio/mpeg")
         return resp.content, content_type
@@ -1717,6 +1811,7 @@ async def create_image(
     Any authenticated user can call this.
     """
     try:
+        await _ensure_media_server("image", principal)
         return await _litellm_generate_image(
             model=request.model,
             prompt=request.prompt,
@@ -1752,6 +1847,7 @@ async def transcribe_audio(
     Any authenticated user can call this.
     """
     try:
+        await _ensure_media_server("transcribe", principal)
         file_bytes = await file.read()
         return await _litellm_transcribe_audio(
             file_bytes=file_bytes,

@@ -13,16 +13,16 @@
 # Always-on (small, stay resident):
 #   Voice/TTS  (8082) - Kokoro-82M ~0.2GB
 #
-# On-demand (larger, start/stop as needed):
-#   Transcribe (8081) - Whisper Large V3 ~3GB
-#   Image gen  (8083) - Flux klein-4b Q8 ~4GB
+# On-demand (start/stop as needed):
+#   Transcribe (8084) - Whisper Tiny ~0.15GB (dev), Large V3 ~3GB (production)
+#   Image gen  (8083) - Flux2 Klein 4B Q4 ~3.5GB (dev), Q8 ~5.5GB (production)
 #
 # Optional environment overrides:
-#   TRANSCRIBE_MODEL_PATH  (default: mlx-community/whisper-large-v3-mlx)
+#   TRANSCRIBE_MODEL_PATH  (default: mlx-community/whisper-tiny-mlx)
 #   VOICE_MODEL_PATH       (default: mlx-community/Kokoro-82M-bf16)
-#   IMAGE_MODEL_PATH       (default: black-forest-labs/FLUX.1-schnell, local path for flux-2-klein-4b)
-#   IMAGE_CONFIG_NAME      (deprecated alias for IMAGE_MODEL_PATH)
-#   TRANSCRIBE_PORT        (default: 8081)
+#   IMAGE_MODEL_PATH       (default: empty; mlx-openai-server resolves from config-name)
+#   IMAGE_CONFIG_NAME      (default: flux2-klein-4b)
+#   TRANSCRIBE_PORT        (default: 8084)
 #   VOICE_PORT             (default: 8082)
 #   IMAGE_PORT             (default: 8083)
 #
@@ -37,17 +37,17 @@ MLX_OPENAI_SERVER_BIN="${MLX_VENV_DIR}/bin/mlx-openai-server"
 MLX_PYTHON_BIN="${MLX_VENV_DIR}/bin/python3"
 MLX_PIP_BIN="${MLX_VENV_DIR}/bin/pip3"
 
-TRANSCRIBE_PORT="${TRANSCRIBE_PORT:-8081}"
+TRANSCRIBE_PORT="${TRANSCRIBE_PORT:-8084}"
 VOICE_PORT="${VOICE_PORT:-8082}"
 IMAGE_PORT="${IMAGE_PORT:-8083}"
 
-TRANSCRIBE_MODEL_PATH="${TRANSCRIBE_MODEL_PATH:-mlx-community/whisper-large-v3-mlx}"
+TRANSCRIBE_MODEL_PATH="${TRANSCRIBE_MODEL_PATH:-mlx-community/whisper-tiny-mlx}"
 VOICE_MODEL_PATH="${VOICE_MODEL_PATH:-mlx-community/Kokoro-82M-bf16}"
 # Keep IMAGE_CONFIG_NAME as a backward-compatible alias.
 # Image model path must be a local directory for Flux models — downloaded by mlx-openai-server on first use.
 IMAGE_MODEL_PATH="${IMAGE_MODEL_PATH:-${IMAGE_CONFIG_NAME:-}}"
-IMAGE_CONFIG_NAME="${IMAGE_CONFIG_NAME:-flux-2-klein-4b}"
-IMAGE_QUANTIZE="${IMAGE_QUANTIZE:-8}"
+IMAGE_CONFIG_NAME="${IMAGE_CONFIG_NAME:-flux2-klein-4b}"
+IMAGE_QUANTIZE="${IMAGE_QUANTIZE:-4}"
 
 TRANSCRIBE_PID_FILE="/tmp/mlx-openai-transcribe.pid"
 VOICE_PID_FILE="/tmp/mlx-openai-voice.pid"
@@ -175,7 +175,7 @@ start_transcribe() {
         return 0
     fi
 
-    info "Starting transcribe server on port ${TRANSCRIBE_PORT} (on-demand, ~3GB)..."
+    info "Starting transcribe server on port ${TRANSCRIBE_PORT} (on-demand, model: ${TRANSCRIBE_MODEL_PATH})..."
     nohup "$MLX_PYTHON_BIN" -m mlx_audio.server \
         --host 0.0.0.0 \
         --port "$TRANSCRIBE_PORT" \
@@ -215,7 +215,7 @@ start_image() {
         return 0
     fi
 
-    info "Starting image generation server on port ${IMAGE_PORT} (on-demand, ~4GB)..."
+    info "Starting image generation server on port ${IMAGE_PORT} (on-demand, ~3.5GB Q4)..."
 
     local launch_args=(
         launch

@@ -245,11 +245,20 @@ available_models:
     tool_calling: true
     tier: "pro"
 
+  "whisper-tiny":
+    provider: "mlx"
+    model: "whisper-tiny"
+    model_name: "mlx-community/whisper-tiny-mlx"
+    description: "Speech-to-text transcription (Whisper Tiny, 39M params — dev/lightweight)"
+    mode: "audio_transcription"
+    tier: "micro"
+    memory_estimate_gb: 0.15  # ~150 MB RAM (tiny 39M param model)
+
   "whisper-large-v3":
     provider: "mlx"
     model: "whisper-large-v3"
     model_name: "mlx-community/whisper-large-v3-mlx"
-    description: "Speech-to-text transcription (Whisper Large v3)"
+    description: "Speech-to-text transcription (Whisper Large v3 — production)"
     mode: "audio_transcription"
     tier: "standard"
     memory_estimate_gb: 3.0   # ~3 GB RAM when loaded (fp16 weights + buffers)
@@ -263,14 +272,14 @@ available_models:
     tier: "micro"
     memory_estimate_gb: 0.2   # ~200 MB RAM (tiny 82M param model)
 
-  "flux-schnell":
+  "flux2-klein-4b":
     provider: "mlx"
-    model: "flux-schnell"
-    model_name: "flux-schnell"
-    description: "Fast local image generation model (FLUX Schnell)"
+    model: "flux2-klein-4b"
+    model_name: "black-forest-labs/FLUX.2-klein-4B"
+    description: "Lightweight image generation (FLUX.2 Klein 4B, Q4 for dev)"
     mode: "image_generation"
     tier: "standard"
-    memory_estimate_gb: 4.0   # ~4 GB RAM (Flux Schnell Q8 quantized)
+    memory_estimate_gb: 3.5   # ~3.5 GB RAM (4B params Q4 quantized + VAE/encoder overhead)
 
   # GPU-accelerated media models for Proxmox (on-demand, GPU 0)
   "whisper-large-v3-gpu":
@@ -326,7 +335,7 @@ model_purposes:
 
   # Video generation (cloud API)
   video: "sora-2"   # Video generation model (OpenAI Sora-2)
-  image: "flux-schnell"   # Image generation model (local MLX FLUX)
+  image: "flux2-klein-4b"   # Image generation model (local MLX FLUX.2 Klein)
   # GPU media services (on-demand, GPU 0). Override to "whisper-large-v3" / "kokoro-82m" for MLX fallback.
   transcribe: "whisper-large-v3-gpu"   # GPU STT (faster-whisper, port 8006)
   voice: "kokoro-82m-gpu"   # GPU TTS (kokoro-fastapi, port 8007)
@@ -362,8 +371,8 @@ model_purposes_dev:
 
   # Video generation (requires OpenAI API key even in dev)
   video: "sora-2"   # Video generation model (OpenAI Sora-2)
-  image: "flux-schnell"   # Image generation model (local MLX FLUX)
-  transcribe: "whisper-large-v3"   # Speech-to-text (Whisper)
+  image: "flux2-klein-4b"   # Image generation model (local MLX FLUX.2 Klein 4B Q4)
+  transcribe: "whisper-tiny"   # Speech-to-text (Whisper Tiny ~150 MB for dev)
   voice: "kokoro-82m"   # Text-to-speech (Kokoro)
 
   # Embeddings (use smaller models for dev)

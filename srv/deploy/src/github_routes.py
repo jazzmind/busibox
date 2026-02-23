@@ -65,7 +65,7 @@ async def get_auth_url(
     """Generate a GitHub OAuth authorization URL."""
     client_id = _get_github_client_id()
     app_url = _get_app_url()
-    redirect_uri = os.getenv("GITHUB_REDIRECT_URI", f"{app_url}/api/admin/github/callback")
+    redirect_uri = os.getenv("GITHUB_REDIRECT_URI", f"{app_url}/admin/api/github/callback")
     state = str(uuid.uuid4())
 
     params = {
@@ -215,7 +215,7 @@ async def reconnect(
     # Generate new auth URL
     client_id = _get_github_client_id()
     app_url = _get_app_url()
-    redirect_uri = os.getenv("GITHUB_REDIRECT_URI", f"{app_url}/api/admin/github/callback")
+    redirect_uri = os.getenv("GITHUB_REDIRECT_URI", f"{app_url}/admin/api/github/callback")
     state = str(uuid.uuid4())
 
     params = {

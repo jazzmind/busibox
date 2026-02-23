@@ -40,6 +40,9 @@ fi
 # Constants
 # ============================================================================
 VERSION="1.0.0"
+# Keep the main launcher fast by default (no live status panel).
+# Set SHOW_STATUS_ON_MAIN_PAGE=1 to re-enable it.
+SHOW_STATUS_ON_MAIN_PAGE="${SHOW_STATUS_ON_MAIN_PAGE:-0}"
 
 # ============================================================================
 # Installation Status Detection
@@ -456,8 +459,10 @@ show_status_view() {
 # ============================================================================
 
 show_main_menu() {
-    local install_status
-    install_status=$(detect_installation_status)
+    local install_status="${1:-}"
+    if [[ -z "$install_status" ]]; then
+        install_status=$(detect_installation_status)
+    fi
     
     local profile_count
     profile_count=$(profile_count)
@@ -1018,7 +1023,7 @@ main() {
         local install_status
         install_status=$(detect_installation_status)
         
-        if [[ "$install_status" == "installed" ]] || [[ "$install_status" == "partial" ]]; then
+        if [[ "$SHOW_STATUS_ON_MAIN_PAGE" == "1" ]] && ([[ "$install_status" == "installed" ]] || [[ "$install_status" == "partial" ]]); then
             box_footer
             echo ""
             show_status_view
@@ -1029,7 +1034,7 @@ main() {
         fi
         
         # Show menu
-        show_main_menu
+        show_main_menu "$install_status"
         
         box_footer
         echo ""

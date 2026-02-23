@@ -99,7 +99,7 @@ install() {
     
     # Install dependencies into venv
     info "Installing Python dependencies into virtual environment..."
-    "$mlx_pip" install -q fastapi uvicorn httpx pyyaml || {
+    "$mlx_pip" install -q -r "${SCRIPT_DIR}/requirements.txt" || {
         error "Failed to install dependencies"
         exit 1
     }
