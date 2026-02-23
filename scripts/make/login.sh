@@ -23,7 +23,7 @@ DEBUG="${DEBUG:-0}"
 [[ "${1:-}" == "--debug" ]] && DEBUG=1
 
 debug() {
-    [[ "$DEBUG" == "1" ]] && echo -e "${DIM}[DEBUG] $*${NC}" >&2
+    [[ "$DEBUG" == "1" ]] && echo -e "${DIM}[DEBUG] $*${NC}" >&2 || true
 }
 
 profile_init
@@ -78,7 +78,7 @@ confirm_environment() {
         echo -e "  ${DIM}Available profiles:${NC}"
         profile_list
         echo ""
-        read -r -p "  Press Enter to continue, or type profile number to switch: " choice
+        read -r -p "  Press Enter to continue, or type profile number to switch: " choice || choice=""
         if [[ -n "$choice" && "$choice" =~ ^[0-9]+$ ]]; then
             local target_id
             target_id="$(profile_get_by_index "$choice" 2>/dev/null || true)"
@@ -223,7 +223,7 @@ main() {
     admin_email="$(get_state "ADMIN_EMAIL" "")"
     debug "admin_email from state: '${admin_email}'"
     if [[ -z "$admin_email" ]]; then
-        read -r -p "Admin email: " admin_email
+        read -r -p "Admin email: " admin_email || admin_email=""
     fi
     if [[ -z "$admin_email" ]]; then
         error "Admin email is required."

@@ -3068,6 +3068,137 @@ async def gpu_media_ensure(request: GPUMediaToggleRequest, _: dict = Depends(ver
     return {"running": new_status.get("running", False), "started": True, "server": server, "status": new_status}
 
 
+_VLLM_PORTS = list(range(8000, 8006))  # vllm-8000 through vllm-8005
+
+
+async def _vllm_port_status(host: str, port: int) -> dict:
+    """Check a single vLLM server instance on a given port."""
+    service = f"vllm-{port}"
+    result: dict = {"port": port, "service": service, "running": False, "healthy": False, "model": None, "gpu": None}
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+            host, "systemctl", "is-active", service,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+        result["running"] = stdout.decode("utf-8", errors="replace").strip() == "active"
+    except Exception:
+        return result
+
+    if not result["running"]:
+        return result
+
+    vllm_ip = host.split("@")[-1] if "@" in host else host
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"http://{vllm_ip}:{port}/v1/models")
+            if resp.status_code == 200:
+                data = resp.json()
+                models = data.get("data", [])
+                if models:
+                    result["model"] = models[0].get("id")
+                result["healthy"] = True
+    except Exception:
+        pass
+
+    # Parse GPU assignment from systemd environment
+    try:
+        proc2 = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+            host, "bash", "-c",
+            f"grep -oP 'CUDA_VISIBLE_DEVICES=\\K.*' /etc/systemd/system/{service}.service 2>/dev/null || true",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        gpu_out, _ = await asyncio.wait_for(proc2.communicate(), timeout=8.0)
+        gpu_val = gpu_out.decode("utf-8", errors="replace").strip()
+        if gpu_val:
+            result["gpu"] = gpu_val
+    except Exception:
+        pass
+
+    return result
+
+
+@router.get("/vllm/status")
+async def vllm_status(_: dict = Depends(verify_admin_token)):
+    """
+    Comprehensive vLLM cluster status: per-port model servers, GPU VRAM, and media models.
+    Combines nvidia-smi, systemctl, and /v1/models queries via SSH.
+    """
+    import csv
+    import io
+
+    vllm_host = os.environ.get("VLLM_HOST", "")
+    if not vllm_host:
+        return {"available": False, "message": "No VLLM_HOST configured"}
+
+    # Run all checks concurrently
+    port_tasks = [_vllm_port_status(vllm_host, p) for p in _VLLM_PORTS]
+    media_tasks = [_gpu_media_service_status(vllm_host, name) for name in _GPU_MEDIA_SERVICES]
+
+    nvidia_cmd = (
+        "nvidia-smi --query-gpu=index,name,memory.total,memory.used,memory.free,utilization.gpu "
+        "--format=csv,noheader,nounits"
+    )
+
+    async def _get_gpus():
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+                vllm_host, nvidia_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+            if proc.returncode != 0:
+                return []
+            gpus = []
+            reader = csv.reader(io.StringIO(stdout.decode("utf-8", errors="replace")))
+            for row in reader:
+                if len(row) < 6:
+                    continue
+                try:
+                    idx, name, mem_total, mem_used, mem_free, util = [r.strip() for r in row]
+                    gpus.append({
+                        "index": int(idx),
+                        "name": name,
+                        "memory_total_mb": float(mem_total),
+                        "memory_used_mb": float(mem_used),
+                        "memory_free_mb": float(mem_free),
+                        "utilization_pct": float(util),
+                    })
+                except (ValueError, TypeError):
+                    continue
+            return gpus
+        except Exception:
+            return []
+
+    all_results = await asyncio.gather(
+        asyncio.gather(*port_tasks),
+        asyncio.gather(*media_tasks),
+        _get_gpus(),
+        return_exceptions=True,
+    )
+
+    models_result = all_results[0] if not isinstance(all_results[0], Exception) else []
+    media_result = all_results[1] if not isinstance(all_results[1], Exception) else []
+    gpus_result = all_results[2] if not isinstance(all_results[2], Exception) else []
+
+    vllm_host_ip = vllm_host.split("@")[-1] if "@" in vllm_host else vllm_host
+
+    return {
+        "available": True,
+        "vllm_host": vllm_host_ip,
+        "models": list(models_result),
+        "media": list(media_result),
+        "gpus": list(gpus_result),
+    }
+
+
 @router.get("/system/memory")
 async def system_memory(_: dict = Depends(verify_admin_token)):
     """

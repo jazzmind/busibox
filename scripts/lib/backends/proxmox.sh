@@ -184,6 +184,15 @@ backend_service_action() {
     local action="$2"
     local env="${3:-${CURRENT_ENV:-staging}}"
 
+    # Staging uses production vLLM — redirect the operator
+    if [[ "$service" == "vllm" && "$env" == "staging" ]]; then
+        echo ""
+        warn "Staging uses production vLLM (use_production_vllm: true)."
+        warn "To manage vLLM, switch to the production profile."
+        echo ""
+        return 0
+    fi
+
     local inventory
     inventory=$(_proxmox_get_inventory "$env")
     local container_ip

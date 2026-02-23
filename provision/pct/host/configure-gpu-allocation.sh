@@ -124,10 +124,11 @@ EXAMPLES:
 GPU ALLOCATION STRATEGY:
     Standard (2+ GPUs):
       - GPU 0: Data (Marker + ColPali) - ~18GB total
+      - GPU 0: Media models on-demand (whisper-gpu ~3.1GB, kokoro-gpu ~0.5GB)
       - GPU 1+: vLLM (LLM models) - model-dependent
 
     Minimum (2 GPUs):
-      - GPU 0: Data (Marker + ColPali)
+      - GPU 0: Data (Marker + ColPali) + on-demand media models
       - GPU 1: vLLM (single GPU, limited parallelism)
 
 MODEL MEMORY REQUIREMENTS:
@@ -390,8 +391,9 @@ interactive_allocation() {
     
     echo ""
     info "Allocation summary:"
-    echo "  Data: GPU(s) $DATA_GPUS"
-    echo "  vLLM: GPU(s) $VLLM_GPUS"
+    echo "  Data:  GPU(s) $DATA_GPUS (Marker, ColPali)"
+    echo "  vLLM:  GPU(s) $VLLM_GPUS (LLM text models)"
+    echo "  Media: GPU 0 on-demand (whisper-gpu ~3.1GB, kokoro-gpu ~0.5GB)"
     echo ""
     
     read -p "Continue with this allocation? (Y/n): " -n 1 -r
@@ -500,8 +502,17 @@ main() {
     # Summary
     section "Configuration Summary"
     success "GPU allocation configured:"
-    echo "  Data container ($CT_DATA): GPU(s) $DATA_GPUS"
-    echo "  vLLM container ($CT_VLLM): GPU(s) $VLLM_GPUS"
+    echo ""
+    printf "  %-12s %-20s %s\n" "Container" "GPU(s)" "Services"
+    printf "  %-12s %-20s %s\n" "─────────" "──────" "────────"
+    printf "  %-12s %-20s %s\n" "data-lxc" "GPU $DATA_GPUS" "Marker, ColPali"
+    printf "  %-12s %-20s %s\n" "vllm-lxc" "GPU $VLLM_GPUS" "vLLM text models (ports 8000-8005)"
+    echo ""
+    echo -e "  ${CYAN}Media models (on-demand, GPU 0 in vllm-lxc):${NC}"
+    printf "    %-28s %-8s %-8s %s\n" "Service" "Port" "VRAM" "Status"
+    printf "    %-28s %-8s %-8s %s\n" "───────" "────" "────" "──────"
+    printf "    %-28s %-8s %-8s %s\n" "whisper-gpu (STT/Transcribe)" "8006" "~3.1 GB" "on-demand"
+    printf "    %-28s %-8s %-8s %s\n" "kokoro-gpu (TTS/Voice)"       "8007" "~0.5 GB" "on-demand"
     echo ""
     info "Next steps:"
     echo "  1. Update Ansible variables (inventory/*/group_vars/all/00-main.yml):"

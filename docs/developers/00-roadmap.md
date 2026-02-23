@@ -1,126 +1,164 @@
-# Roadmap Initiatives to Improve Busibox
+---
+title: Roadmap
+category: developers
+order: 0
+description: Development roadmap and priorities for Busibox
+published: true
+---
 
-## Core System
+# Busibox Roadmap
 
-### Installation (2)
-- Minimum Requirements. Currently apple silicon, M4, 24gb OR 3090 gpu, 24 GB.
-- Dependencies - needs to help install correct docker, python and other necessary deps.
-- Perhaps should boot up an install container with everything necessary? deploy-api container first?
-- create a better installer/manager script that explains choices - maybe in rust?
-- basic mode - use case optimizes model selection, memory use, whether it's a prod deploy or app dev deploy (hot reload on user-apps), or core system dev deploy (hot reload on all)
-- advanced mode - allow model selection, maybe vectordb, other components
-- make sure components don't time out during deploy install
+Priorities are rated 1 (highest) to 6 (lowest). Items marked with checkboxes are trackable sub-tasks.
 
 ---
 
-## AI Models
+## P1 - Data Processing & Ingestion
 
-### improve frontier model fallback (5)
-    - chat when longer context needed
-    - vision if our local models aren't multimodal
-    - respect doc classification
+The ingestion pipeline is core to the platform. These items improve reliability, intelligence, and coverage of document processing.
 
+### Ingestion Fixes
+- [ ] Fix document tagging — tags are not being applied properly during ingestion
+- [ ] Skip redundant conversions (e.g. markdown files should not be re-converted to markdown)
+- [ ] Long documents — split into sections before embedding
+- [ ] Trigger re-ingestion when a document is moved into a new folder
 
-## Data Processing (1)
-- make sure we don't try to convert md to md
-- Tag schema fields for graph/vector embedding
-- Don't do entity extraction unless there's a schema associated with the doc type
-- Our autoschema gen should be smart enough to pre-tag
-- upload all files to personal but then ask if the file should get moved as part of chat flow.
-- folders contain sensitivity classification - e.g. local llm only
-- tabular data ingestion
-- use outline?
-- improving ingestion:
-  [ ] tags are not working for documents properly. 
-  [T] Fix doc ingestion
-  [T] Add search: {index, embed, graph} to schema fields
-  [ ] Trigger on move into folder
-  [ ] Folder classification - add tags to folder, then when a doc matches it can be automatically moved in or prompt.
-  [ ] long docs - split them
-  [ ] lots of visuals - how does colpali handle them?
-  [ ] Deep dive on colpali and how it works using diagram pdfs
-  - test with large doc - greensheet
+### Schema-Driven Processing
+- [ ] Tag schema fields with processing directives: `index`, `embed`, `graph`
+- [ ] Only run entity extraction when a schema is associated with the document type
+- [ ] Auto-schema generation should pre-tag fields with appropriate directives
 
-## Agents & Tools
+### Folder & Classification
+- [ ] Folders carry sensitivity classification (e.g. "local LLM only")
+- [ ] Folder-level tags — documents matching folder criteria can be auto-moved or prompted
+- [ ] Upload all files to personal library first, then prompt via chat to move to shared libraries
 
-## Dispatcher (3)
-- Improve it's routing and tool usage; have profiles tuned to different model capabilities
+### New Data Types
+- [ ] Tabular data ingestion
+- [ ] Visual-heavy documents — evaluate ColPali for diagram/chart-heavy PDFs
+- [ ] Investigate Outline as a collaborative document source
 
-## Feedback (3)
-- Feedback improves assistant dynamically via insights 
-- Insights can include tool use suggestions
+---
 
-## Chat (3)
-- Create interactive buttons for simple chat items - e.g. select a folder, yes-no, get the chat to use those. Determine which bridge services can display those and have a text fallback.
-[ ] - chat agent should be able to create agent tasks automatically
-  [ ] dispatcher can recommend activation of tools, ask questions with yes/no buttons, option lists to click on. e.g. should I create an agent task for this? Yes / No` if yes - activates agent task tool. 
-  [ ] - test is "send me a videogame news summary via email every hour"
-  [ ] - should use "news agent"
+## P1 - Chat UX
 
+### Thinking Indicators
+- [ ] Consistent behavior between FullChat and SimpleChat: thinking toggle opens immediately when the dispatcher is processing, closes (but remains visible) when streaming begins
+- [ ] Preserve thinking history with the message so it renders on conversation reload
+- [ ] Fix FullChat: toggle currently appears late, is closed by default, and disappears after response completes
 
-2) We need to tune the chat agent's thinking to first check if there are relevant docs via document search - retrieve highly relevant docs and evaluate. Web search when getting more info is needed or requested, scrape results to determine if the information is helpful.
+### Multi-Step Response Streaming
+- [ ] For complex queries (e.g. cross-referencing docs against the web), stream intermediate progress messages rather than going silent during long processing
+- [ ] Pattern: "Found relevant documents... summarizing" -> "Summary of docs... searching online" -> "Web results... combining" -> final response
 
-3) for these more complex flows we should use a multi-response approach. E.g. if the question involves cross referencing our docs against the web the first response should be something like "I found some relevant documents... summarizing then will search the web for more info." 
-Then "Here's a quick summary of what I found... <summary> - now looking online."
-Then "Here's a summary of what I found online <summary> - now putitng it all together"
-Then final summary. This way we are streaming responses constantly vs. waiting a long time for a response to come in.
+### Search Strategy
+- [ ] Chat agent should check document search first, retrieve and evaluate highly relevant docs before resorting to web search
+- [ ] Web search should scrape and evaluate results for relevance, not just return links
 
-1) Thinking needs to work the same way in both fullchat and simplechat:
-- when dispatcher is thinking, the toggle is open and updating
-- as soon as we start streaming responses, close the toggle, but don't remove it
-- the thinking history should be preserved with the message so it shows up when we reload the conversation
-currently in fullchat the thinking toggle doesnt't appear immediately, is closed when it does, disappears as soon as the response has finished.
+---
 
+## P2 - Installation & Onboarding
 
+### Minimum Requirements
+- Currently: Apple Silicon M4 (24 GB) or NVIDIA 3090 (24 GB VRAM)
+- Document clearly and validate at install time
 
+### Installer Improvements
+- [ ] Dependency checker — validate Docker, Python, and other prerequisites; guide user through installation
+- [ ] Consider a dedicated install container that bootstraps the environment
+- [ ] Investigate a compiled installer/manager CLI (e.g. Rust) for better UX
+- [ ] Prevent component timeouts during initial deployment
 
-## Scraper tool (4)
-    - convert all html to md using this approach https://blog.cloudflare.com/markdown-for-agents/ before processing
+### Installation Modes
+- **Basic mode**: Use-case-optimized defaults — selects models, memory allocation, and hot-reload settings based on profile:
+  - Production deploy
+  - App development (hot reload on user-apps only)
+  - Core system development (hot reload on all services)
+- **Advanced mode**: Manual selection of models, vector DB engine, and optional components
 
+---
 
-## Security (5)
-- claude code security scan everything
-- Security validation section in "testing" that proves data security model interactively
+## P2 - Bridge Channels
 
-## App Library (6)
-- Hook in security scanners - e.g. vibefunder analyzer
+The bridge service already supports Signal, Telegram, Discord, WhatsApp, and email. These items improve output quality and interaction capability.
 
-## Bridge (2)
-- telegram/sms/whatsapp formatting
-- reply to email
+- [ ] Channel-specific message formatting (Telegram markdown, WhatsApp formatting, SMS length limits)
+- [ ] Reply-to-email support (inbound email -> agent response -> outbound reply)
+- [ ] Interactive elements with text fallback for channels that don't support rich UI
 
-## Voice Agent (6)
+---
 
+## P2 - App Builder
 
---- Core Apps ---
+- [ ] AI-assisted app development using Claude Code: build, deploy, and iterate on apps within `user-apps`
+- [ ] Browser-use and log access for automated testing during development
+- [ ] Apps can be published to GitHub or kept as private deployments
 
-## Agent Manager
+---
 
-## App Builder (2)
-  - can use claude code to build apps in user-apps, deploy & iterate with browser use & log access
-  - apps can be published to github OR kept private
+## P3 - Dispatcher & Routing
 
---- Add-on Apps / Agents ---
+- [ ] Improve routing accuracy — better matching of user intent to appropriate agents and tools
+- [ ] Model-capability profiles — tune dispatcher behavior based on which LLM is handling the request
 
-# Project Manager
+### Interactive Chat Components
+- [ ] Create interactive UI components for common chat interactions: folder selectors, yes/no confirmations, option lists, action buttons
+- [ ] Dispatcher can recommend tool activation and present it as a clickable choice (e.g. "Should I create an agent task for this? Yes / No")
+- [ ] Bridge services declare which interactive components they can render; channels that can't render rich UI get a text fallback
+- [ ] Chat agent should auto-create agent tasks when appropriate (e.g. "send me a videogame news summary via email every hour" should route to the news agent and create a recurring task)
 
-# Data Analysis
-    [ ] needs to work with local llm
-    [ ] report view
-    [ ] do castle p&l analysis project
+---
 
-# Recruiter
+## P3 - Feedback & Learning
 
-# Paralegal
-  - Flag issues in contracts
-  - Have "reference" contract
-  - Draft contracts
+- [ ] User feedback improves assistant behavior dynamically via an insights system
+- [ ] Insights can include tool-use suggestions (e.g. "users asking about X tend to want tool Y")
 
-# Compliance
+---
 
-# Marketer
-  - Researches & analyzes successful posts on relevant topics/platforms 
-  - Creates optimized social media posts (substack, linkedin)
+## P4 - Scraper Tool
 
-# Researcher
-  - Notebook LM style
+- [ ] Convert all scraped HTML to markdown using [Cloudflare's approach](https://blog.cloudflare.com/markdown-for-agents/) before downstream processing
+
+---
+
+## P5 - AI Model Improvements
+
+### Frontier Model Fallback
+- [ ] Automatic fallback to cloud/frontier models for long-context queries
+- [ ] Fallback for vision tasks when local models lack multimodal capabilities
+- [ ] Respect document sensitivity classification when routing to external models
+
+---
+
+## P5 - Security
+
+- [ ] Run security scanners across the codebase (e.g. Claude Code security audit)
+- [ ] Add a security validation section to the test suite that interactively proves the data security model (RLS, RBAC, token isolation)
+
+---
+
+## P6 - Voice Agent
+
+Voice agent service exists (`srv/voice-agent`) with speech synthesis and transcription. Needs further development for production readiness.
+
+---
+
+## P6 - App Library & Marketplace
+
+- [ ] Integrate security scanners for user-submitted apps (e.g. dependency audit, code analysis)
+
+---
+
+## Add-on Apps & Agents
+
+These are standalone applications built on the Busibox platform. Some are in active development, others are planned.
+
+| App | Status | Description |
+|-----|--------|-------------|
+| **Project Manager** | In development (`busibox-projects`) | Track AI initiatives with intelligent status updates via conversational agents |
+| **Recruiter** | In development (`busibox-recruiter`) | Recruitment campaigns with candidate tracking, interview prep, and analytics |
+| **Data Analysis** | Planned | Interactive data analysis with local LLM support, report views, and visualizations |
+| **Paralegal** | Planned | Contract review (flag issues, compare against reference contracts, draft new contracts) |
+| **Marketer** | Planned | Research successful posts on relevant topics/platforms, generate optimized social media content (Substack, LinkedIn) |
+| **Compliance** | Planned | Compliance monitoring and reporting |
+| **Researcher** | Planned | NotebookLM-style research assistant with deep document analysis |

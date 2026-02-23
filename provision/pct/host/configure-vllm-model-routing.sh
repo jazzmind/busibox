@@ -1006,10 +1006,15 @@ show_gpu_allocation_table() {
         printf "%-8s %-10s %-25s %-10s %-8s %-8s\n" \
             "GPU 0" "${GPU_MEMORY[0]:-0}GB" "$gpu0_model" "$gpu0_size" "$gpu0_port" "$gpu0_tp"
     else
-        # Show note that ColPali may also be running
         printf "%-8s %-10s %-25s\n" \
             "" "" "  └─ (ColPali may also run here)"
     fi
+    
+    # Show media models fixed on GPU 0 (on-demand, managed by Ansible)
+    printf "%-8s %-10s %-25s %-10s %-8s %-8s\n" \
+        "" "" "whisper-gpu (on-demand)" "~3.1GB" "8006" "-"
+    printf "%-8s %-10s %-25s %-10s %-8s %-8s\n" \
+        "" "" "kokoro-gpu (on-demand)" "~0.5GB" "8007" "-"
     
     # Show each GPU (starting from 1)
     for gpu_id in $(seq 1 $((${#GPU_MEMORY[@]} - 1))); do
