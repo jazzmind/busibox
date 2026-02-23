@@ -812,7 +812,7 @@ endif
 # Usage: make login
 login:
 ifeq ($(USE_MANAGER),1)
-	@$(MANAGER_RUN) bash scripts/make/login.sh
+	@$(MANAGER_RUN_IT) bash scripts/make/login.sh
 else
 	@bash scripts/make/login.sh
 endif

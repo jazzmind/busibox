@@ -397,6 +397,20 @@ manage_service() {
         fi
         box_empty
 
+        # Staging vLLM redirect notice
+        if [[ "$service" == "vllm" && "$env" == "staging" && "$_CURRENT_BACKEND" == "proxmox" ]]; then
+            box_line "  ${YELLOW}NOTE: Staging uses production vLLM.${NC}"
+            box_line "  ${YELLOW}Switch to the production profile to manage vLLM.${NC}"
+            box_empty
+            box_line "  ${DIM}b = back to service list    m = main menu${NC}"
+            box_empty
+            box_footer
+            echo ""
+            read -n 1 -s -r -p "Press any key to go back..." 
+            echo ""
+            return 0
+        fi
+
         box_line "  ${BOLD}1)${NC} Start"
         box_line "  ${BOLD}2)${NC} Stop"
         box_line "  ${BOLD}3)${NC} Restart"
