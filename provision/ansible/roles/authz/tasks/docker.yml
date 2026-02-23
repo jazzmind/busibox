@@ -28,7 +28,7 @@
     tasks_from: wait_healthy
   vars:
     docker_wait_service: authz-api
-    docker_wait_timeout: 60
+    docker_wait_timeout: 120
 
 - name: Verify AuthZ API health endpoint
   ansible.builtin.uri:
@@ -36,8 +36,8 @@
     method: GET
     status_code: [200]
   register: authz_health
-  retries: 5
-  delay: 3
+  retries: 10
+  delay: 5
   until: authz_health.status == 200
 
 - name: Display AuthZ API status

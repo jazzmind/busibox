@@ -19,7 +19,7 @@
     tasks_from: wait_healthy
   vars:
     docker_wait_service: minio
-    docker_wait_timeout: 60
+    docker_wait_timeout: 120
 
 - name: Check if default bucket exists
   ansible.builtin.uri:
@@ -27,8 +27,8 @@
     method: GET
     status_code: [200]
   register: minio_health
-  retries: 5
-  delay: 3
+  retries: 10
+  delay: 5
   until: minio_health.status == 200
 
 - name: Display MinIO status

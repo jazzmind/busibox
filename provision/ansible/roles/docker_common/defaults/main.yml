@@ -19,7 +19,7 @@ docker_env_file: "{{ docker_compose_dir }}/.env.{{ docker_compose_project }}"
 docker_network: busibox-net
 
 # Timeouts
-docker_health_timeout: 60
+docker_health_timeout: 120
 docker_startup_timeout: 120
 
 # Build options

@@ -19,7 +19,7 @@
     tasks_from: wait_healthy
   vars:
     docker_wait_service: neo4j
-    docker_wait_timeout: 60
+    docker_wait_timeout: 120
 
 - name: Display Neo4j status
   ansible.builtin.debug:

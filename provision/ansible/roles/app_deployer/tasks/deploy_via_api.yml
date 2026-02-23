@@ -173,6 +173,7 @@
         githubRepoName: "{{ app.github_repo.split('/')[1] }}"
         githubBranch: "{{ deploy_branch | default(app.github_branch | default('main')) }}"
         githubToken: "{{ (secrets.github.personal_access_token | default('')) if secrets.github is defined else '' }}"
+        monorepoAppDir: "{{ app.monorepo_app_dir | default(omit) }}"
         devMode: false
         envVars: "{{ app_env_vars }}"
     headers:

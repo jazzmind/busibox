@@ -28,7 +28,7 @@
     tasks_from: wait_healthy
   vars:
     docker_wait_service: embedding-api
-    docker_wait_timeout: 60
+    docker_wait_timeout: 120
 
 - name: Display Embedding API status
   ansible.builtin.debug:

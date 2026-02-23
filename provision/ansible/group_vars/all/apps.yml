@@ -1,56 +1,78 @@
 ---
 # Application Definitions - Centralized Configuration
-# Created: 2025-11-22
+# Updated: 2026-02-22
 # Purpose: Single source of truth for all application configurations
 #
-# This file defines ALL applications deployed in Busibox environments.
+# All core frontend apps live in the busibox-frontend monorepo (jazzmind/busibox-frontend).
+# The Deploy API clones the monorepo once and builds individual apps using pnpm.
+#
 # Environment-specific values (IPs, domains, NODE_ENV) are referenced via variables
 # that are defined in inventory/{env}/group_vars/all/00-main.yml
 #
-# Schema Reference: specs/002-deploy-app-servers/data-model.md
+# Port Allocation:
+#   3000 - portal   (main entry point, auth, SSO)
+#   3001 - agents   (AI agent chat interface)
+#   3002 - admin    (system admin, settings, deployment management)
+#   3003 - chat     (direct LLM chat, model comparison)
+#   3004 - appbuilder (app development IDE)
+#   3005 - media    (video/media management)
+#   3006 - documents (document viewer, RAG interface)
 #
-# Port Allocation Strategy:
-# - 3000-3099: Public web applications
-# - 4000-4099: Internal API services
-# - 8000-8099: LLM/AI services
-#
-# Auto-Deployment:
-# - auto_deploy: true  - Deploy automatically during initial provisioning (default for core apps)
-# - auto_deploy: false - Deploy only via web UI or explicit targeting (default for add-on apps)
+# Deployment Strategy:
+#   auto_deploy: true  = Deployed during initial provisioning (portal + admin)
+#   auto_deploy: false = Deployed post-install via setup wizard or make update
+
+# Shared monorepo config (referenced by each app below)
+_monorepo_defaults: &monorepo_defaults
+  github_repo: jazzmind/busibox-frontend
+  container: core-apps-lxc
+  container_ip: "{{ core_apps_ip }}"
+  build_command: "pnpm run build"
+  start_command: "node .next/standalone/server.js"
+  process_manager: systemd
+
+# Common environment variables shared by all apps
+_common_env: &common_env
+  NODE_ENV: "{{ node_env }}"
+  DEPLOYMENT_MODE: "busibox"
+  AUTHZ_BASE_URL: "http://{{ authz_ip }}:8010"
+  AGENT_API_URL: "http://{{ agent_ip }}:{{ agent_api_port }}"
+  AGENT_API_HOST: "{{ agent_ip }}"
+  AGENT_API_PORT: "{{ agent_api_port }}"
+  NEXT_PUBLIC_AGENT_API_URL: "http://{{ agent_ip }}:{{ agent_api_port }}"
+  NEXT_PUBLIC_BUSIBOX_PORTAL_URL: "https://{{ full_domain }}/portal"
+  LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
+  SSO_TOKEN_EXPIRY: "900"
+
+# Common secrets shared by most apps
+_common_secrets: &common_secrets
+  - sso_jwt_secret
 
 applications:
   # ============================================================================
-  # Internal API Services
+  # Install-time apps (auto_deploy: true)
+  # These are deployed during initial provisioning.
   # ============================================================================
-  # Note: Agent API has its own dedicated role (agent_api) like search_api and data_api
- 
-  # ============================================================================
-  # Public Web Applications
-  # ============================================================================
-  
+
   - name: busibox-portal
-    github_repo: jazzmind/busibox-portal
-    container: core-apps-lxc
-    container_ip: "{{ core_apps_ip }}"
+    <<: *monorepo_defaults
+    monorepo_app_dir: apps/portal
     port: 3000
     deploy_path: /srv/apps/busibox-portal
-    health_endpoint: /portal/api/health  # Include basePath since Next.js runs with NEXT_PUBLIC_BASE_PATH=/portal
-    build_command: "npm run build"
-    start_command: "npm start"  # Standard Next.js start (not standalone mode)
-    process_manager: systemd  # Use systemd for consistent logging via journalctl
-    auto_deploy: true  # Deploy by default
+    health_endpoint: /portal/api/health
+    auto_deploy: true
     routes:
       - type: path
         domain: "{{ full_domain }}"
         path: /portal
-        strip_path: false  # Keep /portal path - busibox-portal will use basePath
-        sse: true  # Admin setup uses long-lived SSE streams (service installs/deploy progress)
+        strip_path: false
+        sse: true
     secrets:
       - database_url
       - sso_jwt_secret
       - litellm_api_key
       - openai_api_key
-      - allowed_email_domains  # For client-side email validation UX (authz enforces server-side)
+      - allowed_email_domains
       - email_from
       - smtp_host
       - smtp_port
@@ -71,118 +93,159 @@ applications:
       - microsoft_tenant_id
       - container_ssh_private_key
     env:
-      NODE_ENV: "{{ node_env }}"
-      LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
-      # APP_URL is runtime-only (server-side) - used for passkeys, email links, etc.
-      # NEXT_PUBLIC_APP_URL is baked at build time for client-side code
+      <<: *common_env
       APP_URL: "https://{{ full_domain }}/portal"
       NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/portal"
       BASE_URL: "https://{{ full_domain }}/portal"
-      SSO_TOKEN_EXPIRY: "900"
       PORT: "3000"
-      # AuthZ Service (for downstream token exchange)
-      AUTHZ_BASE_URL: "http://{{ authz_ip }}:8010"
-      # Log viewing - hosts for remote journalctl access
+      NEXT_PUBLIC_BASE_PATH: "/portal"
       DATA_API_HOST: "{{ data_ip }}"
       MILVUS_HOST: "{{ milvus_ip }}"
       AGENT_HOST: "{{ agent_ip }}"
-      # Agent API Configuration
-      AGENT_API_URL: "http://{{ agent_ip }}:{{ agent_api_port }}"
-      AGENT_API_HOST: "{{ agent_ip }}"
-      AGENT_API_PORT: "{{ agent_api_port }}"
-      NEXT_PUBLIC_AGENT_API_URL: "http://{{ agent_ip }}:{{ agent_api_port }}"
-      # Data API
       NEXT_PUBLIC_DATA_API_URL: "http://{{ data_ip }}:8002"
-      DEPLOYMENT_MODE: "busibox"
-      NEXT_PUBLIC_BASE_PATH: "/portal"
-      # Search API (deployed to milvus-lxc, colocated with Milvus for low-latency)
       SEARCH_API_HOST: "{{ search_api_ip }}"
       SEARCH_API_PORT: "8003"
-      # Docs API (deployed to agent-lxc, colocated with Agent API)
       DOCS_API_URL: "http://{{ agent_ip }}:8004"
-      # Deployment Service (deployed to authz-lxc)
       DEPLOYMENT_SERVICE_URL: "http://{{ authz_ip }}:8011/api/v1/deployment"
       DEPLOY_API_URL: "http://{{ authz_ip }}:8011"
-      # Bridge API (email, Signal - deployed to bridge-lxc)
       BRIDGE_API_URL: "http://{{ bridge_ip }}:8081"
-  
+
+  - name: busibox-admin
+    <<: *monorepo_defaults
+    monorepo_app_dir: apps/admin
+    port: 3002
+    deploy_path: /srv/apps/busibox-admin
+    health_endpoint: /admin/api/health
+    auto_deploy: true
+    routes:
+      - type: path
+        domain: "{{ full_domain }}"
+        path: /admin
+        strip_path: false
+        sse: true
+    secrets:
+      - database_url
+      - sso_jwt_secret
+      - litellm_api_key
+      - openai_api_key
+      - allowed_email_domains
+      - email_from
+      - smtp_host
+      - smtp_port
+      - smtp_user
+      - smtp_password
+      - smtp_secure
+      - github_client_id
+      - github_client_secret
+      - github_redirect_uri
+      - current_container_ip
+      - apps_container_ip
+      - agent_container_ip
+      - postgres_container_ip
+    optional_secrets:
+      - resend_api_key
+      - microsoft_client_id
+      - microsoft_client_secret
+      - microsoft_tenant_id
+      - container_ssh_private_key
+    env:
+      <<: *common_env
+      APP_URL: "https://{{ full_domain }}/admin"
+      NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/admin"
+      PORT: "3002"
+      NEXT_PUBLIC_BASE_PATH: "/admin"
+      DATA_API_HOST: "{{ data_ip }}"
+      DATA_API_PORT: "8002"
+      MILVUS_HOST: "{{ milvus_ip }}"
+      AGENT_HOST: "{{ agent_ip }}"
+      NEXT_PUBLIC_DATA_API_URL: "http://{{ data_ip }}:8002"
+      SEARCH_API_HOST: "{{ search_api_ip }}"
+      SEARCH_API_PORT: "8003"
+      DOCS_API_URL: "http://{{ agent_ip }}:8004"
+      DEPLOYMENT_SERVICE_URL: "http://{{ authz_ip }}:8011/api/v1/deployment"
+      DEPLOY_API_URL: "http://{{ authz_ip }}:8011"
+      BRIDGE_API_URL: "http://{{ bridge_ip }}:8081"
+
+  # ============================================================================
+  # Post-install apps (auto_deploy: false)
+  # Deployed after initial setup via the setup wizard or make update.
+  # ============================================================================
+
   - name: busibox-agents
-    github_repo: jazzmind/busibox-agents
-    container: core-apps-lxc
-    container_ip: "{{ core_apps_ip }}"
+    <<: *monorepo_defaults
+    monorepo_app_dir: apps/agents
     port: 3001
     deploy_path: /srv/apps/busibox-agents
-    health_endpoint: /agents/api/health  # Include basePath since Next.js runs with NEXT_PUBLIC_BASE_PATH=/agents
-    build_command: "npm run build"
-    start_command: "npm start"  # Standard Next.js start (not standalone mode)
-    process_manager: systemd  # Use systemd for consistent logging via journalctl
-    auto_deploy: false  # Deploy via web UI after initial setup (like Docker mode)
+    health_endpoint: /agents/api/health
+    auto_deploy: false
     routes:
       - type: subdomain
         subdomain: "agents{{ env_subdomain_suffix | default('') }}"
         websocket: true
-        sse: true  # Support streaming chat responses
+        sse: true
       - type: path
         domain: "{{ full_domain }}"
         path: /agents
-        strip_path: false  # Don't strip - Next.js handles basePath via NEXT_PUBLIC_BASE_PATH
-        sse: true  # Support streaming chat responses
+        strip_path: false
+        sse: true
     secrets:
       - database_url
       - agent_api_key
       - jwt_secret
       - session_secret
       - sso_jwt_secret
-      - litellm_api_key       # LiteLLM API key
+      - litellm_api_key
     optional_secrets:
-      - resend_api_key        # Email service (optional)
-      - email_from            # Email sender address (optional)
+      - resend_api_key
+      - email_from
     env:
-      NODE_ENV: "{{ node_env }}"
-      # Agent API Configuration
+      <<: *common_env
       MASTRA_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
       TOKEN_SERVICE_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
-      AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
-      AGENT_API_HOST: "{{ agent_api_host }}"
-      AGENT_API_PORT: "{{ agent_api_port }}"
-      NEXT_PUBLIC_AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
-      # Busibox Portal URL
       BUSIBOX_PORTAL_URL: "https://{{ full_domain }}"
-      NEXT_PUBLIC_BUSIBOX_PORTAL_URL: "https://{{ full_domain }}"
       NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/agents"
       NEXT_PUBLIC_BASE_PATH: "/agents"
-      # LiteLLM Configuration
-      LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
-      # AuthZ Service Configuration
-      AUTHZ_BASE_URL: "http://{{ authz_ip }}:8010"
-      # SSO Configuration
-      SSO_TOKEN_EXPIRY: "900"
-      # Application Configuration
       PORT: "3001"
-      DEPLOYMENT_MODE: "busibox"
-      # OAuth service audiences for multi-service auth
       AGENT_API_AUD: "https://busibox.local/agent"
       SEARCH_API_AUD: "https://busibox.local/search"
       DOCUMENTS_API_AUD: "https://busibox.local/documents"
-      # Enable verbose authz logging for debugging
       VERBOSE_AUTHZ_LOGGING: "true"
 
+  - name: busibox-chat
+    <<: *monorepo_defaults
+    monorepo_app_dir: apps/chat
+    port: 3003
+    deploy_path: /srv/apps/busibox-chat
+    health_endpoint: /chat/api/health
+    auto_deploy: false
+    routes:
+      - type: path
+        domain: "{{ full_domain }}"
+        path: /chat
+        strip_path: false
+        sse: true
+    secrets:
+      - sso_jwt_secret
+      - litellm_api_key
+    optional_secrets: []
+    env:
+      <<: *common_env
+      NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/chat"
+      NEXT_PUBLIC_BASE_PATH: "/chat"
+      PORT: "3003"
+
   - name: busibox-appbuilder
-    github_repo: jazzmind/busibox-appbuilder
-    container: core-apps-lxc
-    container_ip: "{{ core_apps_ip }}"
+    <<: *monorepo_defaults
+    monorepo_app_dir: apps/appbuilder
     port: 3004
     deploy_path: /srv/apps/busibox-appbuilder
-    health_endpoint: /builder/api/health  # Include basePath since Next.js runs with NEXT_PUBLIC_BASE_PATH=/builder
-    build_command: "npm run build"
-    start_command: "npm start"  # Standard Next.js start (not standalone mode)
-    process_manager: systemd  # Use systemd for consistent logging via journalctl
-    auto_deploy: false  # Deploy via deploy-api after initial setup
+    health_endpoint: /builder/api/health
+    auto_deploy: false
     routes:
       - type: path
         domain: "{{ full_domain }}"
         path: /builder
-        strip_path: false  # Keep /builder path - app uses Next.js basePath
+        strip_path: false
         sse: true
     secrets:
       - sso_jwt_secret
@@ -194,18 +257,60 @@ applications:
     optional_secrets:
       - github_auth_token
     env:
-      NODE_ENV: "{{ node_env }}"
+      <<: *common_env
       APP_NAME: "busibox-appbuilder"
       PORT: "3004"
       NEXT_PUBLIC_BASE_PATH: "/builder"
       NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/builder"
-      NEXT_PUBLIC_BUSIBOX_PORTAL_URL: "https://{{ full_domain }}/portal"
-      AUTHZ_BASE_URL: "http://{{ authz_ip }}:8010"
       DATA_API_URL: "http://{{ data_ip }}:8002"
-      AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
       DEPLOY_API_URL: "http://{{ authz_ip }}:8011"
       CONTAINER_PREFIX: "{{ container_prefix | default(busibox_env | default('prod')) }}"
       BUILDER_PROJECT_ROOT: "/srv/projects"
       BUILDER_TEMPLATE_SOURCE: "/srv/projects/templates/busibox-template"
       BUILDER_LIBRARY_OWNER: "jazzmind"
       BUILDER_LIBRARY_REPO: "busibox-app-library"
+
+  - name: busibox-media
+    <<: *monorepo_defaults
+    monorepo_app_dir: apps/media
+    port: 3005
+    deploy_path: /srv/apps/busibox-media
+    health_endpoint: /media/api/health
+    auto_deploy: false
+    routes:
+      - type: path
+        domain: "{{ full_domain }}"
+        path: /media
+        strip_path: false
+        sse: true
+    secrets:
+      - sso_jwt_secret
+      - litellm_api_key
+    optional_secrets: []
+    env:
+      <<: *common_env
+      NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/media"
+      NEXT_PUBLIC_BASE_PATH: "/media"
+      PORT: "3005"
+
+  - name: busibox-documents
+    <<: *monorepo_defaults
+    monorepo_app_dir: apps/documents
+    port: 3006
+    deploy_path: /srv/apps/busibox-documents
+    health_endpoint: /documents/api/health
+    auto_deploy: false
+    routes:
+      - type: path
+        domain: "{{ full_domain }}"
+        path: /documents
+        strip_path: false
+        sse: true
+    secrets:
+      - sso_jwt_secret
+    optional_secrets: []
+    env:
+      <<: *common_env
+      NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/documents"
+      NEXT_PUBLIC_BASE_PATH: "/documents"
+      PORT: "3006"

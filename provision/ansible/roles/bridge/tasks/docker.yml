@@ -28,7 +28,7 @@
     tasks_from: wait_healthy
   vars:
     docker_wait_service: bridge-api
-    docker_wait_timeout: 60
+    docker_wait_timeout: 120
 
 - name: Display Bridge API status
   ansible.builtin.debug:
@@ -46,8 +46,8 @@
     status_code:
       - 200
   register: bridge_config_apply_result
-  retries: 5
-  delay: 2
+  retries: 10
+  delay: 5
   until: bridge_config_apply_result.status == 200
 
 - name: Show bridge runtime config apply result

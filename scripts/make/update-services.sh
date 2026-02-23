@@ -6,7 +6,7 @@
 # Rebuild/redeploy selected service layers from latest source while preserving data.
 # Scope (intentionally limited):
 #   - APIs (srv/*) are redeployed from current host source
-#   - Core apps (busibox-portal, busibox-agents) are optional and ref-selectable
+#   - All core frontend apps (busibox-frontend monorepo) are deployed from a single ref
 #   - Core infrastructure services are explicitly skipped
 #   - User apps are intentionally skipped
 #
@@ -22,6 +22,17 @@ source "${REPO_ROOT}/scripts/lib/state.sh"
 
 profile_init
 _active_profile="$(profile_get_active)"
+
+# All core frontend apps in the busibox-frontend monorepo
+FRONTEND_APPS=(
+    "busibox-portal"
+    "busibox-admin"
+    "busibox-agents"
+    "busibox-chat"
+    "busibox-appbuilder"
+    "busibox-media"
+    "busibox-documents"
+)
 
 get_current_env() {
     if [[ -n "$_active_profile" ]]; then
@@ -64,18 +75,22 @@ get_inventory_path() {
     esac
 }
 
-deploy_core_app_ref() {
-    local app="$1"
-    local ref="$2"
-    local backend="$3"
-    local inventory="$4"
+deploy_frontend_apps() {
+    local ref="$1"
+    local backend="$2"
+    local inventory="$3"
 
-    info "Deploying ${app} with ref '${ref}'..."
+    info "Deploying all busibox-frontend apps with ref '${ref}'..."
 
     if [[ "$backend" == "docker" ]]; then
-        (cd "${REPO_ROOT}/provision/ansible" && make install SERVICE="${app}" REF="${ref}")
+        # Docker: deploy via make install which triggers the core_apps role
+        (cd "${REPO_ROOT}/provision/ansible" && make install SERVICE=core-apps REF="${ref}")
     else
-        (cd "${REPO_ROOT}/provision/ansible" && make deploy-app-ref APP="${app}" REF="${ref}" INV="${inventory}")
+        # Proxmox: deploy each app via the deploy API
+        for app in "${FRONTEND_APPS[@]}"; do
+            info "Deploying ${app}..."
+            (cd "${REPO_ROOT}/provision/ansible" && make deploy-app-ref APP="${app}" REF="${ref}" INV="${inventory}")
+        done
     fi
 }
 
@@ -102,7 +117,8 @@ main() {
     box_empty
     box_separator
     box_empty
-    box_line "  ${BOLD}Will update:${NC} API services + selected core apps"
+    box_line "  ${BOLD}Will update:${NC} API services + all core frontend apps"
+    box_line "  ${BOLD}Frontend:${NC}    busibox-frontend monorepo (7 apps)"
     box_line "  ${BOLD}Will skip:${NC}   postgres, nginx, neo4j, milvus, minio, user apps"
     box_empty
     box_footer
@@ -130,39 +146,33 @@ main() {
     info "Core infrastructure services skipped by design (for migration safety)."
     info "User apps skipped by request."
 
-    local app
-    for app in "busibox-portal" "busibox-agents"; do
-        echo ""
-        read -r -p "Update ${app}? [y/N]: " update_app
-        if [[ "$update_app" != "y" && "$update_app" != "Y" ]]; then
-            info "Skipping ${app}"
-            continue
-        fi
+    # Prompt for busibox-frontend ref
+    echo ""
+    echo "Update busibox-frontend apps?"
+    echo "  Select ref type:"
+    echo "  1) branch (e.g., main)"
+    echo "  2) release tag (e.g., v1.0.0)"
+    echo "  3) skip frontend update"
+    read -r -p "Choice [1-3]: " ref_choice
 
-        echo ""
-        echo "Select ref type for ${app}:"
-        echo "  1) branch"
-        echo "  2) release tag"
-        read -r -p "Choice [1-2]: " ref_choice
-
-        local ref_type ref
-        case "$ref_choice" in
-            1) ref_type="branch" ;;
-            2) ref_type="release tag" ;;
-            *)
-                warn "Invalid choice, skipping ${app}"
-                continue
-                ;;
-        esac
-
-        read -r -p "Enter ${ref_type} for ${app}: " ref
-        if [[ -z "$ref" ]]; then
-            warn "Empty ref, skipping ${app}"
-            continue
-        fi
-
-        deploy_core_app_ref "$app" "$ref" "$backend" "$inventory"
-    done
+    case "$ref_choice" in
+        1)
+            read -r -p "Enter branch name [main]: " ref
+            ref="${ref:-main}"
+            deploy_frontend_apps "$ref" "$backend" "$inventory"
+            ;;
+        2)
+            read -r -p "Enter release tag: " ref
+            if [[ -z "$ref" ]]; then
+                warn "Empty ref, skipping frontend update"
+            else
+                deploy_frontend_apps "$ref" "$backend" "$inventory"
+            fi
+            ;;
+        3|*)
+            info "Skipping frontend update"
+            ;;
+    esac
 
     echo ""
     success "Update action complete."

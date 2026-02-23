@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus neo4j nginx search search-api agent data data-api data-worker data-update-tests docs apps user-apps openwebui deploy-apps deploy-busibox-portal deploy-busibox-agents deploy-busibox-appbuilder deploy-app-ref verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-data test-data-all test-data-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge check-embeddings migrate-embeddings migrate-embeddings-force staging production env core core-nginx core-storage core-database core-vectorstore core-graph llm llm-vllm llm-litellm llm-colpali llm-media whisper-gpu kokoro-gpu apis apis-authz apis-data apis-search apis-agent apis-docs apis-bridge apps-frontend
+.PHONY: ping all files pg milvus neo4j nginx search search-api agent data data-api data-worker data-update-tests docs apps user-apps openwebui deploy-apps deploy-frontend deploy-busibox-portal deploy-busibox-admin deploy-busibox-agents deploy-busibox-chat deploy-busibox-appbuilder deploy-busibox-media deploy-busibox-documents deploy-app-ref verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-data test-data-all test-data-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge check-embeddings migrate-embeddings migrate-embeddings-force staging production env core core-nginx core-storage core-database core-vectorstore core-graph llm llm-vllm llm-litellm llm-colpali llm-media whisper-gpu kokoro-gpu apis apis-authz apis-data apis-search apis-agent apis-docs apis-bridge apps-frontend
 
 # ============================================================================
 # ENVIRONMENT SELECTION (persists between runs via .busibox-state)
@@ -401,30 +401,55 @@ test-bridge:
 deploy-apps:
 	ansible-playbook -i $(INV) -l agent,apps --tags app_deployer,secrets,nginx site.yml $(VAULT_FLAGS)
 
+# Deploy all frontend apps from busibox-frontend monorepo
+# Usage: make deploy-frontend [REF=main] [INV=inventory/staging]
+FRONTEND_APPS := busibox-portal busibox-admin busibox-agents busibox-chat busibox-appbuilder busibox-media busibox-documents
+
+deploy-frontend:
+	@for app in $(FRONTEND_APPS); do \
+		echo "=== Deploying $$app ==="; \
+		ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets,nginx site.yml $(VAULT_FLAGS) \
+			--extra-vars "deploy_app=$$app deploy_branch=$(REF)"; \
+	done
+
 # Deploy individual applications (apps container)
 deploy-busibox-portal:
 	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets,nginx site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=busibox-portal"
 
+deploy-busibox-admin:
+	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets,nginx site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=busibox-admin"
+
 deploy-busibox-agents:
 	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets,nginx site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=busibox-agents"
+
+deploy-busibox-chat:
+	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets,nginx site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=busibox-chat"
 
 deploy-busibox-appbuilder:
 	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets,nginx site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=busibox-appbuilder"
 
+deploy-busibox-media:
+	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets,nginx site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=busibox-media"
+
+deploy-busibox-documents:
+	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets,nginx site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=busibox-documents"
+
 # Deploy a specific app from an explicit ref (branch or tag).
-# Uses the Deploy API with the specified git ref (branch or tag).
+# All apps come from the busibox-frontend monorepo.
 # Usage:
 #   make deploy-app-ref APP=busibox-portal REF=main INV=inventory/staging
 #   make deploy-app-ref APP=busibox-agents REF=v1.2.3 INV=inventory/production
 deploy-app-ref:
 ifndef APP
 	@echo "Error: APP is required"
-	@echo "Usage: make deploy-app-ref APP=<busibox-portal|busibox-agents|busibox-appbuilder> REF=<branch-or-tag> [INV=inventory/staging]"
+	@echo "Usage: make deploy-app-ref APP=<app-name> REF=<branch-or-tag> [INV=inventory/staging]"
+	@echo "Apps: $(FRONTEND_APPS)"
 	@exit 1
 endif
 ifndef REF
 	@echo "Error: REF is required"
-	@echo "Usage: make deploy-app-ref APP=<busibox-portal|busibox-agents|busibox-appbuilder> REF=<branch-or-tag> [INV=inventory/staging]"
+	@echo "Usage: make deploy-app-ref APP=<app-name> REF=<branch-or-tag> [INV=inventory/staging]"
+	@echo "Apps: $(FRONTEND_APPS)"
 	@exit 1
 endif
 	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets,nginx site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=$(APP) deploy_branch=$(REF)"

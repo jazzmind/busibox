@@ -108,10 +108,9 @@ export DEV_APPS_DIR
 CORE_APPS_MODE ?= $(shell grep -s '^CORE_APPS_MODE=' $(STATE_FILE) 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "prod")
 export CORE_APPS_MODE
 
-# Core Apps Source: controls whether core-apps use the busibox-frontend monorepo
-# or the legacy separate repos (busibox-portal, busibox-agents, busibox-appbuilder).
-# Toggle via: make manage SERVICE=core-apps (option 9)
-CORE_APPS_SOURCE ?= $(shell grep -s '^CORE_APPS_SOURCE=' $(STATE_FILE) 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "legacy")
+# Core Apps Source: always monorepo (busibox-frontend).
+# Legacy separate repos are no longer supported.
+CORE_APPS_SOURCE := monorepo
 export CORE_APPS_SOURCE
 
 # Host path for Docker volume mounts.  The manager container mounts the repo
@@ -119,8 +118,8 @@ export CORE_APPS_SOURCE
 # also exported by manager-run.sh as a convenience.
 BUSIBOX_HOST_PATH ?= $(PWD)
 
-# Select dev overlay based on CORE_APPS_SOURCE
-COMPOSE_DEV = $(if $(filter monorepo,$(CORE_APPS_SOURCE)),$(COMPOSE_DEV_MONOREPO),$(COMPOSE_DEV_LEGACY))
+# Dev overlay always uses monorepo
+COMPOSE_DEV = $(COMPOSE_DEV_MONOREPO)
 
 # Automatically select overlay based on environment
 # development uses dev overlay, everything else uses github overlay
@@ -214,9 +213,8 @@ help:
 	@echo "    CORE_APPS_MODE=dev make docker-up      # Core developer mode (Turbopack hot-reload)"
 	@echo "    make manage SERVICE=core-apps          # Toggle mode interactively (options 8, 9)"
 	@echo ""
-	@echo "  Core Apps Source (CORE_APPS_SOURCE, development ENV only):"
-	@echo "    CORE_APPS_SOURCE=monorepo make docker-up  # Use busibox-frontend monorepo"
-	@echo "    CORE_APPS_SOURCE=legacy make docker-up    # Use separate repos (default)"
+	@echo "  Core Apps Source:"
+	@echo "    All core apps use the busibox-frontend monorepo"
 	@echo ""
 	@echo "  Building:"
 	@echo "    make docker-build                      # Build for current ENV"
@@ -542,12 +540,8 @@ else
 endif
 	@echo ""
 ifeq ($(ENV),development)
-	@echo "Development mode started (source=$(CORE_APPS_SOURCE)). Use 'make docker-ps' to check status."
-ifeq ($(CORE_APPS_SOURCE),monorepo)
+	@echo "Development mode started. Use 'make docker-ps' to check status."
 	@echo "Core apps: busibox-frontend monorepo (7 apps)"
-else
-	@echo "Core apps: legacy separate repos (portal + agents + appbuilder)"
-endif
 else
 	@echo "$(ENV) mode started. Use 'make docker-ps' to check status."
 	@echo "Next.js apps built from GitHub with npm-published busibox-app."

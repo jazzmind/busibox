@@ -47,46 +47,73 @@ PROXY_CONTAINER = f"{CONTAINER_PREFIX}-proxy"
 DOCS_CONTENT_DIR = os.environ.get("DOCS_CONTENT_DIR", "/srv/docs/docs")
 DOCS_API_CONTAINER = f"{CONTAINER_PREFIX}-docs-api"
 
-# Core app definitions
+# All core apps live in the jazzmind/busibox-frontend monorepo.
+MONOREPO = "jazzmind/busibox-frontend"
+
 CORE_APPS = {
     "busibox-portal": {
-        "github_repo": "jazzmind/busibox-portal",
+        "github_repo": MONOREPO,
+        "monorepo_app_dir": "apps/portal",
         "default_port": 3000,
         "base_path": "/portal",
         "health_endpoint": "/api/health",
     },
+    "busibox-admin": {
+        "github_repo": MONOREPO,
+        "monorepo_app_dir": "apps/admin",
+        "default_port": 3002,
+        "base_path": "/admin",
+        "health_endpoint": "/api/health",
+    },
     "busibox-agents": {
-        "github_repo": "jazzmind/busibox-agents",
+        "github_repo": MONOREPO,
+        "monorepo_app_dir": "apps/agents",
         "default_port": 3001,
         "base_path": "/agents",
         "health_endpoint": "/api/health",
     },
+    "busibox-chat": {
+        "github_repo": MONOREPO,
+        "monorepo_app_dir": "apps/chat",
+        "default_port": 3003,
+        "base_path": "/chat",
+        "health_endpoint": "/api/health",
+    },
     "busibox-appbuilder": {
-        "github_repo": "jazzmind/busibox-appbuilder",
+        "github_repo": MONOREPO,
+        "monorepo_app_dir": "apps/appbuilder",
         "default_port": 3004,
         "base_path": "/builder",
         "health_endpoint": "/api/health",
     },
+    "busibox-media": {
+        "github_repo": MONOREPO,
+        "monorepo_app_dir": "apps/media",
+        "default_port": 3005,
+        "base_path": "/media",
+        "health_endpoint": "/api/health",
+    },
+    "busibox-documents": {
+        "github_repo": MONOREPO,
+        "monorepo_app_dir": "apps/documents",
+        "default_port": 3006,
+        "base_path": "/documents",
+        "health_endpoint": "/api/health",
+    },
 }
+
+MONOREPO_CLONE_DIR = "/srv/apps/busibox-frontend"
 
 
 def is_core_app(app_id: str) -> bool:
     """
     Determine if an app is a core app.
     
-    Core apps are deployed via this executor (docker exec / SSH).
+    Core apps are deployed via this executor (docker exec / SSH)
+    from the busibox-frontend monorepo.
     Non-core apps are deployed via container_executor.py (user-apps container).
     """
-    # Frontend core apps that run in core-apps container
-    FRONTEND_CORE_APPS = {"busibox-portal", "busibox-agents", "busibox-appbuilder"}
-    
-    # Backend core apps (deployed differently, not via this executor)
-    BACKEND_CORE_APPS = {
-        "authz-api", "data-api", "search-api", "agent-api",
-        "docs-api", "deploy-api", "embedding-api", "litellm"
-    }
-    
-    return app_id.lower() in FRONTEND_CORE_APPS
+    return app_id.lower() in CORE_APPS
 
 
 def is_k8s_environment() -> bool:
@@ -391,11 +418,14 @@ async def deploy_core_app(
         # Docker: Use entrypoint script
         command = f"/usr/local/bin/entrypoint.sh deploy {app_id} {github_ref}"
     else:
-        # Proxmox: Execute deployment steps directly
+        # Proxmox: Monorepo deployment
+        # All core apps share a single clone of busibox-frontend.
+        # We clone/update the monorepo once, install deps at the root,
+        # then build the specific app with pnpm --filter.
         app_info = CORE_APPS[app_id]
         repo = app_info['github_repo']
+        monorepo_app_dir = app_info.get('monorepo_app_dir', '')
         
-        # Use authenticated URL if token provided (for private repos)
         if github_token:
             logs.append(f"🔐 Using GitHub token for authenticated clone")
             repo_url = f"https://{github_token}@github.com/{repo}.git"
@@ -403,32 +433,17 @@ async def deploy_core_app(
             logs.append(f"⚠️ No GitHub token - attempting public clone")
             repo_url = f"https://github.com/{repo}.git"
         
-        # Build npmrc setup commands only if we have a token
-        # CRITICAL: Use /root/.npmrc explicitly (not ~) since SSH may not expand ~ correctly
         npmrc_commands = ""
         if github_token:
-            # Mask token in logs (show first 4 and last 4 chars)
             token_preview = f"{github_token[:4]}...{github_token[-4:]}" if len(github_token) > 8 else "***"
             logs.append(f"📝 Setting up .npmrc with token: {token_preview}")
-            
             npmrc_commands = f"""
-            # Configure npm for GitHub Package Registry (for @jazzmind packages)
             echo "=== NPMRC SETUP START ==="
-            echo "Configuring npm for GitHub Package Registry..."
-            echo "Home directory: $HOME"
-            echo "Current user: $(whoami)"
-            
-            # Create .npmrc in /root explicitly (SSH runs as root on LXC)
             cat > /root/.npmrc << 'NPMRC_EOF'
 //npm.pkg.github.com/:_authToken={github_token}
 @jazzmind:registry=https://npm.pkg.github.com
 NPMRC_EOF
-            
             echo "npmrc created at /root/.npmrc"
-            echo "npmrc contents (masked):"
-            head -1 /root/.npmrc | sed 's/=.*/=***MASKED***/'
-            tail -1 /root/.npmrc
-            ls -la /root/.npmrc
             echo "=== NPMRC SETUP END ==="
             """
         else:
@@ -436,99 +451,79 @@ NPMRC_EOF
             echo "=== WARNING: No GitHub token provided - private packages will fail! ==="
             """
         
-        # Build environment variable export commands
-        # These are needed for build-time (prisma generate) and runtime
         env_exports = ""
         if env_vars:
             logs.append(f"📦 Setting {len(env_vars)} environment variables for build")
             env_export_lines = []
             for key, value in env_vars.items():
-                # Escape the value for shell (handle special chars, quotes, etc.)
                 escaped_value = shlex.quote(value) if value else "''"
                 env_export_lines.append(f"export {key}={escaped_value}")
             env_exports = "\n            ".join(env_export_lines)
             env_exports = f"""
-            # === ENVIRONMENT VARIABLES (from Ansible) ===
             echo "Setting {len(env_vars)} environment variables..."
             {env_exports}
             echo "Environment variables set: {', '.join(sorted(env_vars.keys()))}"
             """
         
+        # pnpm filter name from the monorepo (e.g., "@busibox/portal")
+        pnpm_pkg_name = monorepo_app_dir.replace("apps/", "@busibox/")
+        
         command = f"""
             set -e
             
-            echo "=== DEPLOY SCRIPT START ==="
+            echo "=== MONOREPO DEPLOY START ==="
             echo "App: {app_id}"
+            echo "Monorepo subdir: {monorepo_app_dir}"
+            echo "pnpm filter: {pnpm_pkg_name}"
             echo "Environment: {environment}"
             echo "GitHub ref: {github_ref}"
             echo "Token provided: {'yes' if github_token else 'no'}"
             {env_exports}
-            # Ensure /srv/apps directory exists
             mkdir -p /srv/apps
             
-            APP_DIR="/srv/apps/{app_id}"
+            MONO_DIR="{MONOREPO_CLONE_DIR}"
+            APP_DIR="$MONO_DIR/{monorepo_app_dir}"
             {npmrc_commands}
-            # Clone or update repository
-            if [ -d "$APP_DIR/.git" ]; then
-                echo "Updating existing repository..."
-                cd "$APP_DIR"
+            
+            # Clone or update the shared monorepo
+            if [ -d "$MONO_DIR/.git" ]; then
+                echo "Updating existing monorepo..."
+                cd "$MONO_DIR"
                 git fetch origin
                 git checkout {github_ref}
-                # Use reset --hard to discard local changes (e.g., package-lock.json from npm install)
                 git reset --hard origin/{github_ref}
             else
-                echo "Cloning repository from GitHub..."
-                rm -rf "$APP_DIR"  # Clean up any partial clone
-                git clone {repo_url} "$APP_DIR"
-                cd "$APP_DIR"
+                echo "Cloning monorepo from GitHub..."
+                rm -rf "$MONO_DIR"
+                git clone {repo_url} "$MONO_DIR"
+                cd "$MONO_DIR"
                 git checkout {github_ref}
             fi
             
-            cd "$APP_DIR"
+            cd "$MONO_DIR"
             
-            # Install dependencies
-            echo "=== NPM INSTALL START ==="
-            echo "Current directory: $(pwd)"
-            
-            # The project .npmrc uses $GITHUB_AUTH_TOKEN env var for authentication
-            # We need to export this env var, not modify the .npmrc file
-            export GITHUB_AUTH_TOKEN='{github_token}'
-            echo "GITHUB_AUTH_TOKEN env var set (length: $(echo -n "$GITHUB_AUTH_TOKEN" | wc -c))"
-            
-            echo "Project .npmrc contents:"
-            cat .npmrc 2>/dev/null || echo "  (no .npmrc found)"
-            
-            echo "npm config list:"
-            npm config list 2>&1 | head -20 || echo "  (failed to get config)"
-            echo ""
-            # IMPORTANT: Install ALL dependencies (including devDependencies like typescript)
-            # NODE_ENV may already be set to 'production' from env_vars, which causes npm
-            # to skip devDependencies. We need devDeps for the build step (typescript, etc.)
-            echo "Running: npm install (with devDependencies for build)"
-            NODE_ENV=development npm install
-            echo "=== NPM INSTALL END ==="
-            
-            # Regenerate Prisma client if prisma is present (ensures fresh client after schema changes)
-            if [ -f "prisma/schema.prisma" ] || [ -f "prisma/schema" ]; then
-                echo "=== PRISMA GENERATE START ==="
-                # Clean stale Prisma client to force regeneration
-                rm -rf node_modules/.prisma 2>/dev/null || true
-                npx prisma generate
-                echo "=== PRISMA GENERATE END ==="
+            # Install pnpm if not available
+            if ! command -v pnpm &>/dev/null; then
+                echo "Installing pnpm..."
+                npm install -g pnpm
             fi
             
-            # Build application
-            # Clean .next directory to prevent stale lock files from failed builds
-            echo "Cleaning .next build cache..."
+            # Set GITHUB_AUTH_TOKEN for .npmrc interpolation
+            export GITHUB_AUTH_TOKEN='{github_token}'
+            
+            # Install all workspace dependencies from root
+            echo "=== PNPM INSTALL START ==="
+            NODE_ENV=development pnpm install --frozen-lockfile || NODE_ENV=development pnpm install
+            echo "=== PNPM INSTALL END ==="
+            
+            # Build the specific app (turbo handles shared package deps automatically)
+            cd "$APP_DIR"
+            echo "=== BUILD START ({pnpm_pkg_name}) ==="
             rm -rf .next 2>/dev/null || true
+            NODE_ENV=production pnpm run build
+            echo "=== BUILD END ==="
             
-            # Always build in production mode regardless of NODE_ENV setting
-            echo "=== NPM BUILD START ==="
-            NODE_ENV=production npm run build
-            echo "=== NPM BUILD END ==="
-            
-            # Copy static assets into standalone directory
-            # Standalone mode doesn't include public/ or .next/static/ automatically
+            # Copy standalone assets
             if [ -d ".next/standalone" ]; then
                 echo "=== STANDALONE ASSETS START ==="
                 cp -r public .next/standalone/public 2>/dev/null || true
@@ -537,14 +532,23 @@ NPMRC_EOF
                 echo "=== STANDALONE ASSETS END ==="
             fi
             
-            # Prune dev dependencies to reduce memory footprint
-            echo "=== PRUNE DEV DEPS START ==="
-            npm prune --omit=dev 2>/dev/null || true
-            echo "=== PRUNE DEV DEPS END ==="
+            # Create a symlink at /srv/apps/<app-id> pointing into the monorepo
+            # so systemd services, .env files, and health checks find the app
+            LINK="/srv/apps/{app_id}"
+            if [ -L "$LINK" ]; then
+                rm "$LINK"
+            elif [ -d "$LINK" ]; then
+                echo "Migrating legacy app dir to monorepo layout..."
+                rm -rf "$LINK"
+            fi
+            ln -sf "$APP_DIR" "$LINK"
+            echo "Symlink: $LINK -> $APP_DIR"
             
-            # Restart with systemd (on Proxmox, apps run as systemd services)
+            # Restart with systemd
             echo "Restarting service..."
             systemctl restart {app_id} || echo "Service restart skipped (may not exist yet)"
+            
+            echo "=== MONOREPO DEPLOY END ==="
         """
     
     stdout, stderr, code = await execute_in_core_apps(

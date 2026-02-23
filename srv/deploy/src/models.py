@@ -45,6 +45,8 @@ class DeploymentConfig(BaseModel):
     environment: Literal['production', 'staging'] = 'production'
     secrets: Dict[str, str] = {}  # Legacy: Additional env vars (use envVars instead)
     envVars: Dict[str, str] = {}  # Environment variables for build and runtime
+    # Monorepo support: subdirectory within the cloned repo containing this app
+    monorepoAppDir: Optional[str] = None  # e.g., "apps/portal" for busibox-frontend
     # Local development mode
     localDevDir: Optional[str] = None  # Directory name in /srv/dev-apps/
     devMode: bool = False

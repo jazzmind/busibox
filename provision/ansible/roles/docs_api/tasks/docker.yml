@@ -28,7 +28,7 @@
     tasks_from: wait_healthy
   vars:
     docker_wait_service: docs-api
-    docker_wait_timeout: 60
+    docker_wait_timeout: 120
 
 - name: Display Docs API status
   ansible.builtin.debug:
