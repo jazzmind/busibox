@@ -412,7 +412,7 @@ select_github_ref() {
             if [[ "$name" == "main" || "$name" == "master" ]]; then
                 main_marker=" ${DIM}(default)${NC}"
             fi
-            printf "    ${BOLD}%2d)${NC} %s%s\n" "$idx" "$name" "$main_marker" >/dev/tty
+            printf "    ${BOLD}%2d)${NC} %s%b\n" "$idx" "$name" "$main_marker" >/dev/tty
             ((idx++))
         fi
     done
