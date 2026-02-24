@@ -204,6 +204,7 @@ applications:
       NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/agents"
       NEXT_PUBLIC_BASE_PATH: "/agents"
       PORT: "3001"
+      DEFAULT_API_AUDIENCE: "agent-api"
       AGENT_API_AUD: "https://busibox.local/agent"
       SEARCH_API_AUD: "https://busibox.local/search"
       DOCUMENTS_API_AUD: "https://busibox.local/documents"

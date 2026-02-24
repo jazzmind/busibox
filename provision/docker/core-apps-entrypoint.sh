@@ -183,7 +183,7 @@ case "$MODE" in
             --prefix-colors "blue,green,magenta" \
             --kill-others-on-fail \
             "cd /srv/busibox-portal && PORT=3000 NEXT_PUBLIC_BASE_PATH=/portal npm run dev" \
-            "cd /srv/busibox-agents && PORT=3001 NEXT_PUBLIC_BASE_PATH=/agents npm run dev" \
+            "cd /srv/busibox-agents && PORT=3001 NEXT_PUBLIC_BASE_PATH=/agents DEFAULT_API_AUDIENCE=agent-api npm run dev" \
             "cd /srv/busibox-appbuilder && PORT=3004 NEXT_PUBLIC_BASE_PATH=/builder NEXT_PUBLIC_APP_URL=https://localhost/builder NEXT_PUBLIC_BUSIBOX_PORTAL_URL=https://localhost/portal APP_NAME=busibox-appbuilder npm run dev"
         ;;
 
@@ -259,7 +259,7 @@ case "$MODE" in
             --prefix-colors "blue,green,magenta" \
             --kill-others-on-fail \
             "cd /srv/busibox-portal && PORT=3000 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js" \
-            "cd /srv/busibox-agents && PORT=3001 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js" \
+            "cd /srv/busibox-agents && PORT=3001 HOSTNAME=0.0.0.0 DEFAULT_API_AUDIENCE=agent-api NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js" \
             "cd /srv/busibox-appbuilder && PORT=3004 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js"
         ;;
         
@@ -286,7 +286,7 @@ case "$MODE" in
             --prefix-colors "blue,green,magenta" \
             --kill-others-on-fail \
             "cd /srv/busibox-portal && PORT=3000 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js" \
-            "cd /srv/busibox-agents && PORT=3001 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js" \
+            "cd /srv/busibox-agents && PORT=3001 HOSTNAME=0.0.0.0 DEFAULT_API_AUDIENCE=agent-api NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js" \
             "cd /srv/busibox-appbuilder && PORT=3004 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js"
         ;;
         

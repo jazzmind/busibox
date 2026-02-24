@@ -45,7 +45,9 @@ const COLORS = {
 
 const APP_DEFS = [
   { name: 'portal',    filter: '@busibox/portal',     port: 3000, basePath: '/portal',    color: 'blue',    extraEnv: {} },
-  { name: 'agents',    filter: '@busibox/agents',     port: 3001, basePath: '/agents',    color: 'green',   extraEnv: {} },
+  { name: 'agents',    filter: '@busibox/agents',     port: 3001, basePath: '/agents',    color: 'green',   extraEnv: {
+    DEFAULT_API_AUDIENCE: 'agent-api',
+  }},
   { name: 'admin',     filter: '@busibox/admin',      port: 3002, basePath: '/admin',     color: 'cyan',    extraEnv: {} },
   { name: 'chat',      filter: '@busibox/chat',       port: 3003, basePath: '/chat',      color: 'yellow',  extraEnv: {} },
   { name: 'appbuilder',filter: '@busibox/appbuilder',  port: 3004, basePath: '/builder',   color: 'magenta', extraEnv: {
@@ -284,6 +286,28 @@ async function stopApp(name) {
   state.stopping = false;
 }
 
+function cleanNextCache(def, full = false) {
+  const appDir = path.join(ROOT_DIR, 'apps', def.name);
+  const nextDir = path.join(appDir, '.next');
+  if (!fs.existsSync(nextDir)) return;
+
+  if (full) {
+    log(def.name, def.color, 'Cleaning .next directory...');
+    try { fs.rmSync(nextDir, { recursive: true, force: true }); } catch (e) {
+      log(def.name, def.color, `WARNING: Could not fully clean .next: ${e.message}`);
+    }
+  } else {
+    const subdirs = ['dev', 'cache'];
+    for (const sub of subdirs) {
+      const target = path.join(nextDir, sub);
+      if (fs.existsSync(target)) {
+        log(def.name, def.color, `Cleaning .next/${sub}...`);
+        try { fs.rmSync(target, { recursive: true, force: true }); } catch (e) {}
+      }
+    }
+  }
+}
+
 async function buildApp(def) {
   const env = {
     ...process.env,
@@ -291,6 +315,7 @@ async function buildApp(def) {
     ...def.extraEnv,
   };
 
+  cleanNextCache(def, true);
   log(def.name, def.color, 'Building for production...');
 
   return new Promise((resolve) => {
@@ -438,10 +463,13 @@ async function handleRequest(req, res) {
             if (!built) {
               results[def.name] = { changed: false, error: 'build failed' };
               state.mode = 'dev';
+              cleanNextCache(def);
               const proc = startApp(def, 'dev');
               if (proc) { state.proc = proc; state.pid = proc.pid; }
               continue;
             }
+          } else {
+            cleanNextCache(def);
           }
 
           state.mode = mode;
@@ -485,11 +513,14 @@ async function handleRequest(req, res) {
           const built = await buildApp(def);
           if (!built) {
             state.mode = 'dev';
+            cleanNextCache(def);
             const proc = startApp(def, 'dev');
             if (proc) { state.proc = proc; state.pid = proc.pid; }
             sendJson(res, 500, { success: false, error: 'Build failed, reverted to dev mode' });
             return;
           }
+        } else {
+          cleanNextCache(def);
         }
 
         state.mode = mode;
@@ -524,8 +555,13 @@ async function handleRequest(req, res) {
       }
 
       const state = apps.get(app);
-      managerLog(`Restarting ${app} (${state.mode} mode)...`);
+      const clean = body.clean !== false;
+      managerLog(`Restarting ${app} (${state.mode} mode${clean ? ', cleaning cache' : ''})...`);
       await stopApp(app);
+
+      if (clean) {
+        cleanNextCache(def, state.mode === 'prod');
+      }
 
       const proc = startApp(def, state.mode);
       if (proc) {
