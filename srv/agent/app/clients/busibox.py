@@ -72,13 +72,14 @@ class BusiboxClient:
         self,
         query: str,
         top_k: int = 10,
-        limit: Optional[int] = None,  # Alias for top_k
+        limit: Optional[int] = None,
         mode: str = "hybrid",
         file_ids: Optional[List[str]] = None,
         rerank: bool = True,
         highlight: bool = False,
         mmr: bool = False,
         mmr_lambda: float = 0.5,
+        expand_graph: bool = False,
     ) -> Dict[str, Any]:
         """
         Search documents with multiple modes.
@@ -92,16 +93,16 @@ class BusiboxClient:
             highlight: Enable search term highlighting (default: False)
             mmr: Enable Maximal Marginal Relevance for diversity (default: False)
             mmr_lambda: MMR lambda parameter for relevance vs diversity (default: 0.5)
+            expand_graph: Expand results with graph entity context (default: False)
             
         Returns:
             Search response with results and metadata
         """
-        # Use limit if provided, otherwise use top_k
         result_limit = limit if limit is not None else top_k
         
         request_body: Dict[str, Any] = {
             "query": query,
-            "limit": min(result_limit, 50),  # Search API uses 'limit', cap at 50
+            "limit": min(result_limit, 50),
             "mode": mode,
             "rerank": rerank,
         }
@@ -115,6 +116,9 @@ class BusiboxClient:
         if mmr:
             request_body["mmr"] = True
             request_body["mmr_lambda"] = mmr_lambda
+
+        if expand_graph:
+            request_body["expand_graph"] = True
         
         base_url = str(settings.search_api_url).rstrip('/')
         

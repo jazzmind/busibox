@@ -1139,3 +1139,167 @@ async def sync_document_to_graph(
     except Exception as e:
         logger.error("Failed to sync graph", document_id=document_id, error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Default extraction schemas
+# =============================================================================
+
+DEFAULT_EXTRACTION_SCHEMAS = [
+    {
+        "name": "General Entity Extraction",
+        "metadata": {
+            "type": "extraction_schema",
+            "builtin": True,
+            "description": "Extract common entity types from any document for knowledge graph population.",
+        },
+        "schema": {
+            "displayName": "General Entities",
+            "itemLabel": "Entity Set",
+            "fields": {
+                "people": {
+                    "type": "array",
+                    "description": "People mentioned in the document (names of individuals)",
+                    "search": ["index", "graph"],
+                    "items": {"type": "string"},
+                    "display_order": 1,
+                },
+                "organizations": {
+                    "type": "array",
+                    "description": "Organizations, companies, or institutions mentioned",
+                    "search": ["index", "graph"],
+                    "items": {"type": "string"},
+                    "display_order": 2,
+                },
+                "technologies": {
+                    "type": "array",
+                    "description": "Technologies, tools, frameworks, or platforms mentioned",
+                    "search": ["index", "graph"],
+                    "items": {"type": "string"},
+                    "display_order": 3,
+                },
+                "locations": {
+                    "type": "array",
+                    "description": "Geographic locations, cities, countries, or regions",
+                    "search": ["index", "graph"],
+                    "items": {"type": "string"},
+                    "display_order": 4,
+                },
+                "keywords": {
+                    "type": "array",
+                    "description": "Key topics, tags, or subject matter keywords",
+                    "search": ["index", "graph"],
+                    "items": {"type": "string"},
+                    "display_order": 5,
+                },
+                "concepts": {
+                    "type": "array",
+                    "description": "Abstract concepts, themes, or ideas discussed",
+                    "search": ["embed", "graph"],
+                    "items": {"type": "string"},
+                    "display_order": 6,
+                },
+            },
+        },
+    },
+    {
+        "name": "People & Organizations",
+        "metadata": {
+            "type": "extraction_schema",
+            "builtin": True,
+            "description": "Focused extraction of people and organizations with context.",
+        },
+        "schema": {
+            "displayName": "People & Organizations",
+            "itemLabel": "Entity",
+            "fields": {
+                "person": {
+                    "type": "string",
+                    "description": "Name of a person mentioned",
+                    "search": ["index", "graph"],
+                    "display_order": 1,
+                },
+                "role": {
+                    "type": "string",
+                    "description": "Role or title of the person",
+                    "search": ["index"],
+                    "display_order": 2,
+                },
+                "organization": {
+                    "type": "string",
+                    "description": "Organization the person is associated with",
+                    "search": ["index", "graph"],
+                    "display_order": 3,
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Context or relevance of the person/organization in the document",
+                    "search": ["embed"],
+                    "display_order": 4,
+                },
+                "keywords": {
+                    "type": "array",
+                    "description": "Related keywords or topics",
+                    "search": ["index", "graph"],
+                    "items": {"type": "string"},
+                    "display_order": 5,
+                },
+            },
+        },
+    },
+]
+
+
+@router.post(
+    "/seed-default-schemas",
+    summary="Seed default extraction schemas",
+    dependencies=[Depends(require_data_write)],
+)
+async def seed_default_schemas(
+    request: Request,
+    data_service: DataService = Depends(get_data_service),
+):
+    """
+    Create built-in extraction schemas if they don't already exist.
+
+    Idempotent: skips schemas that already exist (matched by name + builtin flag).
+    """
+    from api.main import pg_service
+
+    created = []
+    skipped = []
+
+    for schema_def in DEFAULT_EXTRACTION_SCHEMAS:
+        name = schema_def["name"]
+
+        # Check if a schema with this name and builtin flag already exists
+        async with pg_service.acquire(request) as conn:
+            existing = await conn.fetchrow(
+                "SELECT file_id FROM data_files "
+                "WHERE filename = $1 AND doc_type = 'data' "
+                "AND metadata->>'builtin' = 'true' "
+                "AND metadata->>'type' = 'extraction_schema'",
+                name,
+            )
+
+        if existing:
+            skipped.append(name)
+            continue
+
+        try:
+            result = await data_service.create_document(
+                request=request,
+                name=name,
+                schema=schema_def["schema"],
+                metadata=schema_def["metadata"],
+                visibility="shared",
+            )
+            created.append({"name": name, "id": result.get("id", "")})
+        except Exception as e:
+            logger.error(f"Failed to seed schema '{name}'", error=str(e))
+
+    return {
+        "created": created,
+        "skipped": skipped,
+        "total": len(DEFAULT_EXTRACTION_SCHEMAS),
+    }
