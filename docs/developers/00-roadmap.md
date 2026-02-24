@@ -54,6 +54,11 @@ The ingestion pipeline is core to the platform. These items improve reliability,
 - [ ] Chat agent should check document search first, retrieve and evaluate highly relevant docs before resorting to web search
 - [ ] Web search should scrape and evaluate results for relevance, not just return links
 
+### Hybrid RAG (Graph + Vector)
+- [x] **Tier 1** (implemented): Graph context expansion in agent search, entity type normalization, richer graph context output
+- [ ] **Tier 2**: Query-side entity extraction, entity embeddings in Neo4j, graph-informed reranking. See [Hybrid RAG Design](hybrid-rag-design.md)
+- [ ] **Tier 3**: Unified search orchestrator, classification-driven retrieval routing, entity-centric search mode. See [Hybrid RAG Design](hybrid-rag-design.md)
+
 ---
 
 ## P2 - Installation & Onboarding

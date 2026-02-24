@@ -278,6 +278,242 @@ async def get_graph_stats(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# =============================================================================
+# Schema-driven graph entity creation
+# =============================================================================
+
+FIELD_NAME_TO_ENTITY_TYPE = {
+    "people": "Person", "person": "Person", "persons": "Person",
+    "person_name": "Person", "person_names": "Person", "names": "Person",
+    "author": "Person", "authors": "Person", "speaker": "Person",
+    "speakers": "Person", "employee": "Person", "employees": "Person",
+    "candidate": "Person", "candidates": "Person",
+    "organisations": "Organization", "organisation": "Organization",
+    "organizations": "Organization", "organization": "Organization",
+    "company": "Organization", "companies": "Organization",
+    "org": "Organization", "orgs": "Organization",
+    "employer": "Organization", "employers": "Organization",
+    "institution": "Organization", "institutions": "Organization",
+    "technologies": "Technology", "technology": "Technology",
+    "tech": "Technology", "tools": "Technology", "tool": "Technology",
+    "tech_stack": "Technology", "software": "Technology",
+    "framework": "Technology", "frameworks": "Technology",
+    "platform": "Technology", "platforms": "Technology",
+    "language": "Technology", "languages": "Technology",
+    "programming_languages": "Technology",
+    "locations": "Location", "location": "Location",
+    "place": "Location", "places": "Location",
+    "city": "Location", "cities": "Location",
+    "country": "Location", "countries": "Location",
+    "region": "Location", "regions": "Location",
+    "keywords": "Keyword", "keyword": "Keyword",
+    "tags": "Keyword", "tag": "Keyword",
+    "topics": "Keyword", "topic": "Keyword",
+    "concepts": "Concept", "concept": "Concept",
+    "themes": "Concept", "theme": "Concept",
+    "projects": "Project", "project": "Project",
+    "initiatives": "Project", "initiative": "Project",
+    "programs": "Project", "program": "Project",
+    "programmes": "Project", "programme": "Project",
+    "skills": "Keyword", "skill": "Keyword",
+    "competencies": "Keyword", "competency": "Keyword",
+}
+
+
+def _normalize_entity_type(field_name: str) -> str:
+    """Map a schema field name to a canonical graph entity type."""
+    normalized = field_name.lower().strip().replace(" ", "_").replace("-", "_")
+    return FIELD_NAME_TO_ENTITY_TYPE.get(normalized, field_name.title())
+
+
+@router.post(
+    "/from-extraction",
+    summary="Create graph entities from schema extraction results",
+    dependencies=[Depends(require_data_read)],
+)
+async def create_graph_from_extraction(
+    request: Request,
+    file_id: str = Query(..., description="Source document file_id"),
+    schema_document_id: str = Query(..., description="Schema data document ID"),
+):
+    """
+    Create Neo4j graph entities from schema extraction records.
+
+    Reads the schema to find fields with ``search: ["graph"]``, queries
+    extraction records for the given file, and creates graph nodes and
+    relationships from the graph-tagged field values.
+    """
+    graph_service = _get_graph_service(request)
+    if not graph_service:
+        return {
+            "success": False,
+            "graph_available": False,
+            "entity_count": 0,
+        }
+
+    user_id = getattr(request.state, "user_id", None)
+
+    try:
+        from api.main import pg_service
+
+        async with pg_service.acquire(request) as conn:
+            # Load schema to find graph-tagged fields
+            row = await conn.fetchrow(
+                "SELECT data_schema, filename FROM data_files "
+                "WHERE file_id = $1 AND doc_type = 'data'",
+                schema_document_id,
+            )
+            if not row or not row["data_schema"]:
+                raise HTTPException(status_code=404, detail="Schema document not found")
+
+            import json
+            schema = row["data_schema"] if isinstance(row["data_schema"], dict) else json.loads(row["data_schema"])
+
+            graph_fields: List[str] = []
+            fields = schema.get("fields", {})
+            for fname, fdef in fields.items():
+                search_modes = fdef.get("search", []) if isinstance(fdef, dict) else []
+                if "graph" in search_modes:
+                    graph_fields.append(fname)
+
+            if not graph_fields:
+                return {
+                    "success": True,
+                    "graph_available": True,
+                    "entity_count": 0,
+                    "message": "No graph-tagged fields in schema",
+                }
+
+            # Load extraction records for this file
+            records_row = await conn.fetchrow(
+                "SELECT data_content FROM data_files "
+                "WHERE file_id = $1 AND doc_type = 'data'",
+                schema_document_id,
+            )
+            all_records = []
+            if records_row and records_row["data_content"]:
+                content = records_row["data_content"]
+                if isinstance(content, str):
+                    content = json.loads(content)
+                if isinstance(content, list):
+                    all_records = content
+                elif isinstance(content, dict) and "records" in content:
+                    all_records = content["records"]
+
+            # Filter records to this source file
+            records = [
+                r for r in all_records
+                if isinstance(r, dict) and r.get("_sourceFileId") == file_id
+            ]
+
+            if not records:
+                return {
+                    "success": True,
+                    "graph_available": True,
+                    "entity_count": 0,
+                    "message": "No extraction records for this file",
+                }
+
+            # Get file metadata for the document node
+            file_row = await conn.fetchrow(
+                "SELECT filename, library_id, visibility FROM data_files "
+                "WHERE file_id = $1",
+                file_id,
+            )
+            filename = file_row["filename"] if file_row else file_id
+            library_id = str(file_row["library_id"]) if file_row and file_row["library_id"] else None
+            visibility = file_row["visibility"] if file_row else "personal"
+
+        # Create document node
+        await graph_service.upsert_node(
+            label="Document",
+            properties={"id": file_id, "name": filename, "doc_type": "file",
+                         **({"library_id": library_id} if library_id else {})},
+            owner_id=user_id,
+            visibility=visibility,
+        )
+
+        entity_count = 0
+        all_entity_ids: List[str] = []
+
+        for record in records:
+            record_entity_ids: List[str] = []
+            for field_name in graph_fields:
+                values = record.get(field_name)
+                if not values:
+                    continue
+                if isinstance(values, str):
+                    values = [values]
+                if not isinstance(values, list):
+                    continue
+
+                entity_type = _normalize_entity_type(field_name)
+
+                for val in values:
+                    if not isinstance(val, str) or len(val.strip()) < 2:
+                        continue
+                    val = val.strip()
+                    entity_id = f"entity:{entity_type.lower()}:{val.lower().replace(' ', '_')}"
+
+                    await graph_service.upsert_node(
+                        label=entity_type,
+                        properties={
+                            "id": entity_id,
+                            "name": val,
+                            "entity_type": entity_type,
+                            "source_field": field_name,
+                        },
+                        node_id=entity_id,
+                        owner_id=user_id,
+                        visibility=visibility,
+                    )
+
+                    rel_type = "KEYWORD_OF" if entity_type == "Keyword" else "MENTIONED_IN"
+                    await graph_service.create_relationship(
+                        from_id=entity_id,
+                        rel_type=rel_type,
+                        to_id=file_id,
+                    )
+
+                    record_entity_ids.append(entity_id)
+                    all_entity_ids.append(entity_id)
+                    entity_count += 1
+
+            # CO_OCCURS_WITH between entities in the same record
+            for i, eid1 in enumerate(record_entity_ids):
+                for eid2 in record_entity_ids[i + 1:]:
+                    await graph_service.create_relationship(
+                        from_id=eid1,
+                        rel_type="CO_OCCURS_WITH",
+                        to_id=eid2,
+                        properties={"source_document": file_id},
+                    )
+
+        logger.info(
+            "[GRAPH API] Created entities from extraction",
+            file_id=file_id,
+            schema_document_id=schema_document_id,
+            entity_count=entity_count,
+            graph_fields=graph_fields,
+        )
+
+        return {
+            "success": True,
+            "graph_available": True,
+            "entity_count": entity_count,
+            "graph_fields": graph_fields,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "[GRAPH API] Failed to create entities from extraction",
+            error=str(e),
+            file_id=file_id,
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post(
     "/compute-similarities",
     summary="Compute similarity edges between project nodes",

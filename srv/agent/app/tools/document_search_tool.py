@@ -30,6 +30,7 @@ class DocumentSearchOutput(BaseModel):
     result_count: int = Field(description="Number of results returned")
     context: str = Field(description="Formatted context from search results for LLM")
     results: List[SearchResultItem] = Field(description="List of search results with metadata")
+    graph_context: Optional[str] = Field(default=None, description="Graph entity context if available")
     error: Optional[str] = Field(default=None, description="Error message if search failed")
 
 
@@ -66,7 +67,8 @@ async def search_documents(
             top_k=min(limit, 50),
             mode=mode,
             file_ids=file_ids,
-            rerank=True,  # Enable reranking for better results
+            rerank=True,
+            expand_graph=True,
         )
         
         # Parse response - BusiboxClient returns raw dict from search API
@@ -86,7 +88,6 @@ async def search_documents(
         context_parts = []
         
         for idx, result in enumerate(results, 1):
-            # Create result item
             result_item = SearchResultItem(
                 filename=result.get("filename") or f"Document {result.get('file_id', 'unknown')[:8]}",
                 text=result.get("text", ""),
@@ -96,7 +97,6 @@ async def search_documents(
             )
             formatted_results.append(result_item)
             
-            # Build context string
             source_info = result_item.filename
             if result_item.page_number:
                 source_info += f", Page {result_item.page_number}"
@@ -105,14 +105,21 @@ async def search_documents(
                 f"--- Document {idx} [Source: {source_info}, Relevance: {result_item.score:.2f}] ---\n{result.get('text', '')}"
             )
         
-        # Combine context
         full_context = "\n\n".join(context_parts)
+
+        # Append graph context if available
+        graph_context_str: Optional[str] = None
+        graph_data = response.get("graph")
+        if graph_data and graph_data.get("graph_context"):
+            graph_context_str = graph_data["graph_context"]
+            full_context += f"\n\n--- Graph Context ---\n{graph_context_str}"
         
         return DocumentSearchOutput(
             found=True,
             result_count=len(formatted_results),
             context=full_context,
             results=formatted_results,
+            graph_context=graph_context_str,
         )
     
     except Exception as e:

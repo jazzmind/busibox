@@ -237,8 +237,9 @@ BEDROCK_CURATED_MODELS = [
 
 # Purposes that can be overridden via the UI
 CONFIGURABLE_PURPOSES = [
-    "fast", "agent", "chat", "frontier", "tool_calling", "test", "default", "video",
-    "image", "transcribe", "voice",
+    "fast", "agent", "chat", "frontier", "tool_calling", "test", "default",
+    "cleanup", "parsing", "classify",
+    "video", "image", "transcribe", "voice",
 ]
 
 

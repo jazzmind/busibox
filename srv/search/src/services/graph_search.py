@@ -225,22 +225,47 @@ class GraphSearchService:
                             related_documents.append({
                                 "id": doc_id,
                                 "name": doc.get("name", ""),
-                                "relationship": f"Also mentions {entity.get('name', '')}",
+                                "shared_entities": [entity.get("name", "")],
                             })
+                        elif doc_id in seen_docs:
+                            for rd in related_documents:
+                                if rd["id"] == doc_id:
+                                    rd.setdefault("shared_entities", []).append(entity.get("name", ""))
+                                    break
                 
-                # Build text context for RAG
+                # Build enriched text context for RAG
                 context_parts = []
                 if related_entities:
-                    entity_names = [e["name"] for e in related_entities[:5]]
-                    context_parts.append(f"Related entities: {', '.join(entity_names)}")
+                    entity_descs = []
+                    for e in related_entities[:8]:
+                        desc = f"{e['name']} ({e['type']}"
+                        if e["relevance"] > 1:
+                            desc += f", mentioned in {e['relevance']} search results"
+                        desc += ")"
+                        entity_descs.append(desc)
+                    context_parts.append(f"Related entities: {'; '.join(entity_descs)}.")
+
                 if related_documents:
-                    doc_names = [d["name"] for d in related_documents[:3]]
-                    context_parts.append(f"Related documents: {', '.join(doc_names)}")
+                    doc_descs = []
+                    for d in related_documents[:5]:
+                        shared = d.get("shared_entities", [])
+                        shared_count = len(shared)
+                        if shared_count > 0:
+                            shared_preview = ", ".join(shared[:3])
+                            suffix = f" and {shared_count - 3} more" if shared_count > 3 else ""
+                            doc_descs.append(
+                                f"{d['name']} (shares {shared_count} entities: {shared_preview}{suffix})"
+                            )
+                        else:
+                            doc_descs.append(d["name"])
+                    context_parts.append(
+                        f"Related documents not in search results: {'; '.join(doc_descs)}."
+                    )
                 
                 return {
                     "related_entities": related_entities,
                     "related_documents": related_documents,
-                    "graph_context": ". ".join(context_parts) if context_parts else "",
+                    "graph_context": "\n".join(context_parts) if context_parts else "",
                 }
         except Exception as e:
             logger.warning("[GRAPH-SEARCH] expand_context failed", error=str(e))

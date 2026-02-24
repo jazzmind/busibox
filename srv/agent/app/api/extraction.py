@@ -1464,8 +1464,36 @@ async def extract_document(
 
             raise HTTPException(status_code=502, detail=f"Failed to store extracted records: {exc}") from exc
 
+    # Create graph entities from graph-tagged fields in the schema
+    graph_result: Dict[str, Any] = {"entity_count": 0}
+    try:
+        graph_result = await client.request(
+            "POST",
+            "/data/graph/from-extraction",
+            params={
+                "file_id": payload.file_id,
+                "schema_document_id": payload.schema_document_id,
+            },
+        )
+        logger.info(
+            "Graph entities created from extraction",
+            extra={
+                "file_id": payload.file_id,
+                "schema_document_id": payload.schema_document_id,
+                "entity_count": graph_result.get("entity_count", 0),
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to create graph entities from extraction (non-fatal)",
+            extra={
+                "file_id": payload.file_id,
+                "schema_document_id": payload.schema_document_id,
+                "error": str(exc),
+            },
+        )
+
     # Persist extraction results summary + records in source doc metadata.
-    # This augments data_files.metadata only and does not modify markdown content.
     try:
         await client.request(
             "PATCH",
@@ -1504,4 +1532,5 @@ async def extract_document(
         "recordCount": len(enriched_records),
         "records": enriched_records,
         "storage": insert_result,
+        "graph": graph_result,
     }

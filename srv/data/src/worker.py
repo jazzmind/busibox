@@ -1937,9 +1937,11 @@ class IngestWorker:
             self.postgres_service.insert_chunks(file_id, chunk_dicts)
             
             # Stage 4.55: Entity Extraction for Knowledge Graph (optional)
+            # Disabled by default -- entity extraction is now schema-driven
+            # and runs on-demand or via library triggers after processing.
             entity_extraction_enabled = (
-                processing_config.get("entity_extraction_enabled", True)
-                if processing_config else True
+                processing_config.get("entity_extraction_enabled", False)
+                if processing_config else False
             )
             if entity_extraction_enabled:
                 try:
