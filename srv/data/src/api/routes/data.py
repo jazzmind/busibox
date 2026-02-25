@@ -1292,7 +1292,7 @@ async def seed_default_schemas(
                 name=name,
                 schema=schema_def["schema"],
                 metadata=schema_def["metadata"],
-                visibility="shared",
+                visibility="personal",
             )
             created.append({"name": name, "id": result.get("id", "")})
         except Exception as e:

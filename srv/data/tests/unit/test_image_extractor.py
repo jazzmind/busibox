@@ -102,11 +102,10 @@ class TestImageExtractor:
         assert self.extractor.get_image_filename(10, "jpg") == "image_10.jpg"
 
     def test_no_images_in_document(self):
-        """Test handling of documents without images"""
-        # Test that attempting to extract from nonexistent file raises an exception
-        # The extractor logs errors and re-raises them
-        with pytest.raises(Exception):
-            self.extractor.extract("/tmp/nonexistent.pdf")
+        """Test handling of nonexistent PDF returns empty tuple."""
+        metadata, images = self.extractor.extract("/tmp/nonexistent.pdf")
+        assert metadata == []
+        assert images == []
 
     def test_image_quality_preservation(self):
         """Test that image quality is preserved during extraction"""

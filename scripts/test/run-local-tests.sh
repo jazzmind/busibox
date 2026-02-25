@@ -106,7 +106,11 @@ fi
 
 # Validate service
 case "$SERVICE" in
-    authz|data|ingest|search|agent|bridge|busibox-portal|busibox-agents|apps|all)
+    authz|data|search|agent|bridge|busibox-portal|busibox-agents|apps|all)
+        ;;
+    ingest)
+        warn "Service 'ingest' is deprecated, using 'data' instead"
+        SERVICE="data"
         ;;
     *)
         error "Unknown service: $SERVICE"
@@ -114,12 +118,6 @@ case "$SERVICE" in
         exit 1
         ;;
 esac
-
-# Map 'data' to 'data' for backward compatibility
-if [[ "$SERVICE" == "data" ]]; then
-    warn "Service 'data' is deprecated, using 'data' instead"
-    SERVICE="data"
-fi
 
 # Step 1: Generate environment file
 header "Step 1: Generate Environment" 70
@@ -321,7 +319,7 @@ run_service_tests() {
         return $?
     fi
     
-    # Start local worker if requested and testing ingest
+    # Start local worker if requested and testing data
     if [[ "$START_LOCAL_WORKER" == "1" ]] && [[ "$service" == "data" ]]; then
         if [[ -z "$WORKER_PID" ]]; then
             start_local_worker

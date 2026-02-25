@@ -1201,8 +1201,42 @@ class BaseStreamingAgent(StreamingAgent):
             # No tools configured - run as conversational agent without tool capabilities
             logger.info(f"No tools configured for {self.name}, running as conversational agent")
             
+            # Build the prompt with conversation history context
+            prompt_with_context = self._build_llm_driven_prompt(query, context)
+
+            # When a response_schema is provided, use PydanticAI NativeOutput
+            # with a dynamically-built Pydantic model.  This sends
+            # response_format to LiteLLM (enforced by vLLM+Outlines in prod)
+            # AND validates the response with Pydantic (retry on mismatch).
+            # Falls back to the direct OpenAI call if model conversion fails.
+            if context.response_schema:
+                try:
+                    t_struct = time.monotonic()
+                    structured_output = await self._run_native_structured_output(
+                        query=prompt_with_context,
+                        context=context,
+                    )
+                    logger.info(
+                        f"{self.name} structured output call complete",
+                        extra={
+                            "elapsed_ms": round((time.monotonic() - t_struct) * 1000),
+                            "output_length": len(structured_output) if structured_output else 0,
+                        },
+                    )
+                    context.tool_results["llm_response"] = structured_output
+                except Exception as e:
+                    logger.error(
+                        f"{self.name} structured output call failed: {e}",
+                        exc_info=True,
+                    )
+                    await stream(error(
+                        source=self.name,
+                        message=f"Error: {str(e)}"
+                    ))
+                return
+
             # Build model settings - only include max_tokens if explicitly set
-            model_settings = {}
+            model_settings: Dict[str, Any] = {}
             runtime_max_tokens = context.max_tokens if context.max_tokens is not None else self.config.max_tokens
             if runtime_max_tokens is not None:
                 model_settings["max_tokens"] = runtime_max_tokens
@@ -1210,32 +1244,25 @@ class BaseStreamingAgent(StreamingAgent):
             # Disable LiteLLM context_window_fallbacks unless agent opts in
             if not self.config.allow_frontier_fallback:
                 model_settings.setdefault("extra_body", {})["disable_fallbacks"] = True
-
-            # If a response schema is provided, pass it through to LiteLLM so
-            # the model returns deterministic JSON that matches the schema.
-            if context.response_schema:
-                model_settings.setdefault("extra_body", {})["response_format"] = {
-                    "type": "json_schema",
-                    "json_schema": context.response_schema,
-                }
             
             # Create agent without tools for pure conversation
             agent_kwargs: Dict[str, Any] = {
                 "model": self.synthesis_model,
                 "system_prompt": self.config.instructions,
-                "model_settings": model_settings if model_settings else None,
             }
-            if self.config.output_type is not None and not context.response_schema:
+            if self.config.output_type is not None:
                 agent_kwargs["output_type"] = self.config.output_type
             agent = Agent(**agent_kwargs)
             
-            # Build the prompt with conversation history context
-            prompt_with_context = self._build_llm_driven_prompt(query, context)
-            
-            # Run agent with context-enriched prompt
+            # Run agent with context-enriched prompt (pass model_settings at
+            # run-time for highest priority in PydanticAI's merge order)
             try:
                 t_conv = time.monotonic()
-                result = await agent.run(prompt_with_context, deps=context.deps)
+                result = await agent.run(
+                    prompt_with_context,
+                    deps=context.deps,
+                    model_settings=model_settings if model_settings else None,
+                )
                 logger.info(
                     f"{self.name} conversational LLM call complete",
                     extra={"elapsed_ms": round((time.monotonic() - t_conv) * 1000)},
@@ -1299,10 +1326,15 @@ class BaseStreamingAgent(StreamingAgent):
             }
         )
         
-        # Run agent with context-enriched prompt
+        # Run agent with context-enriched prompt (pass model_settings at
+        # run-time for highest priority in PydanticAI's merge order)
         try:
             t_llm = time.monotonic()
-            result = await agent.run(prompt_with_context, deps=context.deps)
+            result = await agent.run(
+                prompt_with_context,
+                deps=context.deps,
+                model_settings=model_settings if model_settings else None,
+            )
             logger.info(
                 f"{self.name} LLM agent.run() complete",
                 extra={"elapsed_ms": round((time.monotonic() - t_llm) * 1000)},
@@ -1327,6 +1359,212 @@ class BaseStreamingAgent(StreamingAgent):
                 message=f"Error: {str(e)}"
             ))
     
+    async def _run_native_structured_output(
+        self,
+        query: str,
+        context: "AgentContext",
+    ) -> str:
+        """
+        Run structured output using PydanticAI NativeOutput when possible.
+
+        Converts the runtime ``response_schema`` to a Pydantic model and uses
+        PydanticAI's ``NativeOutput`` mode, which sends ``response_format`` to the
+        provider *and* validates + retries on the application side.
+
+        Falls back to ``_call_structured_output`` (direct OpenAI call with
+        jsonschema validation) if the schema cannot be converted.
+        """
+        from app.utils.json_schema_to_pydantic import json_schema_to_pydantic
+
+        response_schema = context.response_schema
+        assert response_schema is not None
+
+        try:
+            dynamic_model = json_schema_to_pydantic(response_schema)
+        except Exception as e:
+            logger.warning(
+                f"{self.name} could not convert response_schema to Pydantic model, "
+                f"falling back to direct OpenAI call: {e}",
+            )
+            return await self._call_structured_output(
+                prompt=query,
+                system_prompt=self.config.instructions,
+                response_schema=response_schema,
+                max_tokens=context.max_tokens or self.config.max_tokens,
+            )
+
+        try:
+            from pydantic_ai import Agent as _Agent, NativeOutput
+        except ImportError:
+            logger.warning(
+                f"{self.name} NativeOutput not available in this pydantic-ai version, "
+                "falling back to direct OpenAI call",
+            )
+            return await self._call_structured_output(
+                prompt=query,
+                system_prompt=self.config.instructions,
+                response_schema=response_schema,
+                max_tokens=context.max_tokens or self.config.max_tokens,
+            )
+
+        schema_name = response_schema.get("name", "structured_output")
+
+        model_settings: Dict[str, Any] = {}
+        runtime_max_tokens = context.max_tokens if context.max_tokens is not None else self.config.max_tokens
+        if runtime_max_tokens is not None:
+            model_settings["max_tokens"] = runtime_max_tokens
+
+        if not self.config.allow_frontier_fallback:
+            model_settings.setdefault("extra_body", {})["disable_fallbacks"] = True
+
+        agent = _Agent(
+            model=self.synthesis_model,
+            system_prompt=self.config.instructions,
+            output_type=NativeOutput(dynamic_model, name=schema_name),
+        )
+
+        logger.info(
+            f"{self.name} running PydanticAI NativeOutput structured call",
+            extra={
+                "schema_name": schema_name,
+                "model_class": dynamic_model.__name__,
+                "prompt_length": len(query),
+            },
+        )
+
+        result = await agent.run(
+            query,
+            deps=context.deps,
+            model_settings=model_settings if model_settings else None,
+        )
+
+        output = result.output
+        if hasattr(output, "model_dump"):
+            return json.dumps(output.model_dump(mode="json"))
+        if isinstance(output, (dict, list)):
+            return json.dumps(output)
+        return str(output)
+
+    def _is_structured_output_enforced(self) -> bool:
+        """Check whether the current LLM backend enforces structured output at the token level."""
+        backend = get_settings().llm_backend.lower()
+        return backend == "vllm"
+
+    async def _call_structured_output(
+        self,
+        prompt: str,
+        system_prompt: str,
+        response_schema: Dict[str, Any],
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        """
+        Call the LLM directly via the OpenAI client with response_format enforced.
+
+        Bypasses PydanticAI so response_format reaches LiteLLM as a first-class
+        parameter rather than being tunnelled through extra_body.
+
+        After receiving the response, validates it against the JSON Schema and
+        retries once on validation failure.
+        """
+        import jsonschema as _jsonschema
+        from openai import AsyncOpenAI
+
+        settings = get_settings()
+        client = AsyncOpenAI(
+            base_url=str(settings.litellm_base_url),
+            api_key=settings.litellm_api_key,
+        )
+
+        if not self._is_structured_output_enforced():
+            logger.warning(
+                f"{self.name} structured output requested but backend '{settings.llm_backend or 'unknown'}' "
+                "may not enforce grammar-level constraints (only vLLM+Outlines guarantees schema conformance)"
+            )
+
+        model_name = self.config.model or settings.default_model
+        schema_name = response_schema.get("name", "unknown")
+        json_schema = response_schema.get("schema", response_schema)
+
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+
+        kwargs: Dict[str, Any] = {
+            "model": model_name,
+            "messages": messages,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": response_schema,
+            },
+        }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+
+        max_attempts = 2
+        last_error: Optional[str] = None
+
+        for attempt in range(1, max_attempts + 1):
+            logger.info(
+                f"{self.name} structured output call (attempt {attempt}/{max_attempts})",
+                extra={
+                    "model": model_name,
+                    "schema_name": schema_name,
+                    "prompt_length": len(prompt),
+                },
+            )
+
+            response = await client.chat.completions.create(**kwargs)
+            content = response.choices[0].message.content or ""
+
+            try:
+                parsed = json.loads(content)
+            except json.JSONDecodeError as e:
+                last_error = f"Response is not valid JSON: {e}"
+                logger.warning(
+                    f"{self.name} structured output attempt {attempt} returned invalid JSON",
+                    extra={"error": last_error, "content_preview": content[:500]},
+                )
+                if attempt < max_attempts:
+                    kwargs["messages"] = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt},
+                        {"role": "assistant", "content": content},
+                        {"role": "user", "content": (
+                            f"Your response was not valid JSON. Error: {last_error}\n"
+                            "Please try again and return ONLY valid JSON matching the required schema."
+                        )},
+                    ]
+                    continue
+                raise ValueError(f"Structured output failed after {max_attempts} attempts: {last_error}")
+
+            try:
+                _jsonschema.validate(instance=parsed, schema=json_schema)
+            except _jsonschema.ValidationError as e:
+                last_error = f"JSON does not match schema: {e.message} (at path: {'/'.join(str(p) for p in e.absolute_path)})"
+                logger.warning(
+                    f"{self.name} structured output attempt {attempt} failed schema validation",
+                    extra={"error": last_error, "schema_name": schema_name},
+                )
+                if attempt < max_attempts:
+                    kwargs["messages"] = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt},
+                        {"role": "assistant", "content": content},
+                        {"role": "user", "content": (
+                            f"Your response did not match the required schema. Validation error: {last_error}\n"
+                            "Please try again and return JSON that strictly conforms to the schema."
+                        )},
+                    ]
+                    continue
+                raise ValueError(f"Structured output failed after {max_attempts} attempts: {last_error}")
+
+            if attempt > 1:
+                logger.info(f"{self.name} structured output succeeded on retry (attempt {attempt})")
+            return content
+
+        raise ValueError(f"Structured output failed after {max_attempts} attempts: {last_error}")
+
     def _build_llm_driven_prompt(self, query: str, context: AgentContext) -> str:
         """
         Build a prompt that includes conversation history and insights for LLM-driven execution.

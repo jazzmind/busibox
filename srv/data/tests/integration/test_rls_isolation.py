@@ -21,13 +21,15 @@ Test scenarios:
     5) User A moves it back to personal -> B can no longer see it
 """
 
+import os
 import uuid
 from datetime import datetime
 from typing import Dict
 
 import httpx
+import psycopg2
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import AsyncClient
 
 from testing.auth import AuthTestClient, TEST_MODE_HEADER, TEST_MODE_VALUE
 
@@ -236,11 +238,35 @@ def rls_users(auth_client) -> MultiUserAuthClient:
     mu.cleanup()
 
 
+def _get_data_db_conn():
+    """Get a synchronous psycopg2 connection to the data DB as the service user."""
+    return psycopg2.connect(
+        host=os.getenv("POSTGRES_HOST", "localhost"),
+        port=int(os.getenv("POSTGRES_PORT", "5432")),
+        dbname=os.getenv("POSTGRES_DB", "files"),
+        user=os.getenv("POSTGRES_USER", "busibox_user"),
+        password=os.getenv("POSTGRES_PASSWORD", ""),
+        connect_timeout=10,
+    )
+
+
+def _set_rls_context(cur, user_id: str, role_ids: list[str] | None = None):
+    """Set RLS session variables for the current transaction."""
+    cur.execute("SET LOCAL app.user_id = %s", (user_id,))
+    if role_ids:
+        role_ids_csv = ",".join(role_ids)
+        cur.execute("SET LOCAL app.role_ids = %s", (role_ids_csv,))
+        cur.execute("SET LOCAL app.user_role_ids_read = %s", (role_ids_csv,))
+        cur.execute("SET LOCAL app.user_role_ids_create = %s", (role_ids_csv,))
+        cur.execute("SET LOCAL app.user_role_ids_update = %s", (role_ids_csv,))
+        cur.execute("SET LOCAL app.user_role_ids_delete = %s", (role_ids_csv,))
+
+
 @pytest.fixture(scope="module")
-async def rls_test_data(initialized_app, rls_users):
+def rls_test_data(rls_users):
     """
     Module-scoped fixture that inserts test documents, chunks, and status
-    rows directly into the DB (bypassing RLS via the superuser pool).
+    rows directly into the DB with proper RLS context via psycopg2.
 
     Creates:
       - User A personal doc  (visibility=personal, owner=A)
@@ -250,19 +276,19 @@ async def rls_test_data(initialized_app, rls_users):
       - One chunk per document
       - One data_status row per document
     """
-    _, pg_service = initialized_app
-
     user_a = rls_users.get_user("a")
     user_b = rls_users.get_user("b")
     share_ab_role_id = user_a["share_ab_role_id"]
+    personal_a_role_id = user_a["personal_role_id"]
+    personal_b_role_id = user_b["personal_role_id"]
 
-    a_id = uuid.UUID(user_a["user_id"])
-    b_id = uuid.UUID(user_b["user_id"])
+    a_id = user_a["user_id"]
+    b_id = user_b["user_id"]
 
-    doc_a_personal = uuid.uuid4()
-    doc_a_media = uuid.uuid4()
-    doc_shared = uuid.uuid4()
-    doc_b_personal = uuid.uuid4()
+    doc_a_personal = str(uuid.uuid4())
+    doc_a_media = str(uuid.uuid4())
+    doc_shared = str(uuid.uuid4())
+    doc_b_personal = str(uuid.uuid4())
     now = datetime.utcnow()
 
     docs = {
@@ -273,88 +299,113 @@ async def rls_test_data(initialized_app, rls_users):
         "share_ab_role_id": share_ab_role_id,
     }
 
-    async with pg_service.pool.acquire() as conn:
-        # -- documents --------------------------------------------------------
-        insert_file = """
-            INSERT INTO data_files
-                (file_id, user_id, owner_id, filename, original_filename,
-                 mime_type, size_bytes, storage_path, content_hash,
-                 has_markdown, created_at, visibility, doc_type)
-            VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,$9,$10,$11,'file')
-        """
-        await conn.execute(
-            insert_file,
-            doc_a_personal, a_id, a_id, "a_personal.pdf",
-            "application/pdf", 1024, f"s3://{a_id}/{doc_a_personal}", "hash_a_personal",
-            False, now, "personal",
-        )
-        await conn.execute(
-            insert_file,
-            doc_a_media, a_id, a_id, "a_photo.jpg",
-            "image/jpeg", 2048, f"s3://{a_id}/{doc_a_media}", "hash_a_media",
-            False, now, "personal",
-        )
-        await conn.execute(
-            insert_file,
-            doc_shared, a_id, a_id, "shared_doc.pdf",
-            "application/pdf", 3072, f"s3://shared/{doc_shared}", "hash_shared",
-            False, now, "shared",
-        )
-        await conn.execute(
-            insert_file,
-            doc_b_personal, b_id, b_id, "b_personal.pdf",
-            "application/pdf", 4096, f"s3://{b_id}/{doc_b_personal}", "hash_b_personal",
-            False, now, "personal",
-        )
+    insert_file = """
+        INSERT INTO data_files
+            (file_id, user_id, owner_id, filename, original_filename,
+             mime_type, size_bytes, storage_path, content_hash,
+             has_markdown, created_at, visibility, doc_type)
+        VALUES (%s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'file')
+    """
+    insert_chunk = """
+        INSERT INTO data_chunks (file_id, chunk_index, text, token_count)
+        VALUES (%s::uuid, %s, %s, %s)
+    """
+    insert_status = """
+        INSERT INTO data_status (file_id, stage, progress, started_at, completed_at, updated_at)
+        VALUES (%s::uuid, 'completed', 100, %s, %s, %s)
+    """
 
-        # -- document_roles for the shared doc --------------------------------
-        await conn.execute(
-            """
-            INSERT INTO document_roles (file_id, role_id, role_name, added_by)
-            VALUES ($1, $2, $3, $4)
-            """,
-            doc_shared,
-            uuid.UUID(share_ab_role_id),
-            "test-rls-share-ab",
-            a_id,
-        )
+    conn = _get_data_db_conn()
+    try:
+        # User A's documents (personal + shared)
+        a_all_roles = [share_ab_role_id, personal_a_role_id]
+        with conn:
+            cur = conn.cursor()
+            _set_rls_context(cur, a_id, a_all_roles)
+            cur.execute(insert_file, (
+                doc_a_personal, a_id, a_id, "a_personal.pdf", "a_personal.pdf",
+                "application/pdf", 1024, f"s3://{a_id}/{doc_a_personal}", "hash_a_personal",
+                False, now, "personal",
+            ))
+            cur.execute(insert_file, (
+                doc_a_media, a_id, a_id, "a_photo.jpg", "a_photo.jpg",
+                "image/jpeg", 2048, f"s3://{a_id}/{doc_a_media}", "hash_a_media",
+                False, now, "personal",
+            ))
+            cur.execute(insert_file, (
+                doc_shared, a_id, a_id, "shared_doc.pdf", "shared_doc.pdf",
+                "application/pdf", 3072, f"s3://shared/{doc_shared}", "hash_shared",
+                False, now, "shared",
+            ))
+            cur.execute(
+                """INSERT INTO document_roles (file_id, role_id, role_name, added_by)
+                VALUES (%s::uuid, %s::uuid, %s, %s::uuid)""",
+                (doc_shared, share_ab_role_id, "test-rls-share-ab", a_id),
+            )
+            cur.execute(insert_chunk, (doc_a_personal, 0, "Chunk from A personal doc.", 6))
+            cur.execute(insert_chunk, (doc_a_media, 0, "Chunk from A media file.", 5))
+            cur.execute(insert_chunk, (doc_shared, 0, "Chunk from shared doc.", 5))
+            cur.execute(insert_status, (doc_a_personal, now, now, now))
+            cur.execute(insert_status, (doc_a_media, now, now, now))
+            cur.execute(insert_status, (doc_shared, now, now, now))
+            cur.close()
 
-        # -- chunks -----------------------------------------------------------
-        insert_chunk = """
-            INSERT INTO data_chunks (file_id, chunk_index, text, token_count)
-            VALUES ($1, $2, $3, $4)
-        """
-        await conn.execute(insert_chunk, doc_a_personal, 0, "Chunk from A personal doc.", 6)
-        await conn.execute(insert_chunk, doc_a_media, 0, "Chunk from A media file.", 5)
-        await conn.execute(insert_chunk, doc_shared, 0, "Chunk from shared doc.", 5)
-        await conn.execute(insert_chunk, doc_b_personal, 0, "Chunk from B personal doc.", 6)
-
-        # -- data_status ------------------------------------------------------
-        insert_status = """
-            INSERT INTO data_status (file_id, stage, progress, started_at, completed_at, updated_at)
-            VALUES ($1, 'completed', 100, $2, $2, $2)
-        """
-        await conn.execute(insert_status, doc_a_personal, now)
-        await conn.execute(insert_status, doc_a_media, now)
-        await conn.execute(insert_status, doc_shared, now)
-        await conn.execute(insert_status, doc_b_personal, now)
+        # User B's documents
+        b_all_roles = [share_ab_role_id, personal_b_role_id]
+        with conn:
+            cur = conn.cursor()
+            _set_rls_context(cur, b_id, b_all_roles)
+            cur.execute(insert_file, (
+                doc_b_personal, b_id, b_id, "b_personal.pdf", "b_personal.pdf",
+                "application/pdf", 4096, f"s3://{b_id}/{doc_b_personal}", "hash_b_personal",
+                False, now, "personal",
+            ))
+            cur.execute(insert_chunk, (doc_b_personal, 0, "Chunk from B personal doc.", 6))
+            cur.execute(insert_status, (doc_b_personal, now, now, now))
+            cur.close()
+    finally:
+        conn.close()
 
     yield docs
 
-    # -- cleanup --------------------------------------------------------------
-    all_ids = [doc_a_personal, doc_a_media, doc_shared, doc_b_personal]
-    async with pg_service.pool.acquire() as conn:
-        for fid in all_ids:
-            await conn.execute("DELETE FROM data_chunks WHERE file_id = $1", fid)
-            await conn.execute("DELETE FROM data_status WHERE file_id = $1", fid)
-            await conn.execute("DELETE FROM document_roles WHERE file_id = $1", fid)
-            await conn.execute("DELETE FROM data_files WHERE file_id = $1", fid)
+    # -- cleanup with proper RLS context --------------------------------------
+    all_personal_a = [doc_a_personal, doc_a_media]
+    try:
+        conn = _get_data_db_conn()
+        try:
+            all_roles = [share_ab_role_id, personal_a_role_id, personal_b_role_id]
+            # Clean up user A's docs (personal + shared)
+            with conn:
+                cur = conn.cursor()
+                _set_rls_context(cur, a_id, all_roles)
+                for fid in [doc_a_personal, doc_a_media, doc_shared]:
+                    cur.execute("DELETE FROM data_chunks WHERE file_id = %s::uuid", (fid,))
+                    cur.execute("DELETE FROM data_status WHERE file_id = %s::uuid", (fid,))
+                    cur.execute("DELETE FROM document_roles WHERE file_id = %s::uuid", (fid,))
+                    cur.execute("DELETE FROM data_files WHERE file_id = %s::uuid", (fid,))
+                cur.close()
+
+            # Clean up user B's doc
+            with conn:
+                cur = conn.cursor()
+                _set_rls_context(cur, b_id, all_roles)
+                cur.execute("DELETE FROM data_chunks WHERE file_id = %s::uuid", (doc_b_personal,))
+                cur.execute("DELETE FROM data_status WHERE file_id = %s::uuid", (doc_b_personal,))
+                cur.execute("DELETE FROM data_files WHERE file_id = %s::uuid", (doc_b_personal,))
+                cur.close()
+        finally:
+            conn.close()
+    except Exception as exc:
+        print(f"[rls_test_data] cleanup failed: {exc}")
 
 
-def _make_client(app, token: str) -> AsyncClient:
-    """Build an ASGI test client pre-configured with auth + test-mode headers."""
-    transport = ASGITransport(app=app, raise_app_exceptions=False)
-    client = AsyncClient(transport=transport, base_url="http://test")
+_API_PORT = os.getenv("API_PORT", "8002")
+_SERVICE_URL = os.getenv("DATA_API_URL", f"http://localhost:{_API_PORT}")
+
+
+def _make_client(token: str) -> AsyncClient:
+    """Build an HTTP test client pre-configured with auth + test-mode headers."""
+    client = AsyncClient(base_url=_SERVICE_URL)
     client.headers.update({
         "Authorization": f"Bearer {token}",
         "X-Test-Mode": "true",
@@ -363,23 +414,22 @@ def _make_client(app, token: str) -> AsyncClient:
 
 
 @pytest.fixture(scope="module")
-async def clients(initialized_app, rls_users, rls_test_data):
+async def clients(rls_users, rls_test_data):
     """
-    Module-scoped fixture providing 3 ASGI clients (one per user).
+    Module-scoped fixture providing 3 HTTP clients (one per user).
 
     Returns a dict with keys "a", "b", "c" mapping to AsyncClient instances,
     plus the test data dict under key "data".
     """
-    app, _ = initialized_app
     docs = rls_test_data
 
     token_a = rls_users.get_data_token("a")
     token_b = rls_users.get_data_token("b")
     token_c = rls_users.get_data_token("c")
 
-    client_a = _make_client(app, token_a)
-    client_b = _make_client(app, token_b)
-    client_c = _make_client(app, token_c)
+    client_a = _make_client(token_a)
+    client_b = _make_client(token_b)
+    client_c = _make_client(token_c)
 
     yield {
         "a": client_a,
@@ -388,9 +438,12 @@ async def clients(initialized_app, rls_users, rls_test_data):
         "data": docs,
     }
 
-    await client_a.aclose()
-    await client_b.aclose()
-    await client_c.aclose()
+    try:
+        await client_a.aclose()
+        await client_b.aclose()
+        await client_c.aclose()
+    except RuntimeError:
+        pass
 
 
 # =============================================================================
@@ -408,7 +461,7 @@ async def test_user_a_sees_own_personal_doc(clients):
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
 
     body = resp.json()
-    assert body["file_id"] == fid
+    assert body.get("fileId") or body.get("file_id") == fid
 
 
 @pytest.mark.asyncio

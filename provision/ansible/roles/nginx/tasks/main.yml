@@ -88,6 +88,18 @@
   notify: Reload NGINX
   tags: [nginx, nginx_configure]
 
+- name: Deploy custom error pages to /usr/share/nginx/html
+  copy:
+    src: "errors/{{ item }}"
+    dest: "/usr/share/nginx/html/{{ item }}"
+    mode: "0644"
+    owner: root
+    group: root
+  loop:
+    - 50x.html
+    - 404.html
+  tags: [nginx, nginx_install, nginx_configure]
+
 - name: Deploy placeholder HTML pages
   include_tasks:
     file: placeholders.yml

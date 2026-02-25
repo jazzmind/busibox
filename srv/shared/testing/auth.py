@@ -104,6 +104,96 @@ class AuthTestClient:
         }
     
     # =========================================================================
+    # Direct DB Bootstrap (for Docker / fresh environments)
+    # =========================================================================
+
+    _ADMIN_SCOPES = [
+        "*", "authz.*", "data.*", "search.*", "agent.*",
+        "workflow.*", "web_search.*", "apps.*", "libraries.*", "admin.*",
+    ]
+
+    def _bootstrap_admin_in_authz_db(self) -> None:
+        """
+        Ensure the test user has Admin role in the test_authz database.
+
+        Mirrors the PVT test pattern (srv/authz/tests/integration/test_pvt.py):
+        1. Log in via magic link to get a session JWT (lets authz create the user)
+        2. Extract the actual user_id from the JWT ``sub`` claim
+        3. Connect directly to test_authz and assign the Admin role to that user_id
+
+        Uses synchronous psycopg2 to avoid interfering with pytest-asyncio's
+        session-scoped event loop (asyncio.run() would corrupt it).
+
+        Silently skipped when psycopg2 is not installed or the database is
+        unreachable (e.g. running against a remote environment).
+        """
+        import base64
+        import json
+
+        try:
+            import psycopg2
+        except ImportError:
+            print("[test_utils] DB bootstrap skipped: psycopg2 not installed")
+            return
+
+        # Step 1: get session JWT via magic link (caches it for later use)
+        session_jwt = self._get_session_jwt()
+
+        # Step 2: decode the JWT payload to find the real user_id
+        try:
+            payload_b64 = session_jwt.split(".")[1]
+            payload_b64 += "=" * (4 - len(payload_b64) % 4)
+            claims = json.loads(base64.urlsafe_b64decode(payload_b64))
+            actual_user_id = claims.get("sub")
+            if not actual_user_id:
+                print("[test_utils] DB bootstrap skipped: no 'sub' claim in session JWT")
+                return
+        except Exception as exc:
+            print(f"[test_utils] DB bootstrap skipped (JWT decode: {exc})")
+            return
+
+        # Step 3: assign Admin role in DB (synchronous -- no event loop interference)
+        pg_host = os.getenv("POSTGRES_HOST", "localhost")
+        pg_port = int(os.getenv("POSTGRES_PORT", "5432"))
+        pg_user = os.getenv("TEST_DB_USER", os.getenv("POSTGRES_USER", "busibox_test_user"))
+        pg_pass = os.getenv("TEST_DB_PASSWORD", os.getenv("POSTGRES_PASSWORD", ""))
+        pg_db = os.getenv("AUTHZ_TEST_DB", "test_authz")
+
+        try:
+            conn = psycopg2.connect(
+                host=pg_host, port=pg_port,
+                dbname=pg_db, user=pg_user, password=pg_pass,
+                connect_timeout=10,
+            )
+            conn.autocommit = True
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT id FROM authz_roles WHERE name = 'Admin' LIMIT 1")
+                row = cur.fetchone()
+                if row:
+                    admin_role_id = row[0]
+                else:
+                    cur.execute(
+                        "INSERT INTO authz_roles (name, description, scopes) "
+                        "VALUES ('Admin', 'Full administrative access (test bootstrap)', %s) "
+                        "RETURNING id",
+                        (self._ADMIN_SCOPES,),
+                    )
+                    admin_role_id = cur.fetchone()[0]
+
+                cur.execute(
+                    "INSERT INTO authz_user_roles (user_id, role_id) "
+                    "VALUES (%s::uuid, %s) ON CONFLICT (user_id, role_id) DO NOTHING",
+                    (actual_user_id, admin_role_id),
+                )
+                print(f"[test_utils] Bootstrapped Admin role for user {actual_user_id} in authz DB")
+            finally:
+                cur.close()
+                conn.close()
+        except Exception as exc:
+            print(f"[test_utils] DB bootstrap skipped ({exc.__class__.__name__}: {exc})")
+
+    # =========================================================================
     # User Management
     # =========================================================================
     
@@ -637,6 +727,9 @@ def auth_client():
             # Cleanup happens automatically at session end
     """
     client = AuthTestClient()
+    
+    # Bootstrap test user with Admin role directly in DB (handles Docker/fresh envs)
+    client._bootstrap_admin_in_authz_db()
     
     # Ensure test user exists in the database
     client.ensure_test_user_exists()

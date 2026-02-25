@@ -33,7 +33,7 @@ cd /root/busibox/provision/ansible
 make test-all
 
 # Individual services
-make test-ingest
+make test-data
 make test-search
 make test-agent
 make test-apps
@@ -45,9 +45,9 @@ make verify
 ### Direct Container Testing
 
 ```bash
-# Ingest tests
+# Data tests
 ssh root@10.96.200.206
-ingest-test
+data-test
 
 # Search tests
 ssh root@10.96.200.204

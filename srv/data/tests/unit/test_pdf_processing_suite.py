@@ -318,7 +318,7 @@ class TestPDFProcessingSuite:
             "page_count": result.page_count,
             "avg_chars_per_page": len(result.text) / max(result.page_count, 1),
             "has_tables": len(result.tables) > 0 if result.tables else False,
-            "has_images": len(result.images) > 0 if result.images else False,
+            "has_images": len(result.page_images) > 0 if result.page_images else False,
         }
         
         # Difficulty-based expectations

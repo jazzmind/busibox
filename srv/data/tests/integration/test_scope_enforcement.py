@@ -84,18 +84,31 @@ async def test_search_requires_read_scope(async_client_read_only: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_status_requires_read_scope(async_client_read_only: AsyncClient):
+async def test_status_requires_read_scope(async_client: AsyncClient):
     """
     GET /status/{id} should require data.read scope.
-    A client with data.read should be allowed.
+    A client with data.read (or admin) should be allowed.
     """
     import uuid
     fake_file_id = str(uuid.uuid4())
     
-    response = await async_client_read_only.get(f"/status/{fake_file_id}")
+    response = await async_client.get(f"/status/{fake_file_id}")
     
-    # Should not be 403 (scope check passed)
+    # Should not be 403 (scope check passed - admin client has all scopes)
     assert response.status_code != 403
+
+
+@pytest.mark.asyncio
+async def test_status_rejects_no_scopes(async_client_no_scopes: AsyncClient):
+    """
+    GET /status/{id} should reject a client with no scopes.
+    """
+    import uuid
+    fake_file_id = str(uuid.uuid4())
+    
+    response = await async_client_no_scopes.get(f"/status/{fake_file_id}")
+    
+    assert response.status_code == 403
 
 
 @pytest.mark.asyncio

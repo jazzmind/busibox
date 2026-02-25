@@ -89,7 +89,7 @@ When enabled, requests with this header are routed to a separate test database.
 from busibox_common import TestModeConfig, init_database_router
 
 # Load config from environment
-config = TestModeConfig.from_env("authz")  # or "ingest", "search", "agent"
+config = TestModeConfig.from_env("authz")  # or "data", "search", "agent"
 
 # Initialize router during startup
 init_database_router(
@@ -168,7 +168,7 @@ app.add_middleware(JWTAuthMiddleware, audience="search-api")
 
 # Use scope checking in routes
 @router.post("/upload")
-async def upload(request: Request, _: None = Depends(ScopeChecker("ingest.write"))):
+async def upload(request: Request, _: None = Depends(ScopeChecker("data.write"))):
     user = request.state.user_context
     ...
 
@@ -176,7 +176,7 @@ async def upload(request: Request, _: None = Depends(ScopeChecker("ingest.write"
 client = TokenExchangeClient()
 token = await client.get_token_for_service(
     user_id="user-uuid",
-    target_audience="ingest-api",
+    target_audience="data-api",
 )
 ```
 

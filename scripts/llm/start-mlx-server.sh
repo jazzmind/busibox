@@ -7,6 +7,10 @@
 #   start-mlx-server.sh fast      # Start with fast model
 #   start-mlx-server.sh --stop    # Stop the server
 #   start-mlx-server.sh --status  # Check server status
+#   start-mlx-server.sh --outlines  # Start with Outlines structured output support
+#
+# Environment:
+#   MLX_USE_OUTLINES=1   Enable Outlines-based server for structured output
 #
 
 set -euo pipefail
@@ -156,6 +160,14 @@ start_server_instance() {
         "$mlx_pip" install -q mlx-lm huggingface_hub
     fi
 
+    # Install Outlines if requested and not already present
+    if [[ "${MLX_USE_OUTLINES:-0}" == "1" ]]; then
+        if ! "$mlx_python" -c "import outlines" 2>/dev/null; then
+            info "Installing outlines[mlxlm] into virtual environment..."
+            "$mlx_pip" install -q "outlines[mlxlm]" uvicorn starlette
+        fi
+    fi
+
     # Display banner
     echo ""
     echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════════╗${NC}"
@@ -176,12 +188,23 @@ start_server_instance() {
     # Start server in background using venv python.
     # caffeinate -di prevents macOS from throttling/killing the Metal-based
     # MLX process when the display sleeps (-d = display, -i = idle).
-    nohup caffeinate -di "$mlx_python" -m mlx_lm.server \
-        --model "$model" \
-        --host 0.0.0.0 \
-        --port "$port" \
-        --trust-remote-code \
-        > "$log_file" 2>&1 &
+    if [[ "${MLX_USE_OUTLINES:-0}" == "1" ]]; then
+        local outlines_server="${REPO_ROOT}/config/mlx-outlines-server/server.py"
+        info "Using Outlines-based server (structured output enforcement enabled)"
+        nohup caffeinate -di "$mlx_python" "$outlines_server" \
+            --model "$model" \
+            --host 0.0.0.0 \
+            --port "$port" \
+            --trust-remote-code \
+            > "$log_file" 2>&1 &
+    else
+        nohup caffeinate -di "$mlx_python" -m mlx_lm.server \
+            --model "$model" \
+            --host 0.0.0.0 \
+            --port "$port" \
+            --trust-remote-code \
+            > "$log_file" 2>&1 &
+    fi
     
     echo $! > "$pid_file"
     
@@ -279,6 +302,15 @@ main() {
             ;;
         --dual)
             start_dual_servers
+            ;;
+        --outlines)
+            export MLX_USE_OUTLINES=1
+            local role="${2:-agent}"
+            if [[ "$role" == "--dual" ]]; then
+                start_dual_servers
+            else
+                start_server "$role"
+            fi
             ;;
         fast|agent|frontier|test|default)
             start_server "$action"

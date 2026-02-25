@@ -146,6 +146,12 @@ class Settings(BaseSettings):
         description="Default from address for emails",
     )
 
+    # LLM backend (mlx, vllm, cloud) – set by installer to indicate hardware
+    llm_backend: str = Field(
+        "",
+        description="LLM backend type (mlx, vllm, cloud). Determines whether grammar-level structured output enforcement is available.",
+    )
+
     # CORS
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
 

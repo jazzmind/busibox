@@ -18,13 +18,13 @@ token_client = TokenExchangeClient(
 )
 token = await token_client.get_token_for_service(
     requested_subject=user_id,  # Impersonation!
-    target_audience="ingest-api"
+    target_audience="data-api"
 )
 
 # ✅ CORRECT - Use Zero Trust token exchange
 token = await exchange_token_zero_trust(
     subject_token=user_token,  # User's actual token
-    target_audience="ingest-api",
+    target_audience="data-api",
     user_id=user_id  # For logging only
 )
 ```

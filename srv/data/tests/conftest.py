@@ -37,6 +37,7 @@ if _pg_host:
 import pytest
 import asyncio
 import uuid
+from contextlib import contextmanager
 from unittest.mock import Mock
 from httpx import AsyncClient, ASGITransport
 
@@ -44,6 +45,59 @@ from httpx import AsyncClient, ASGITransport
 from testing.auth import AuthTestClient, auth_client  # noqa: F401 - auth_client for fixture discovery
 from testing.fixtures import require_env
 from testing.database import RLSEnabledPool
+
+
+@contextmanager
+def _suspend_admin_role(auth_client: AuthTestClient):
+    """
+    Temporarily remove ALL Admin role assignments so that scope-enforcement
+    tests can verify 403 behaviour. Restores on exit.
+    """
+    try:
+        import psycopg2
+    except ImportError:
+        yield
+        return
+
+    pg_host = os.getenv("POSTGRES_HOST", "localhost")
+    pg_port = int(os.getenv("POSTGRES_PORT", "5432"))
+    pg_user = os.getenv("TEST_DB_USER", os.getenv("POSTGRES_USER", "busibox_test_user"))
+    pg_pass = os.getenv("TEST_DB_PASSWORD", os.getenv("POSTGRES_PASSWORD", ""))
+    pg_db = os.getenv("AUTHZ_TEST_DB", "test_authz")
+
+    try:
+        conn = psycopg2.connect(
+            host=pg_host, port=pg_port,
+            dbname=pg_db, user=pg_user, password=pg_pass,
+            connect_timeout=5,
+        )
+        conn.autocommit = True
+        cur = conn.cursor()
+        try:
+            # Save existing Admin assignments so we can restore them
+            cur.execute(
+                "SELECT user_id FROM authz_user_roles "
+                "WHERE role_id IN (SELECT id FROM authz_roles WHERE name = 'Admin')"
+            )
+            admin_users = [row[0] for row in cur.fetchall()]
+
+            cur.execute(
+                "DELETE FROM authz_user_roles "
+                "WHERE role_id IN (SELECT id FROM authz_roles WHERE name = 'Admin')"
+            )
+            yield
+        finally:
+            for uid in admin_users:
+                cur.execute(
+                    "INSERT INTO authz_user_roles (user_id, role_id) "
+                    "SELECT %s::uuid, id FROM authz_roles WHERE name = 'Admin' "
+                    "ON CONFLICT DO NOTHING",
+                    (str(uid),),
+                )
+            cur.close()
+            conn.close()
+    except Exception:
+        yield
 
 # Enable pytest plugin for failed test filter generation
 pytest_plugins = ["testing.pytest_failed_filter"]
@@ -77,7 +131,10 @@ async def rls_pool():
     )
     await pool.initialize()
     yield pool
-    await pool.close()
+    try:
+        await pool.close()
+    except RuntimeError:
+        pass
 
 # Now import app modules (they will use the loaded env vars)
 from api.services.minio_service import MinIOService
@@ -206,6 +263,7 @@ def data_full_access_role(auth_client, test_user_id):
 async def initialized_app():
     """
     Session-scoped fixture that initializes the FastAPI app and its services.
+    Only needed for direct DB access (e.g. test_file_with_markdown fixtures).
     """
     from api import main as main_module
     app = main_module.app
@@ -215,26 +273,30 @@ async def initialized_app():
     
     yield app, pg_service
     
-    await pg_service.disconnect()
+    try:
+        await pg_service.disconnect()
+    except RuntimeError:
+        pass
+
+
+_API_PORT = os.getenv("API_PORT", "8002")
+_SERVICE_URL = os.getenv("DATA_API_URL", f"http://localhost:{_API_PORT}")
 
 
 @pytest.fixture
-async def async_client(initialized_app, auth_client, data_full_access_role):
+async def async_client(auth_client, data_full_access_role):
     """
     Async HTTP client for API testing with full data access.
     
     This fixture automatically grants the test user full data permissions
     and cleans them up after the test.
     
-    Includes X-Test-Mode header to route API requests to test database.
+    Makes real HTTP requests to the running data-api service (avoids
+    BaseHTTPMiddleware/asyncpg pool conflicts with ASGITransport).
     """
-    app, _ = initialized_app
-    
-    # Get a fresh token with the newly assigned role
     token = auth_client.get_token(audience="data-api")
     
-    transport = ASGITransport(app=app, raise_app_exceptions=False)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(base_url=_SERVICE_URL, timeout=60.0) as client:
         client.headers.update({
             "Authorization": f"Bearer {token}",
             "X-Test-Mode": "true",
@@ -243,54 +305,44 @@ async def async_client(initialized_app, auth_client, data_full_access_role):
 
 
 @pytest.fixture
-async def async_client_no_auth(initialized_app):
+async def async_client_no_auth():
     """
     Async HTTP client with NO authentication.
     Use this to test that endpoints require auth.
     """
-    app, _ = initialized_app
-    
-    transport = ASGITransport(app=app, raise_app_exceptions=False)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(base_url=_SERVICE_URL) as client:
         yield client
 
 
 @pytest.fixture
-async def async_client_read_only(initialized_app, auth_client, data_read_role):
+async def async_client_read_only(auth_client, data_read_role):
     """
     Async HTTP client with only read scope.
     Use this to test scope enforcement.
-    
-    Includes X-Test-Mode header to route API requests to test database.
     """
-    app, _ = initialized_app
-    
-    token = auth_client.get_token(audience="data-api")
-    
-    transport = ASGITransport(app=app, raise_app_exceptions=False)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        client.headers.update({
-            "Authorization": f"Bearer {token}",
-            "X-Test-Mode": "true",
-        })
-        yield client
+    with _suspend_admin_role(auth_client):
+        token = auth_client.get_token(audience="data-api")
+        
+        async with AsyncClient(base_url=_SERVICE_URL) as client:
+            client.headers.update({
+                "Authorization": f"Bearer {token}",
+                "X-Test-Mode": "true",
+            })
+            yield client
 
 
 @pytest.fixture
-async def async_client_no_scopes(initialized_app, auth_client):
+async def async_client_no_scopes(auth_client):
     """
     Async HTTP client with valid auth but NO scopes.
     Use this to test that scope enforcement is working.
     """
-    app, _ = initialized_app
-    
-    # Get token without any roles assigned (test user has no roles by default)
-    token = auth_client.get_token(audience="data-api")
-    
-    transport = ASGITransport(app=app, raise_app_exceptions=False)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        client.headers.update({"Authorization": f"Bearer {token}"})
-        yield client
+    with _suspend_admin_role(auth_client):
+        token = auth_client.get_token(audience="data-api")
+        
+        async with AsyncClient(base_url=_SERVICE_URL) as client:
+            client.headers.update({"Authorization": f"Bearer {token}"})
+            yield client
 
 
 # ============================================================================

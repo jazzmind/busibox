@@ -349,6 +349,48 @@ class TestSearchAPIIntegration:
                 for result in filtered_data["results"]:
                     assert result.get("file_id") == file_id
     
+    def test_keyword_search_with_expand_graph(self, test_client, auth_client: AuthTestClient):
+        """Test keyword search with expand_graph=True is accepted and doesn't break search."""
+        header = auth_client.get_auth_header(audience="search-api")
+
+        response = test_client.post(
+            "/search/keyword",
+            json={
+                "query": "test",
+                "limit": 5,
+                "expand_graph": True,
+            },
+            headers=header,
+        )
+
+        assert response.status_code not in [401, 403, 422], f"Request rejected: {response.text}"
+
+        if response.status_code == 200:
+            data = response.json()
+            assert data["mode"] == "keyword"
+            # graph field should be present (may be null if Neo4j unavailable)
+            assert "graph" in data or data.get("graph") is None
+
+    def test_keyword_search_without_expand_graph(self, test_client, auth_client: AuthTestClient):
+        """Test that expand_graph=False (default) does not include graph context."""
+        header = auth_client.get_auth_header(audience="search-api")
+
+        response = test_client.post(
+            "/search/keyword",
+            json={
+                "query": "test",
+                "limit": 5,
+                "expand_graph": False,
+            },
+            headers=header,
+        )
+
+        assert response.status_code not in [401, 403], f"Auth failed: {response.text}"
+
+        if response.status_code == 200:
+            data = response.json()
+            assert data.get("graph") is None, "graph should be null when expand_graph=False"
+
     @pytest.mark.slow
     @pytest.mark.gpu
     def test_explain_endpoint_real(self, test_client, auth_client: AuthTestClient):

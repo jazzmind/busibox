@@ -69,8 +69,8 @@ More content here."""
         file_id = "test-file-123"
         html, toc = self.renderer.render(markdown, file_id=file_id)
         
-        assert f'/api/files/{file_id}/images/0' in html
-        assert f'/api/files/{file_id}/images/1' in html
+        assert f'/api/documents/{file_id}/images/0' in html
+        assert f'/api/documents/{file_id}/images/1' in html
 
     def test_html_table_styling(self):
         """Test that tables have proper CSS classes"""

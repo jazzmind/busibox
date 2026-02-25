@@ -150,7 +150,7 @@ COPY --from=build-busibox-agents /build/busibox-agents/next.config.ts ./next.con
 # Copy nginx configuration for bundled mode (nginx in same container as apps)
 # This config uses localhost for frontend apps, Docker DNS for backend APIs
 COPY config/nginx-bundled.conf /etc/nginx/nginx.conf
-# Don't copy external site configs - bundled config has everything inline
+COPY config/nginx-errors/50x.html /usr/share/nginx/html/50x.html
 
 # Copy SSL certificates (self-signed will be generated if not present)
 COPY ssl/ /etc/nginx/ssl/

@@ -37,7 +37,7 @@ See `.cursor/rules/010-make-commands.md` for complete details.
 make install SERVICE=authz
 
 # Deploy multiple services
-make install SERVICE=authz,agent,ingest
+make install SERVICE=authz,agent,data
 
 # Deploy service groups
 make install SERVICE=apis            # All API services
@@ -66,7 +66,7 @@ make manage SERVICE=authz ACTION=redeploy
 
 **Service Reference**:
 - **Infrastructure**: `postgres`, `redis`, `minio`, `milvus`
-- **APIs**: `authz`, `agent`, `ingest`, `search`, `deploy`, `docs`, `embedding`
+- **APIs**: `authz`, `agent`, `data`, `search`, `deploy`, `docs`, `embedding`
 - **LLM**: `litellm`, `ollama`, `vllm`
 - **Frontend**: `proxy`, `core-apps` (with `nginx` alias support)
 - **Groups**: `infrastructure`, `apis`, `llm`, `frontend`, `all`

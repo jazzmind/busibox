@@ -50,7 +50,7 @@ make test-docker SERVICE=all
 \`\`\`bash
 # Run specific service tests
 make test-docker SERVICE=authz
-make test-docker SERVICE=ingest
+make test-docker SERVICE=data
 make test-docker SERVICE=search
 make test-docker SERVICE=agent
 

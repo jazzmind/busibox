@@ -1201,6 +1201,7 @@ services:
       - ./config/nginx-local.conf:/etc/nginx/nginx.conf:ro
       - ./config/nginx-sites:/etc/nginx/conf.d:ro
       - ./config/nginx-sites/apps:/etc/nginx/conf.d/apps:rw  # Dynamic app configs (writable)
+      - ./config/nginx-errors/50x.html:/usr/share/nginx/html/50x.html:ro
       - ./ssl:/etc/nginx/ssl:rw
       - ./provision/docker/proxy-entrypoint.sh:/usr/local/bin/proxy-entrypoint.sh:ro
     extra_hosts:

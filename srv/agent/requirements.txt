@@ -28,6 +28,4 @@ neo4j>=5.0.0,<6.0.0
 greenlet>=3.0.0
 croniter>=2.0.0
 websockets>=13.0
-
-
-
+jsonschema>=4.0.0

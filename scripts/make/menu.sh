@@ -3226,7 +3226,7 @@ handle_test_data() {
                         run_docker_test "data"
                         ;;
                     proxmox)
-                        bash "${SCRIPT_DIR}/test.sh" services ingest
+                        bash "${SCRIPT_DIR}/test.sh" services data
                         ;;
                 esac
                 pause

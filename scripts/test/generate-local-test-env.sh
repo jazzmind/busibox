@@ -267,7 +267,7 @@ generate_env_file() {
     #   - agent: "agent" database
     #   - bridge: does not require DB by default; authz used for consistency
     case "$service" in
-        ingest|search)
+        data|search)
             POSTGRES_DB_FOR_SERVICE="data"
             ;;
         authz)

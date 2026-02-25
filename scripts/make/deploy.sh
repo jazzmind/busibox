@@ -1180,7 +1180,7 @@ docker_deploy_menu() {
         echo ""
         menu "Docker Deployment - Local Development" \
             "All Services" \
-            "All API Services (authz, ingest+worker, search, agent)" \
+            "All API Services (authz, data+worker, search, agent)" \
             "All Data Services (postgres, redis, minio, milvus)" \
             "Individual Services" \
             "Clean Up (remove containers & volumes)" \

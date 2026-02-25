@@ -52,7 +52,7 @@ TEST_SUITES = [
         "type": "all",
         "framework": "pytest",
         "makeArgs": "SERVICE=data",
-        "description": "Data/ingest service tests (unit, integration, pvt)",
+        "description": "Data service tests (unit, integration, pvt)",
         "estimatedDuration": 180,
     },
     {

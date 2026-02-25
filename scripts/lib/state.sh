@@ -461,7 +461,7 @@ get_failed_services() {
     if [[ "$filter" == "services_only" ]]; then
         # Only return core service tests without subtests (authz, data, search, agent)
         # Exclude entries with colons (like data:unit, agent:integration)
-        echo "$results" | grep -E "^(authz|ingest|search|agent)$" | grep -v ":" | tr '\n' ' '
+        echo "$results" | grep -E "^(authz|data|search|agent)$" | grep -v ":" | tr '\n' ' '
     else
         echo "$results" | tr '\n' ' '
     fi
@@ -480,7 +480,7 @@ get_passed_services() {
     if [[ "$filter" == "services_only" ]]; then
         # Only return core service tests without subtests (authz, data, search, agent)
         # Exclude entries with colons (like data:unit, agent:integration)
-        echo "$results" | grep -E "^(authz|ingest|search|agent)$" | grep -v ":" | tr '\n' ' '
+        echo "$results" | grep -E "^(authz|data|search|agent)$" | grep -v ":" | tr '\n' ' '
     else
         echo "$results" | tr '\n' ' '
     fi

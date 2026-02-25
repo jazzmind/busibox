@@ -16,7 +16,7 @@ docs/
 │   ├── architecture/      # System design (numbered 00-09 for core docs)
 │   ├── agent-api/         # Agent API guides
 │   ├── auth-api/          # Auth API guides
-│   ├── ingest-api/        # Ingest API guides
+│   ├── data-api/          # Data API guides
 │   ├── search-api/        # Search API guides
 │   ├── reference/         # Quick reference, commands, env vars
 │   ├── security/          # Security plans and procedures

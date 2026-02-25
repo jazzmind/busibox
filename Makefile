@@ -431,7 +431,7 @@ ifndef SERVICE
 	@echo "SERVICES (Python APIs — run via pytest inside Docker container):"
 	@echo "  authz      Authorization service (srv/authz)"
 	@echo "  agent      Agent/chat service (srv/agent)"
-	@echo "  data       Data/ingest service (srv/data)"
+	@echo "  data       Data service (srv/data)"
 	@echo "  search     Search service (srv/search)"
 	@echo "  bridge     Bridge service (srv/bridge)"
 	@echo ""
