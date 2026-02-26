@@ -45,10 +45,12 @@ class CreateLibraryRequest(BaseModel):
     """Request body for creating a library."""
     id: Optional[str] = Field(None, description="Optional explicit library ID (for syncing from Busibox Portal)")
     name: str = Field(..., description="Library name")
+    description: Optional[str] = Field(None, description="Library description")
     is_personal: bool = Field(default=False, alias="isPersonal", description="Whether this is a personal library")
     user_id: Optional[str] = Field(None, alias="userId", description="User ID (for personal libraries from Busibox Portal sync)")
     library_type: Optional[str] = Field(None, alias="libraryType", description="Personal library type (DOCS, RESEARCH, TASKS)")
     created_by: Optional[str] = Field(None, alias="createdBy", description="Creator user ID (from Busibox Portal sync)")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Library metadata (keywords, classification rules, etc.)")
     
     class Config:
         populate_by_name = True  # Allow both snake_case and camelCase
@@ -57,15 +59,19 @@ class CreateLibraryRequest(BaseModel):
 class UpdateLibraryRequest(BaseModel):
     """Request body for updating a library."""
     name: Optional[str] = Field(None, description="New library name")
+    description: Optional[str] = Field(None, description="New library description")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Updated library metadata (keywords, classification rules, etc.)")
 
 
 class LibraryResponse(BaseModel):
     """Library response model."""
     id: str
     name: str
+    description: Optional[str]
     isPersonal: bool
     userId: Optional[str]
     libraryType: Optional[str]
+    metadata: Optional[Dict[str, Any]]
     createdBy: str
     deletedAt: Optional[str]
     createdAt: Optional[str]
@@ -290,6 +296,8 @@ async def create_library(
                 user_id=body.user_id,
                 library_type=body.library_type,
                 library_id=body.id,
+                description=body.description,
+                metadata=body.metadata,
             )
         elif body.is_personal:
             if body.library_type == PersonalLibraryTypes.CUSTOM:
@@ -302,6 +310,8 @@ async def create_library(
                 name=body.name,
                 created_by=user_id,
                 is_personal=False,
+                description=body.description,
+                metadata=body.metadata,
             )
         
         return JSONResponse(
@@ -536,7 +546,12 @@ async def update_library(
                 content={"error": "Cannot modify another user's personal library"}
             )
         
-        library = await library_service.update_library(library_id, name=body.name)
+        library = await library_service.update_library(
+            library_id,
+            name=body.name,
+            description=body.description,
+            metadata=body.metadata,
+        )
         
         return JSONResponse(
             status_code=http_status.HTTP_200_OK,
@@ -558,15 +573,21 @@ async def delete_library(
     request: Request,
     library_id: str,
     hard_delete: bool = Query(False, description="Permanently delete instead of soft delete"),
+    document_action: str = Query("orphan", description="What to do with documents: orphan, move, delete"),
+    target_library_id: Optional[str] = Query(None, alias="targetLibraryId", description="Target library ID when document_action=move"),
     _: dict = Depends(require_data_write),
 ):
     """
     Delete a library.
     
     By default, performs a soft delete (sets deleted_at timestamp).
-    Documents in the library are NOT deleted - they become orphaned.
     
-    Use hard_delete=true to permanently delete the library.
+    document_action controls what happens to documents:
+    - "orphan": Documents keep their library_id but the library is soft-deleted (legacy default)
+    - "move": Move all documents to target_library_id
+    - "delete": Soft-delete all documents in the library
+    
+    Use hard_delete=true to permanently delete the library record.
     """
     user_id = getattr(request.state, "user_id", None)
     if not user_id:
@@ -579,6 +600,22 @@ async def delete_library(
     lib_uuid, error_response = validate_uuid(library_id, "Library ID")
     if error_response:
         return error_response
+    
+    if document_action not in ("orphan", "move", "delete"):
+        return JSONResponse(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            content={"error": "document_action must be one of: orphan, move, delete"}
+        )
+    
+    if document_action == "move":
+        if not target_library_id:
+            return JSONResponse(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                content={"error": "targetLibraryId is required when document_action=move"}
+            )
+        target_uuid, target_error = validate_uuid(target_library_id, "Target Library ID")
+        if target_error:
+            return target_error
     
     try:
         library_service = await get_library_service(request)
@@ -605,12 +642,26 @@ async def delete_library(
                 content={"error": "Cannot delete default personal libraries (Personal, Research, Tasks, Media). Create a custom library to organize documents."}
             )
         
-        deleted = await library_service.delete_library(library_id, soft_delete=not hard_delete)
+        # Validate target library exists when moving
+        if document_action == "move" and target_library_id:
+            target = await library_service.get_library_by_id(target_library_id, user_id)
+            if not target:
+                return JSONResponse(
+                    status_code=http_status.HTTP_404_NOT_FOUND,
+                    content={"error": "Target library not found"}
+                )
+        
+        deleted = await library_service.delete_library(
+            library_id,
+            soft_delete=not hard_delete,
+            document_action=document_action,
+            target_library_id=target_library_id,
+        )
         
         if deleted:
             return JSONResponse(
                 status_code=http_status.HTTP_200_OK,
-                content={"message": "Library deleted", "id": library_id}
+                content={"message": "Library deleted", "id": library_id, "documentAction": document_action}
             )
         else:
             return JSONResponse(

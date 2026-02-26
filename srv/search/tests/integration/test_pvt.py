@@ -185,8 +185,8 @@ class TestPVTDependencies:
         import asyncpg
         
         postgres_port = int(os.getenv("POSTGRES_PORT", "5432"))
-        postgres_db = os.getenv("POSTGRES_DB", "busibox")
-        postgres_user = os.getenv("POSTGRES_USER", "busibox_user")
+        postgres_db = os.getenv("POSTGRES_DB", "test_files")
+        postgres_user = os.getenv("POSTGRES_USER", "busibox_test_user")
         
         conn = await asyncpg.connect(
             host=host,

@@ -33,7 +33,7 @@ AUTH_JWKS_URL = os.getenv("AUTH_JWKS_URL", "")
 
 # Dependencies - REQUIRED
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "")
-DATABASE_URL = os.getenv("DATABASE_URL", "")
+DATABASE_URL = os.getenv("TEST_DATABASE_URL", os.getenv("DATABASE_URL", ""))
 
 
 def require_env(var_name: str, value: str) -> str:

@@ -59,8 +59,8 @@ class TestModeConfig:
         if self.service_test_db_names is None:
             self.service_test_db_names = {
                 "authz": "test_authz",
-                "data": "test_data",
-                "search": "test_data",
+                "data": "test_files",
+                "search": "test_files",
                 "agent": "test_agent",
             }
     
@@ -82,8 +82,8 @@ class TestModeConfig:
         # Get default test DB name for this service
         default_test_db = {
             "authz": "test_authz",
-            "data": "test_data",
-            "search": "test_data",
+            "data": "test_files",
+            "search": "test_files",
             "agent": "test_agent",
         }.get(service_name, f"test_{service_name}")
         

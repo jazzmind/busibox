@@ -235,12 +235,10 @@ class IngestWorker:
     def _run_schema_migrations(self):
         """Run idempotent schema migrations on startup via sync psycopg2 connection."""
         try:
-            from schema import get_data_schema
-            schema = get_data_schema()
+            from schema import apply_schema_sync
             conn = self.postgres_service._get_connection()
             try:
-                schema.apply_sync(conn)
-                logger.info("Schema migrations applied by worker")
+                apply_schema_sync(conn)
             finally:
                 self.postgres_service._return_connection(conn)
         except Exception as e:
@@ -660,6 +658,223 @@ class IngestWorker:
             processing_time_seconds=processing_time,
         )
     
+    def _check_library_classification(
+        self,
+        file_id: str,
+        user_id: str,
+    ):
+        """
+        Check if the completed document matches classification rules on any library.
+        
+        For personal libraries: auto-move the document if it matches.
+        For shared libraries: store suggestions in document metadata.
+        
+        This is non-blocking -- failures do not affect document processing.
+        """
+        try:
+            conn = self.postgres_service._get_connection(self._current_rls_context)
+            try:
+                with conn.cursor() as cur:
+                    # Get the document's classification info
+                    cur.execute("""
+                        SELECT file_id, library_id, extracted_keywords, document_type,
+                               classification_confidence, user_id
+                        FROM data_files WHERE file_id = %s
+                    """, (file_id,))
+                    doc = cur.fetchone()
+            finally:
+                self.postgres_service._return_connection(conn)
+            
+            if not doc:
+                return
+            
+            doc_library_id = str(doc[1]) if doc[1] else None
+            doc_keywords = list(doc[2]) if doc[2] else []
+            doc_type = doc[3]
+            doc_confidence = doc[4] or 0.0
+            doc_user_id = str(doc[5]) if doc[5] else user_id
+            
+            if not doc_keywords and not doc_type:
+                return
+            
+            doc_keywords_lower = {kw.lower() for kw in doc_keywords}
+            
+            # Fetch libraries with classification config (rules or keywords)
+            conn = self.postgres_service._get_connection(self._current_rls_context)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT id, name, is_personal, user_id, metadata
+                        FROM libraries
+                        WHERE deleted_at IS NULL
+                          AND (
+                            (metadata->'classificationRules' IS NOT NULL
+                             AND jsonb_array_length(COALESCE(metadata->'classificationRules', '[]'::jsonb)) > 0)
+                            OR
+                            (metadata->'keywords' IS NOT NULL
+                             AND jsonb_array_length(COALESCE(metadata->'keywords', '[]'::jsonb)) > 0)
+                          )
+                          AND (is_personal = false OR (is_personal = true AND user_id = %s::uuid))
+                    """, (doc_user_id,))
+                    candidate_libraries = cur.fetchall()
+            finally:
+                self.postgres_service._return_connection(conn)
+            
+            if not candidate_libraries:
+                return
+            
+            suggestions = []
+            moved = False
+            
+            for lib_row in candidate_libraries:
+                lib_id = str(lib_row[0])
+                lib_name = lib_row[1]
+                lib_is_personal = lib_row[2]
+                lib_metadata = lib_row[4] if lib_row[4] else {}
+                
+                if isinstance(lib_metadata, str):
+                    lib_metadata = json.loads(lib_metadata)
+                
+                # Skip the library the document is already in
+                if lib_id == doc_library_id:
+                    continue
+                
+                rules = lib_metadata.get("classificationRules", [])
+                lib_keywords_list = [kw.lower() for kw in lib_metadata.get("keywords", [])]
+                lib_keywords = set(lib_keywords_list)
+                
+                # Simple mode: keywords exist but no rules -- synthesize an implicit suggest rule
+                if not rules and lib_keywords_list:
+                    rules = [{
+                        "keywords": lib_keywords_list,
+                        "documentTypes": [],
+                        "action": "auto_move" if lib_is_personal else "suggest",
+                        "minConfidence": 0.3,
+                    }]
+                
+                best_score = 0.0
+                matched_keywords = set()
+                best_action = "copy"
+                
+                for rule in rules:
+                    rule_keywords = {kw.lower() for kw in rule.get("keywords", [])}
+                    rule_doc_types = [dt.lower() for dt in rule.get("documentTypes", [])]
+                    rule_min_confidence = rule.get("minConfidence", 0.3)
+                    rule_action = rule.get("action", "copy")
+                    
+                    # Check confidence threshold
+                    if doc_confidence < rule_min_confidence:
+                        continue
+                    
+                    # Score: keyword overlap
+                    keyword_matches = doc_keywords_lower & rule_keywords
+                    lib_keyword_matches = doc_keywords_lower & lib_keywords
+                    all_matches = keyword_matches | lib_keyword_matches
+                    
+                    if not all_matches and rule_doc_types:
+                        # No keyword match -- check doc type
+                        if doc_type and doc_type.lower() in rule_doc_types:
+                            all_matches = {doc_type.lower()}
+                    
+                    if not all_matches:
+                        continue
+                    
+                    # Compute match score
+                    total_rule_keywords = len(rule_keywords | lib_keywords) or 1
+                    score = len(all_matches) / total_rule_keywords
+                    
+                    if doc_type and rule_doc_types and doc_type.lower() in rule_doc_types:
+                        score = min(score + 0.2, 1.0)
+                    
+                    if score > best_score:
+                        best_score = score
+                        matched_keywords = all_matches
+                        best_action = rule_action
+                
+                if best_score > 0 and matched_keywords:
+                    if lib_is_personal and best_action == "auto_move" and not moved:
+                        # Auto-move for personal libraries
+                        try:
+                            conn = self.postgres_service._get_connection(self._current_rls_context)
+                            try:
+                                with conn.cursor() as cur:
+                                    cur.execute("""
+                                        UPDATE data_files
+                                        SET library_id = %s::uuid, updated_at = NOW()
+                                        WHERE file_id = %s
+                                    """, (lib_id, file_id))
+                                    conn.commit()
+                            finally:
+                                self.postgres_service._return_connection(conn)
+                            
+                            moved = True
+                            logger.info(
+                                "Auto-moved document to personal library",
+                                file_id=file_id,
+                                from_library=doc_library_id,
+                                to_library=lib_id,
+                                to_library_name=lib_name,
+                                match_score=best_score,
+                                matched_keywords=list(matched_keywords),
+                            )
+                        except Exception as move_err:
+                            logger.error(
+                                "Failed to auto-move document",
+                                file_id=file_id,
+                                target_library=lib_id,
+                                error=str(move_err),
+                            )
+                    else:
+                        # Store as suggestion for shared libraries (or if not auto_move)
+                        suggestions.append({
+                            "libraryId": lib_id,
+                            "libraryName": lib_name,
+                            "matchScore": round(best_score, 2),
+                            "matchedKeywords": sorted(matched_keywords),
+                            "suggestedAction": best_action,
+                        })
+            
+            # Store suggestions in document metadata if any
+            if suggestions:
+                # Sort by score descending
+                suggestions.sort(key=lambda s: s["matchScore"], reverse=True)
+                
+                try:
+                    conn = self.postgres_service._get_connection(self._current_rls_context)
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute("""
+                                UPDATE data_files
+                                SET metadata = COALESCE(metadata, '{}'::jsonb)
+                                    || jsonb_build_object('classificationSuggestions', %s::jsonb),
+                                    updated_at = NOW()
+                                WHERE file_id = %s
+                            """, (json.dumps(suggestions), file_id))
+                            conn.commit()
+                    finally:
+                        self.postgres_service._return_connection(conn)
+                    
+                    logger.info(
+                        "Stored classification suggestions",
+                        file_id=file_id,
+                        suggestion_count=len(suggestions),
+                        top_library=suggestions[0]["libraryName"] if suggestions else None,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to store classification suggestions",
+                        file_id=file_id,
+                        error=str(e),
+                    )
+        
+        except Exception as e:
+            logger.error(
+                "Library classification check failed (non-fatal)",
+                file_id=file_id,
+                error=str(e),
+                exc_info=True,
+            )
+
     def _check_library_triggers(
         self,
         file_id: str,
@@ -2708,7 +2923,13 @@ class IngestWorker:
                 multi_flow_enabled=processing_config.get("multi_flow_enabled", False) if processing_config else False,
             )
             
-            # Stage 9: Check library triggers (non-blocking)
+            # Stage 9a: Check library classification rules (non-blocking)
+            self._check_library_classification(
+                file_id=file_id,
+                user_id=user_id,
+            )
+            
+            # Stage 9b: Check library triggers (non-blocking)
             self._check_library_triggers(
                 file_id=file_id,
                 user_id=user_id,
@@ -2873,6 +3094,13 @@ class IngestWorker:
                 message_id = msg_info['message_id']
                 idle_time_ms = msg_info['time_since_delivered']
                 times_delivered = int(msg_info.get("times_delivered", 0))
+                
+                logger.info(
+                    "Inspecting pending message",
+                    message_id=message_id,
+                    idle_time_seconds=round(idle_time_ms / 1000, 1),
+                    times_delivered=times_delivered,
+                )
 
                 # Dead-letter poison-pill jobs that have failed too many times.
                 if times_delivered > 5:

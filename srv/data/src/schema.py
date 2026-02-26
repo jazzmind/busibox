@@ -119,14 +119,15 @@ def get_data_schema() -> SchemaManager:
         CREATE TABLE IF NOT EXISTS libraries (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             name VARCHAR(255) NOT NULL,
+            description TEXT,
             is_personal BOOLEAN DEFAULT false,
             user_id UUID,
             library_type VARCHAR(20),
+            metadata JSONB DEFAULT '{}',
             created_by UUID NOT NULL,
             deleted_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT NOW(),
-            updated_at TIMESTAMP DEFAULT NOW(),
-            UNIQUE(user_id, library_type)
+            updated_at TIMESTAMP DEFAULT NOW()
         )
     """)
     
@@ -677,6 +678,58 @@ def get_data_schema() -> SchemaManager:
         END $$;
     """)
     
+    # --------------------------------------------------------------------------
+    # libraries migrations
+    # --------------------------------------------------------------------------
+    
+    # description column on libraries
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'libraries' AND column_name = 'description'
+            ) THEN
+                ALTER TABLE libraries ADD COLUMN description TEXT;
+            END IF;
+        END $$;
+    """)
+    
+    # metadata column on libraries
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'libraries' AND column_name = 'metadata'
+            ) THEN
+                ALTER TABLE libraries ADD COLUMN metadata JSONB DEFAULT '{}';
+            END IF;
+        END $$;
+    """)
+    
+    # Replace blanket UNIQUE(user_id, library_type) with partial unique index
+    # that only enforces uniqueness for fixed personal library types (not CUSTOM).
+    # CUSTOM libraries should allow multiple per user.
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'libraries_user_id_library_type_key'
+            ) THEN
+                ALTER TABLE libraries DROP CONSTRAINT libraries_user_id_library_type_key;
+            END IF;
+        END $$;
+    """)
+    schema.add_index("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_libraries_user_type_fixed
+        ON libraries (user_id, library_type)
+        WHERE library_type IS NOT NULL
+          AND library_type != 'CUSTOM'
+          AND deleted_at IS NULL
+    """)
+    
     # ==========================================================================
     # Indexes
     # ==========================================================================
@@ -728,6 +781,7 @@ def get_data_schema() -> SchemaManager:
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_libraries_created_by ON libraries(created_by)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_libraries_deleted_at ON libraries(deleted_at)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_libraries_type ON libraries(library_type)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_libraries_metadata ON libraries USING GIN (metadata) WHERE metadata != '{}'::jsonb")
     
     # library_tag_cache indexes
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_library_tag_cache_library ON library_tag_cache(library_id)")
@@ -1075,3 +1129,51 @@ def get_data_schema() -> SchemaManager:
     schema.add_function("GRANT SELECT, INSERT, UPDATE, DELETE ON library_triggers TO busibox_user")
     
     return schema
+
+
+def apply_schema_sync(conn) -> None:
+    """
+    Apply the full data schema idempotently using a psycopg2 connection.
+    
+    This is the sync equivalent of SchemaManager.apply(), used by the
+    data-worker which runs psycopg2 (not asyncpg). Lives here rather than
+    in busibox_common so it's always up-to-date via the volume mount.
+    
+    Each statement is committed independently so a failure in one (e.g. a
+    GRANT on a missing role) doesn't rollback prior work (e.g. migrations).
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+    
+    schema = get_data_schema()
+    
+    # SchemaManager stores SQL in categorised lists (busibox_common)
+    # or a flat _sql_statements list (inline fallback).
+    all_sql: list[str] = []
+    if hasattr(schema, "_sql_statements"):
+        all_sql = schema._sql_statements
+    else:
+        for ext in getattr(schema, "_extensions", []):
+            all_sql.append(f'CREATE EXTENSION IF NOT EXISTS "{ext}";')
+        all_sql.extend(getattr(schema, "_tables", []))
+        all_sql.extend(getattr(schema, "_migrations", []))
+        all_sql.extend(getattr(schema, "_indexes", []))
+        all_sql.extend(getattr(schema, "_rls_policies", []))
+        all_sql.extend(getattr(schema, "_functions", []))
+    
+    applied = 0
+    with conn.cursor() as cur:
+        for sql in all_sql:
+            try:
+                cur.execute(sql)
+                conn.commit()
+                applied += 1
+            except Exception as e:
+                conn.rollback()
+                error_str = str(e).lower()
+                if "already exists" in error_str or "does not exist" in error_str:
+                    applied += 1
+                else:
+                    _logger.error("Schema statement failed: %s", str(e))
+                    raise
+    _logger.info("Schema applied (sync): %d/%d statements", applied, len(all_sql))
