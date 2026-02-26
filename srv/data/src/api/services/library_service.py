@@ -124,8 +124,8 @@ class LibraryService:
             # First, try to find existing library
             library = await conn.fetchrow(
                 """
-                SELECT id, name, is_personal, user_id, library_type, 
-                       created_by, deleted_at, created_at, updated_at
+                SELECT id, name, description, is_personal, user_id, library_type, 
+                       metadata, created_by, deleted_at, created_at, updated_at
                 FROM libraries
                 WHERE user_id = $1 
                   AND library_type = $2 
@@ -149,8 +149,8 @@ class LibraryService:
             if library_type == PersonalLibraryTypes.DOCS:
                 legacy_library = await conn.fetchrow(
                     """
-                    SELECT id, name, is_personal, user_id, library_type,
-                           created_by, deleted_at, created_at, updated_at
+                    SELECT id, name, description, is_personal, user_id, library_type,
+                           metadata, created_by, deleted_at, created_at, updated_at
                     FROM libraries
                     WHERE user_id = $1
                       AND library_type IS NULL
@@ -180,8 +180,8 @@ class LibraryService:
                     # Re-fetch to get updated record
                     library = await conn.fetchrow(
                         """
-                        SELECT id, name, is_personal, user_id, library_type,
-                               created_by, deleted_at, created_at, updated_at
+                        SELECT id, name, description, is_personal, user_id, library_type,
+                               metadata, created_by, deleted_at, created_at, updated_at
                         FROM libraries
                         WHERE id = $1
                         """,
@@ -215,8 +215,8 @@ class LibraryService:
             # Fetch and return the created library
             library = await conn.fetchrow(
                 """
-                SELECT id, name, is_personal, user_id, library_type,
-                       created_by, deleted_at, created_at, updated_at
+                SELECT id, name, description, is_personal, user_id, library_type,
+                       metadata, created_by, deleted_at, created_at, updated_at
                 FROM libraries
                 WHERE id = $1
                 """,
@@ -285,8 +285,8 @@ class LibraryService:
         async with self.pool.acquire() as conn:
             library = await conn.fetchrow(
                 """
-                SELECT id, name, is_personal, user_id, library_type,
-                       created_by, deleted_at, created_at, updated_at
+                SELECT id, name, description, is_personal, user_id, library_type,
+                       metadata, created_by, deleted_at, created_at, updated_at
                 FROM libraries
                 WHERE LOWER(name) = LOWER($1)
                   AND deleted_at IS NULL
@@ -321,8 +321,8 @@ class LibraryService:
         async with self.pool.acquire() as conn:
             library = await conn.fetchrow(
                 """
-                SELECT id, name, is_personal, user_id, library_type,
-                       created_by, deleted_at, created_at, updated_at
+                SELECT id, name, description, is_personal, user_id, library_type,
+                       metadata, created_by, deleted_at, created_at, updated_at
                 FROM libraries
                 WHERE id = $1 AND deleted_at IS NULL
                 """,
@@ -368,8 +368,8 @@ class LibraryService:
             if include_shared:
                 libraries = await conn.fetch(
                     f"""
-                    SELECT id, name, is_personal, user_id, library_type,
-                           created_by, deleted_at, created_at, updated_at
+                    SELECT id, name, description, is_personal, user_id, library_type,
+                           metadata, created_by, deleted_at, created_at, updated_at
                     FROM libraries
                     WHERE ((is_personal = true AND user_id = $1)
                        OR is_personal = false)
@@ -381,8 +381,8 @@ class LibraryService:
             else:
                 libraries = await conn.fetch(
                     f"""
-                    SELECT id, name, is_personal, user_id, library_type,
-                           created_by, deleted_at, created_at, updated_at
+                    SELECT id, name, description, is_personal, user_id, library_type,
+                           metadata, created_by, deleted_at, created_at, updated_at
                     FROM libraries
                     WHERE is_personal = true 
                       AND user_id = $1
@@ -402,6 +402,8 @@ class LibraryService:
         user_id: Optional[str] = None,
         library_type: Optional[str] = None,
         library_id: Optional[str] = None,
+        description: Optional[str] = None,
+        metadata: Optional[Dict] = None,
     ) -> Dict:
         """
         Create a new library.
@@ -413,14 +415,19 @@ class LibraryService:
             user_id: Owner user ID (for personal libraries)
             library_type: Type of personal library (DOCS, RESEARCH, TASKS)
             library_id: Optional explicit library ID (for syncing from Busibox Portal)
+            description: Optional library description
+            metadata: Optional library metadata (keywords, classification rules, etc.)
             
         Returns:
             Created library record
         """
+        import json as _json
+        
         # Use explicit ID if provided, otherwise generate new one
         lib_uuid = uuid.UUID(library_id) if library_id else uuid.uuid4()
         created_by_uuid = uuid.UUID(created_by)
         user_uuid = uuid.UUID(user_id) if user_id else None
+        metadata_json = _json.dumps(metadata) if metadata else '{}'
         
         async with self.pool.acquire() as conn:
             # Check if library already exists (for sync operations)
@@ -437,8 +444,8 @@ class LibraryService:
                     # Return the existing library
                     library = await conn.fetchrow(
                         """
-                        SELECT id, name, is_personal, user_id, library_type,
-                               created_by, deleted_at, created_at, updated_at
+                        SELECT id, name, description, is_personal, user_id, library_type,
+                               metadata, created_by, deleted_at, created_at, updated_at
                         FROM libraries
                         WHERE id = $1
                         """,
@@ -448,21 +455,24 @@ class LibraryService:
             
             await conn.execute(
                 """
-                INSERT INTO libraries (id, name, is_personal, user_id, library_type, created_by, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+                INSERT INTO libraries (id, name, description, is_personal, user_id, library_type,
+                                       metadata, created_by, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, NOW(), NOW())
                 """,
                 lib_uuid,
                 name,
+                description,
                 is_personal,
                 user_uuid,
                 library_type,
+                metadata_json,
                 created_by_uuid,
             )
             
             library = await conn.fetchrow(
                 """
-                SELECT id, name, is_personal, user_id, library_type,
-                       created_by, deleted_at, created_at, updated_at
+                SELECT id, name, description, is_personal, user_id, library_type,
+                       metadata, created_by, deleted_at, created_at, updated_at
                 FROM libraries
                 WHERE id = $1
                 """,
@@ -483,6 +493,8 @@ class LibraryService:
         self,
         library_id: str,
         name: Optional[str] = None,
+        description: Optional[str] = None,
+        metadata: Optional[Dict] = None,
     ) -> Optional[Dict]:
         """
         Update a library.
@@ -490,10 +502,14 @@ class LibraryService:
         Args:
             library_id: The library's UUID
             name: New name (optional)
+            description: New description (optional)
+            metadata: Updated metadata (optional, replaces existing)
             
         Returns:
             Updated library record, or None if not found
         """
+        import json as _json
+        
         lib_uuid = uuid.UUID(library_id)
         
         async with self.pool.acquire() as conn:
@@ -506,21 +522,36 @@ class LibraryService:
             if not existing:
                 return None
             
-            if name:
-                await conn.execute(
-                    """
-                    UPDATE libraries
-                    SET name = $1, updated_at = NOW()
-                    WHERE id = $2
-                    """,
-                    name,
-                    lib_uuid,
-                )
+            # Build dynamic SET clause
+            set_parts = []
+            params = []
+            idx = 1
+            
+            if name is not None:
+                set_parts.append(f"name = ${idx}")
+                params.append(name)
+                idx += 1
+            
+            if description is not None:
+                set_parts.append(f"description = ${idx}")
+                params.append(description)
+                idx += 1
+            
+            if metadata is not None:
+                set_parts.append(f"metadata = ${idx}::jsonb")
+                params.append(_json.dumps(metadata))
+                idx += 1
+            
+            if set_parts:
+                set_parts.append("updated_at = NOW()")
+                params.append(lib_uuid)
+                query = f"UPDATE libraries SET {', '.join(set_parts)} WHERE id = ${idx}"
+                await conn.execute(query, *params)
             
             library = await conn.fetchrow(
                 """
-                SELECT id, name, is_personal, user_id, library_type,
-                       created_by, deleted_at, created_at, updated_at
+                SELECT id, name, description, is_personal, user_id, library_type,
+                       metadata, created_by, deleted_at, created_at, updated_at
                 FROM libraries
                 WHERE id = $1
                 """,
@@ -533,45 +564,87 @@ class LibraryService:
         self,
         library_id: str,
         soft_delete: bool = True,
+        document_action: str = "orphan",
+        target_library_id: Optional[str] = None,
     ) -> bool:
         """
-        Delete a library.
+        Delete a library and handle its documents.
         
         Args:
             library_id: The library's UUID
             soft_delete: If True, soft delete (set deleted_at). If False, hard delete.
+            document_action: What to do with documents:
+                - "orphan": Leave documents with null library_id (legacy default)
+                - "move": Move documents to target_library_id
+                - "delete": Soft-delete all documents in the library
+            target_library_id: Required when document_action is "move"
             
         Returns:
             True if deleted, False if not found
         """
         lib_uuid = uuid.UUID(library_id)
+        target_uuid = uuid.UUID(target_library_id) if target_library_id else None
         
         async with self.pool.acquire() as conn:
-            if soft_delete:
-                result = await conn.execute(
-                    """
-                    UPDATE libraries
-                    SET deleted_at = NOW(), updated_at = NOW()
-                    WHERE id = $1 AND deleted_at IS NULL
-                    """,
-                    lib_uuid,
-                )
-            else:
-                result = await conn.execute(
-                    "DELETE FROM libraries WHERE id = $1",
-                    lib_uuid,
-                )
-            
-            deleted = result.split()[-1] != "0"
-            
-            if deleted:
-                logger.info(
-                    "Deleted library",
-                    library_id=library_id,
-                    soft_delete=soft_delete,
-                )
-            
-            return deleted
+            async with conn.transaction():
+                if document_action == "move" and target_uuid:
+                    moved = await conn.execute(
+                        """
+                        UPDATE data_files
+                        SET library_id = $2, updated_at = NOW()
+                        WHERE library_id = $1
+                        """,
+                        lib_uuid, target_uuid,
+                    )
+                    moved_count = int(moved.split()[-1])
+                    logger.info(
+                        "Moved documents to target library",
+                        source_library=library_id,
+                        target_library=target_library_id,
+                        count=moved_count,
+                    )
+                elif document_action == "delete":
+                    deleted_docs = await conn.execute(
+                        """
+                        UPDATE data_files
+                        SET deleted_at = NOW(), updated_at = NOW()
+                        WHERE library_id = $1 AND deleted_at IS NULL
+                        """,
+                        lib_uuid,
+                    )
+                    deleted_count = int(deleted_docs.split()[-1])
+                    logger.info(
+                        "Soft-deleted documents in library",
+                        library_id=library_id,
+                        count=deleted_count,
+                    )
+                
+                if soft_delete:
+                    result = await conn.execute(
+                        """
+                        UPDATE libraries
+                        SET deleted_at = NOW(), updated_at = NOW()
+                        WHERE id = $1 AND deleted_at IS NULL
+                        """,
+                        lib_uuid,
+                    )
+                else:
+                    result = await conn.execute(
+                        "DELETE FROM libraries WHERE id = $1",
+                        lib_uuid,
+                    )
+                
+                deleted = result.split()[-1] != "0"
+                
+                if deleted:
+                    logger.info(
+                        "Deleted library",
+                        library_id=library_id,
+                        soft_delete=soft_delete,
+                        document_action=document_action,
+                    )
+                
+                return deleted
     
     async def get_library_document_count(
         self,
@@ -767,6 +840,52 @@ class LibraryService:
             
             return documents
     
+    async def get_libraries_with_classification_rules(
+        self,
+        user_id: Optional[str] = None,
+    ) -> List[Dict]:
+        """
+        Get all libraries that have classification rules in their metadata.
+        
+        Returns personal libraries for the given user (if user_id provided)
+        and all shared libraries that have non-empty classificationRules.
+        
+        Args:
+            user_id: Optional user ID to include that user's personal libraries
+            
+        Returns:
+            List of library records with classification rules
+        """
+        async with self.pool.acquire() as conn:
+            if user_id:
+                user_uuid = uuid.UUID(user_id)
+                libraries = await conn.fetch(
+                    """
+                    SELECT id, name, description, is_personal, user_id, library_type,
+                           metadata, created_by, deleted_at, created_at, updated_at
+                    FROM libraries
+                    WHERE deleted_at IS NULL
+                      AND metadata->'classificationRules' IS NOT NULL
+                      AND jsonb_array_length(COALESCE(metadata->'classificationRules', '[]'::jsonb)) > 0
+                      AND (is_personal = false OR (is_personal = true AND user_id = $1))
+                    """,
+                    user_uuid,
+                )
+            else:
+                libraries = await conn.fetch(
+                    """
+                    SELECT id, name, description, is_personal, user_id, library_type,
+                           metadata, created_by, deleted_at, created_at, updated_at
+                    FROM libraries
+                    WHERE deleted_at IS NULL
+                      AND is_personal = false
+                      AND metadata->'classificationRules' IS NOT NULL
+                      AND jsonb_array_length(COALESCE(metadata->'classificationRules', '[]'::jsonb)) > 0
+                    """,
+                )
+            
+            return [dict(lib) for lib in libraries]
+
     async def ensure_all_personal_libraries(
         self,
         user_id: str,
@@ -809,12 +928,23 @@ def library_to_response(library: Dict) -> Dict:
     Returns:
         API response dict with camelCase keys
     """
+    import json as _json
+    
+    metadata_raw = library.get("metadata")
+    if isinstance(metadata_raw, str):
+        try:
+            metadata_raw = _json.loads(metadata_raw)
+        except (ValueError, TypeError):
+            metadata_raw = {}
+    
     return {
         "id": str(library["id"]),
         "name": library["name"],
+        "description": library.get("description"),
         "isPersonal": library["is_personal"],
         "userId": str(library["user_id"]) if library["user_id"] else None,
         "libraryType": library["library_type"],
+        "metadata": metadata_raw if metadata_raw else {},
         "createdBy": str(library["created_by"]),
         "deletedAt": library["deleted_at"].isoformat() if library["deleted_at"] else None,
         "createdAt": library["created_at"].isoformat() if library["created_at"] else None,
