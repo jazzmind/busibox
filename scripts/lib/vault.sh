@@ -800,6 +800,9 @@ sync_secrets_to_vault() {
     if [[ -n "${LITELLM_MASTER_KEY:-}" ]]; then
         values_to_update+=("secrets.litellm_master_key=${LITELLM_MASTER_KEY}")
     fi
+    if [[ -n "${LITELLM_SALT_KEY:-}" ]]; then
+        values_to_update+=("secrets.litellm_salt_key=${LITELLM_SALT_KEY}")
+    fi
     
     # GitHub
     if [[ -n "${GITHUB_AUTH_TOKEN:-}" ]]; then
@@ -896,6 +899,20 @@ setup_vault_secrets() {
     fi
     if ! has_vault_secret "secrets.litellm_api_key"; then
         new_secrets+=("secrets.litellm_api_key=sk-$(generate_secret 16)")
+    fi
+    if ! has_vault_secret "secrets.litellm_salt_key"; then
+        # For existing deployments: bootstrap salt to match current master key
+        # so LiteLLM can still decrypt data encrypted with master-key-as-salt.
+        # For fresh installs: litellm_api_key won't exist yet either, so we
+        # generate a dedicated salt (install.sh generates master key separately).
+        local existing_master
+        existing_master=$(get_vault_secret "secrets.litellm_master_key" 2>/dev/null || echo "")
+        if [[ -n "$existing_master" ]]; then
+            _vault_info "Bootstrapping litellm_salt_key from existing master key"
+            new_secrets+=("secrets.litellm_salt_key=${existing_master}")
+        else
+            new_secrets+=("secrets.litellm_salt_key=salt-$(generate_secret 32)")
+        fi
     fi
     
     if [[ ${#new_secrets[@]} -eq 0 ]]; then

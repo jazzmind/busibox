@@ -119,6 +119,7 @@ class CloudModelsResponse(BaseModel):
     models: List[CloudModel]
     api_key_configured: bool
     needs_key_resave: bool = False  # True when key is in LiteLLM DB but not accessible for API calls
+    provider_error: Optional[str] = None  # Error from provider API (key is accessible but API call failed)
 
 
 class RegisterModelsRequest(BaseModel):
@@ -700,6 +701,81 @@ async def _clean_stale_config_env_vars(
         logger.warning(f"Failed to clean stale config env vars from DB: {e}")
 
 
+async def _clean_stale_litellm_db(config_model_names: Optional[List[str]] = None) -> None:
+    """Remove stale encrypted data from LiteLLM's database tables.
+
+    LiteLLM encrypts model params (model, api_key, api_base) and credentials
+    with LITELLM_SALT_KEY. When the salt key changes (container recreate, key
+    rotation), these encrypted blobs become undecryptable. LiteLLM then passes
+    raw ciphertext as model identifiers, causing "LLM Provider NOT provided"
+    errors and decryption warnings.
+
+    This function cleans:
+    1. LiteLLM_ProxyModelTable - model deployments matching config-file names
+    2. LiteLLM_Config - stale environment_variables
+    3. LiteLLM_CredentialsTable - all stored credentials (re-saved on next key entry)
+
+    Args:
+        config_model_names: If provided, only delete model entries whose
+            model_name matches these names. If None, skip model table cleanup.
+    """
+    if not (hasattr(settings, "litellm_database_url") and settings.litellm_database_url):
+        return
+
+    try:
+        import asyncpg
+    except ImportError:
+        logger.debug("asyncpg not available, skipping stale LiteLLM DB cleanup")
+        return
+
+    try:
+        conn = await asyncpg.connect(str(settings.litellm_database_url))
+    except Exception as e:
+        logger.warning(f"Cannot connect to LiteLLM DB for cleanup: {e}")
+        return
+
+    try:
+        # 1. Clean config-file model entries from LiteLLM_ProxyModelTable.
+        # model_name is the display name (e.g. "default", "agent", "fast").
+        # model_id is an auto-generated UUID primary key.
+        # These entries will be re-registered fresh with the current salt key.
+        if config_model_names:
+            try:
+                result = await conn.execute(
+                    'DELETE FROM "LiteLLM_ProxyModelTable" WHERE model_name = ANY($1::text[])',
+                    config_model_names,
+                )
+                if result and "DELETE" in result and result != "DELETE 0":
+                    logger.info(f"Cleaned config-file models from LiteLLM DB: {result}")
+            except Exception as e:
+                logger.warning(f"Failed to clean LiteLLM_ProxyModelTable: {e}")
+
+        # 2. Clean stale environment_variables from LiteLLM_Config
+        try:
+            result = await conn.execute(
+                'DELETE FROM "LiteLLM_Config" '
+                "WHERE param_name = 'environment_variables'"
+            )
+            if result and "DELETE" in result and result != "DELETE 0":
+                logger.info(f"Cleaned stale LiteLLM config env vars: {result}")
+        except Exception as e:
+            logger.warning(f"Failed to clean LiteLLM_Config: {e}")
+
+        # 3. Clean all credentials — they'll be re-saved when the admin
+        # enters keys via the UI. This prevents undecryptable credential
+        # blobs from breaking model routing.
+        try:
+            result = await conn.execute(
+                'DELETE FROM "LiteLLM_CredentialsTable"'
+            )
+            if result and "DELETE" in result and result != "DELETE 0":
+                logger.info(f"Cleaned stale LiteLLM credentials: {result}")
+        except Exception as e:
+            logger.warning(f"Failed to clean LiteLLM_CredentialsTable: {e}")
+    finally:
+        await conn.close()
+
+
 async def _get_api_key_for_provider(provider: str) -> Optional[str]:
     """
     Get the actual (decrypted) API key for a cloud provider.
@@ -781,7 +857,10 @@ async def _fetch_live_openai_models(api_key: str) -> List[CloudModel]:
                 headers={"Authorization": f"Bearer {api_key}"},
             )
             if resp.status_code != 200:
-                logger.warning(f"OpenAI /v1/models returned {resp.status_code}")
+                logger.warning(
+                    f"OpenAI /v1/models returned {resp.status_code}: "
+                    f"{resp.text[:300]}"
+                )
                 return []
             data = resp.json()
             models = []
@@ -960,6 +1039,9 @@ async def sync_config_models_to_litellm() -> None:
     Ensure every model in the mounted litellm-config.yaml is registered
     in LiteLLM's DB.  Called at agent startup so that STORE_MODEL_IN_DB=True
     environments don't silently drop config-file models.
+
+    First cleans stale encrypted data from the DB to prevent undecryptable
+    blobs from breaking LiteLLM's model routing (salt key rotation scenario).
     """
     config = _read_local_litellm_config()
     if not config:
@@ -970,9 +1052,22 @@ async def sync_config_models_to_litellm() -> None:
     if not config_models:
         return
 
+    # Collect config-file model names for cleanup
+    config_model_names = [
+        entry.get("model_name", "")
+        for entry in config_models
+        if entry.get("model_name")
+    ]
+
+    # Clean stale encrypted data from LiteLLM DB before re-registering.
+    # This prevents "Unable to decrypt" / "LLM Provider NOT provided" errors
+    # that occur when LITELLM_SALT_KEY changes between container recreates.
+    await _clean_stale_litellm_db(config_model_names=config_model_names)
+
     base_url = _get_litellm_base_url()
     headers = _get_litellm_headers()
 
+    # After cleanup, re-check what's still registered (cloud models survive)
     existing_names: set = set()
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -1478,6 +1573,9 @@ async def save_provider_key(
             # as actual environment variables on its periodic DB reload.
             # /credentials is for models that reference credentials by name,
             # /config/update sets them as env vars for all models to use.
+            # Clean stale encrypted env vars first to prevent salt-key-mismatch
+            # issues where old ciphertext poisons LiteLLM's environment.
+            await _clean_stale_config_env_vars(client, base_url, headers)
             try:
                 resp = await client.post(
                     f"{base_url}/config/update",
@@ -1555,6 +1653,57 @@ async def save_provider_key(
         "success": True,
         "provider": provider,
         "message": f"{provider.title()} credentials configured successfully"
+    }
+
+
+@router.post("/keys/clean-stale")
+async def clean_stale_encrypted_data(
+    principal: Principal = Depends(get_principal),
+) -> Dict[str, Any]:
+    """
+    Clean stale encrypted data from LiteLLM's database.
+
+    Use this when LiteLLM shows "Unable to decrypt" errors after a salt key
+    change. Cleans model entries (config-file models), environment variables,
+    and credentials. Config-file models are automatically re-synced; cloud
+    models and API keys must be re-entered via the admin UI.
+
+    Admin only.
+    """
+    _require_admin(principal)
+
+    config = _read_local_litellm_config()
+    config_model_names = None
+    if config:
+        config_model_names = [
+            entry.get("model_name", "")
+            for entry in config.get("model_list", [])
+            if entry.get("model_name")
+        ]
+
+    await _clean_stale_litellm_db(config_model_names=config_model_names)
+
+    # Re-sync config-file models with fresh encryption
+    resync_count = 0
+    if config:
+        try:
+            await sync_config_models_to_litellm()
+            resync_count = len(config_model_names or [])
+        except Exception as e:
+            logger.warning(f"Failed to re-sync config models after cleanup: {e}")
+
+    return {
+        "success": True,
+        "cleaned": {
+            "config_models": len(config_model_names or []),
+            "environment_variables": True,
+            "credentials": True,
+        },
+        "resynced_models": resync_count,
+        "message": (
+            "Stale encrypted data cleaned. Config-file models re-synced. "
+            "Cloud provider API keys must be re-entered in Settings > AI Models."
+        ),
     }
 
 
@@ -2323,6 +2472,7 @@ async def list_cloud_models(
     
     models: List[CloudModel] = []
     needs_resave = False
+    provider_error: Optional[str] = None
     
     if api_key:
         # Fetch live models from the provider
@@ -2333,11 +2483,20 @@ async def list_cloud_models(
             registered = await _get_registered_model_names()
             for m in models:
                 m.registered = m.id in registered
+        else:
+            provider_error = (
+                f"Could not list {provider.title()} models. "
+                f"The API key is saved but the provider API returned no models. "
+                f"This may indicate an invalid key, network issue, or API outage."
+            )
+            logger.warning(
+                f"{provider} API key is accessible but model listing returned "
+                f"empty. Possible invalid key or provider API issue."
+            )
     
-    if not models and key_configured:
-        # Key is in LiteLLM DB but we can't access it for direct calls.
-        # This happens when the key is encrypted in LiteLLM's DB and
-        # agent-api can't decrypt it (e.g., after a restart).
+    if not api_key and key_configured:
+        # Key exists in LiteLLM DB but we can't read the plaintext (encrypted
+        # and agent-api can't decrypt it, e.g. after a restart with new salt).
         needs_resave = True
         logger.info(
             f"{provider} key is in LiteLLM but not accessible to agent-api "
@@ -2349,6 +2508,7 @@ async def list_cloud_models(
         models=models,
         api_key_configured=key_configured,
         needs_key_resave=needs_resave,
+        provider_error=provider_error,
     )
 
 

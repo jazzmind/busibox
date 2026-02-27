@@ -3,11 +3,14 @@ API endpoints for agent run management.
 
 Provides:
 - POST /runs: Execute an agent run
+- POST /runs/invoke: Synchronous agent invocation
+- POST /runs/invoke-async: Async agent invocation (returns immediately, poll GET /runs/{run_id})
 - GET /runs/{run_id}: Retrieve run details
 - GET /runs: List runs with filtering
 - POST /runs/schedule: Schedule cron-based runs
 """
 
+import asyncio
 import logging
 import json
 import re
@@ -235,6 +238,135 @@ async def invoke_agent(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to invoke run",
+        )
+
+
+@router.post("/invoke-async", status_code=status.HTTP_202_ACCEPTED)
+async def invoke_agent_async(
+    payload: RunInvoke,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Invoke an agent asynchronously — returns immediately with a run_id.
+
+    The agent executes in a background task. Poll GET /runs/{run_id} to
+    check status and retrieve the result once status is 'succeeded'.
+    """
+    try:
+        resolved_agent_id = await _resolve_agent_id(
+            session=session,
+            principal=principal,
+            agent_id=payload.agent_id,
+            agent_name=payload.agent_name,
+        )
+
+        run_payload = dict(payload.input or {})
+        if payload.response_schema is not None:
+            run_payload["response_schema"] = payload.response_schema
+
+        from app.models.domain import RunRecord
+        from app.services.run_service import add_run_event, capture_definition_snapshot
+
+        try:
+            definition_snapshot = await capture_definition_snapshot(
+                agent_id=resolved_agent_id, workflow_id=None, session=session
+            )
+        except ValueError:
+            definition_snapshot = None
+
+        run_record = RunRecord(
+            agent_id=resolved_agent_id,
+            status="pending",
+            input=run_payload,
+            created_by=principal.sub,
+            definition_snapshot=definition_snapshot,
+            events=[],
+        )
+        add_run_event(run_record, "created", data={
+            "agent_tier": payload.agent_tier, "async": True,
+        })
+
+        session.add(run_record)
+        await session.commit()
+        await session.refresh(run_record)
+
+        run_id = run_record.id
+
+        async def _background_run():
+            async with SessionLocal() as bg_session:
+                try:
+                    result = await create_run(
+                        session=bg_session,
+                        principal=principal,
+                        agent_id=resolved_agent_id,
+                        payload=run_payload,
+                        scopes=[],
+                        purpose="agent-invoke-async",
+                        agent_tier=payload.agent_tier,
+                    )
+
+                    output_data = None
+                    error_message = None
+                    if result.output:
+                        if "result" in result.output:
+                            output_data = result.output.get("result")
+                        elif "data" in result.output:
+                            output_data = result.output.get("data")
+                        elif "error" in result.output:
+                            error_message = str(result.output.get("error"))
+                        else:
+                            output_data = result.output
+
+                    if payload.response_schema is not None:
+                        output_data = _parse_structured_output(output_data)
+
+                    final_status = result.status
+                    if final_status in {"failed", "timeout"} and not error_message:
+                        error_message = str(
+                            (result.output or {}).get("error", "Invocation failed")
+                        )
+
+                    stmt = select(RunRecord).where(RunRecord.id == run_id)
+                    row = (await bg_session.execute(stmt)).scalar_one_or_none()
+                    if row:
+                        row.status = final_status
+                        row.output = {
+                            "result": output_data,
+                            **({"error": error_message} if error_message else {}),
+                        }
+                        add_run_event(row, "completed", data={"status": final_status})
+                        await bg_session.commit()
+                except Exception as exc:
+                    logger.error(f"Async invoke background failed: {exc}", exc_info=True)
+                    try:
+                        stmt = select(RunRecord).where(RunRecord.id == run_id)
+                        row = (await bg_session.execute(stmt)).scalar_one_or_none()
+                        if row:
+                            row.status = "failed"
+                            row.output = {"error": str(exc)}
+                            add_run_event(row, "execution_failed", error=str(exc))
+                            await bg_session.commit()
+                    except Exception:
+                        logger.error("Failed to persist background error", exc_info=True)
+
+        asyncio.create_task(_background_run())
+
+        return {
+            "run_id": str(run_id),
+            "status": "accepted",
+            "message": "Agent invocation started. Poll GET /runs/{run_id} for result.",
+        }
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to start async invoke: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to start async invocation",
         )
 
 

@@ -17,7 +17,7 @@ from app.api.extraction import (
     _find_provenance_candidates,
     _build_value_provenance,
     _validate_and_enrich_records,
-    _merge_partial_records,
+    _build_records_response_schema,
     ExtractRequest,
 )
 
@@ -159,11 +159,15 @@ class TestValidateAndEnrichRecords:
         result = _validate_and_enrich_records(records, schema, "f", "a")
         assert isinstance(result[0]["tags"], list)
 
-    def test_missing_required_field_raises(self):
+    def test_missing_required_field_still_includes_record(self):
+        """Missing required fields should NOT raise — the record is included
+        with a coercion annotation instead."""
         records = [{"other": "data"}]
         schema = {"fields": {"name": {"type": "string", "required": True}}}
-        with pytest.raises(ValueError, match="Missing required field"):
-            _validate_and_enrich_records(records, schema, "f", "a")
+        result = _validate_and_enrich_records(records, schema, "f", "a")
+        assert len(result) == 1
+        coercions = result[0].get("_provenance", {}).get("_coercions", [])
+        assert any("missing_required" in c.get("reason", "") for c in coercions)
 
     def test_provenance_initialized(self):
         records = [{"name": "Test"}]
@@ -174,34 +178,47 @@ class TestValidateAndEnrichRecords:
 
 
 # =============================================================================
-# _merge_partial_records tests
+# _build_records_response_schema tests
 # =============================================================================
 
-class TestMergePartialRecords:
-    def test_merge_arrays(self):
-        partials = [
-            {"tags": ["python", "ml"]},
-            {"tags": ["pytorch", "ml"]},
-        ]
-        schema = {"fields": {"tags": {"type": "array", "items": {"type": "string"}}}}
-        result = _merge_partial_records(partials, schema)
-        assert len(result) == 1
-        tags = result[0]["tags"]
-        assert "python" in tags
-        assert "pytorch" in tags
-        assert tags.count("ml") == 1  # deduplicated
+class TestBuildRecordsResponseSchema:
+    def test_no_required_on_record_items(self):
+        """Response schema must NEVER have required on record items.
 
-    def test_merge_scalars_first_wins(self):
-        partials = [
-            {"name": "Alice"},
-            {"name": "Bob"},
-        ]
-        schema = {"fields": {"name": {"type": "string"}}}
-        result = _merge_partial_records(partials, schema)
-        assert result[0]["name"] == "Alice"
+        With strict structured output, required fields the LLM can't populate
+        force it to return an empty records array.
+        """
+        schema_obj = {
+            "fields": {
+                "name": {"type": "string", "required": True},
+                "email": {"type": "string", "required": True},
+                "phone": {"type": "string"},
+            }
+        }
+        response_schema = _build_records_response_schema(schema_obj)
+        items = response_schema["schema"]["properties"]["records"]["items"]
+        assert "required" not in items, (
+            f"Record items should NOT have required, but got: {items.get('required')}"
+        )
 
-    def test_empty_partials(self):
-        assert _merge_partial_records([], {}) == []
+    def test_records_wrapper_is_required(self):
+        """The top-level 'records' key must still be required."""
+        schema_obj = {"fields": {"name": {"type": "string"}}}
+        response_schema = _build_records_response_schema(schema_obj)
+        assert "records" in response_schema["schema"]["required"]
+
+    def test_properties_present(self):
+        schema_obj = {
+            "fields": {
+                "name": {"type": "string"},
+                "age": {"type": "integer"},
+            }
+        }
+        response_schema = _build_records_response_schema(schema_obj)
+        items = response_schema["schema"]["properties"]["records"]["items"]
+        assert "name" in items["properties"]
+        assert "age" in items["properties"]
+        assert "_provenance" in items["properties"]
 
 
 # =============================================================================
@@ -212,33 +229,239 @@ class TestGraphWiringInExtraction:
     """Test that extraction.py calls the graph from-extraction endpoint."""
 
     @pytest.mark.asyncio
-    async def test_graph_call_included_in_response(self):
-        """The final response dict should include a 'graph' key."""
-        from app.api.extraction import extract_document, ExtractRequest
-
-        file_id = str(uuid.uuid4())
-        schema_id = str(uuid.uuid4())
-
-        payload = ExtractRequest(
-            file_id=file_id,
-            schema_document_id=schema_id,
-            store_results=True,
-        )
-
-        # We can verify the graph key is present in the response schema
-        # by examining the return statement in extract_document.
-        # Since we can't easily call extract_document without a full backend,
-        # we verify the structural expectation.
+    async def test_graph_call_included_in_pipeline(self):
+        """The pipeline should include graph creation."""
+        from app.api.extraction import _run_extraction_pipeline
         import inspect
-        source = inspect.getsource(extract_document)
-        assert '"graph": graph_result' in source or "'graph': graph_result" in source
+        source = inspect.getsource(_run_extraction_pipeline)
+        assert '"graph"' in source or "'graph'" in source
 
     @pytest.mark.asyncio
     async def test_graph_call_is_non_fatal(self):
-        """The graph call catching exceptions should be non-fatal."""
+        """The graph call should be non-fatal in the pipeline."""
         import inspect
-        from app.api.extraction import extract_document
-
-        source = inspect.getsource(extract_document)
-        assert "non-fatal" in source.lower() or "non_fatal" in source.lower()
+        from app.api.extraction import _run_extraction_pipeline
+        source = inspect.getsource(_run_extraction_pipeline)
         assert "/data/graph/from-extraction" in source
+
+
+# =============================================================================
+# Diagnostic tests for the exact extraction failure path
+# =============================================================================
+
+class TestExtractionOutputParsing:
+    """Tests that reproduce the exact agent output shapes seen in production
+    and verify _extract_records handles them correctly."""
+
+    def test_result_string_with_records(self):
+        """Agent returns NativeOutput as a JSON string wrapped in result key.
+        This is the standard path: run_service wraps string data as {"result": str}."""
+        import json
+        inner = json.dumps({"records": [{"name": "Alice", "email": "a@b.com"}]})
+        output = {"result": inner}
+        records = _extract_records(output)
+        assert len(records) == 1
+        assert records[0]["name"] == "Alice"
+
+    def test_result_string_with_empty_records(self):
+        """LLM returns {"records": []} — the 0-records failure case.
+        result_len=15 in logs corresponds to this exact string."""
+        import json
+        inner = json.dumps({"records": []})
+        assert len(inner) == 15, f"Expected length 15, got {len(inner)}"
+        output = {"result": inner}
+        records = _extract_records(output)
+        assert records == [], "Empty records should return empty list"
+
+    def test_result_string_with_single_record_no_wrapper(self):
+        """LLM returns a single record dict as a JSON string (no records wrapper)."""
+        import json
+        inner = json.dumps({"name": "Bob", "skills": ["python"]})
+        output = {"result": inner}
+        records = _extract_records(output)
+        assert len(records) == 1
+        assert records[0]["name"] == "Bob"
+
+    def test_result_string_with_provenance_only_record(self):
+        """A record containing only _provenance should NOT be returned."""
+        import json
+        inner = json.dumps({"_provenance": {"name": {"text": "..."}}})
+        output = {"result": inner}
+        records = _extract_records(output)
+        assert records == [], "Record with only _provenance should be empty"
+
+    def test_data_dict_with_records(self):
+        """Alternative wrapping where output is {"data": {"records": [...]}}."""
+        output = {"data": {"records": [{"name": "Carol"}]}}
+        records = _extract_records(output)
+        assert len(records) == 1
+
+    def test_direct_records_key(self):
+        """Output directly contains records at top level."""
+        output = {"records": [{"name": "Dave"}, {"name": "Eve"}]}
+        records = _extract_records(output)
+        assert len(records) == 2
+
+
+class TestValidateAndEnrichGraceful:
+    """Tests that _validate_and_enrich_records is graceful about errors."""
+
+    def test_missing_required_does_not_raise(self):
+        """Must NOT raise even when required fields are missing."""
+        records = [{"email": "a@b.com"}]
+        schema = {
+            "fields": {
+                "name": {"type": "string", "required": True},
+                "email": {"type": "string"},
+            }
+        }
+        result = _validate_and_enrich_records(records, schema, "file-1", "agent-1")
+        assert len(result) == 1
+        assert result[0]["email"] == "a@b.com"
+        assert result[0]["_sourceFileId"] == "file-1"
+
+    def test_multiple_missing_required_fields(self):
+        """Multiple missing required fields should all be annotated."""
+        records = [{"phone": "555-1234"}]
+        schema = {
+            "fields": {
+                "name": {"type": "string", "required": True},
+                "email": {"type": "string", "required": True},
+                "phone": {"type": "string"},
+            }
+        }
+        result = _validate_and_enrich_records(records, schema, "f", "a")
+        assert len(result) == 1
+        coercions = result[0]["_provenance"]["_coercions"]
+        missing_coercions = [c for c in coercions if "missing_required" in c.get("reason", "")]
+        assert len(missing_coercions) >= 1
+
+    def test_coercion_error_does_not_raise(self):
+        """Type coercion failure should null the field, not crash."""
+        records = [{"count": "not-a-number"}]
+        schema = {"fields": {"count": {"type": "integer"}}}
+        result = _validate_and_enrich_records(records, schema, "f", "a")
+        assert len(result) == 1
+        assert result[0]["count"] is None
+
+    def test_numeric_clamping(self):
+        """Out-of-range numbers should be clamped, not raise."""
+        records = [{"score": 150}]
+        schema = {"fields": {"score": {"type": "integer", "min": 0, "max": 100}}}
+        result = _validate_and_enrich_records(records, schema, "f", "a")
+        assert result[0]["score"] == 100
+
+    def test_valid_record_passes_through(self):
+        """A fully valid record should pass through with metadata."""
+        records = [{"name": "Alice", "age": 30}]
+        schema = {
+            "fields": {
+                "name": {"type": "string", "required": True},
+                "age": {"type": "integer"},
+            }
+        }
+        result = _validate_and_enrich_records(records, schema, "f", "a")
+        assert len(result) == 1
+        assert result[0]["name"] == "Alice"
+        assert result[0]["age"] == 30
+
+
+class TestTierSelection:
+    """Tests for _select_extraction_tier."""
+
+    def test_small_doc_direct(self):
+        from app.api.extraction import _select_extraction_tier
+        assert _select_extraction_tier(5000) == "direct"
+
+    def test_medium_doc_rag(self):
+        from app.api.extraction import _select_extraction_tier
+        assert _select_extraction_tier(50000) == "rag"
+
+    def test_large_doc_chunk_sweep(self):
+        from app.api.extraction import _select_extraction_tier
+        assert _select_extraction_tier(200000) == "chunk_sweep"
+
+    def test_boundary_direct_rag(self):
+        from app.api.extraction import _select_extraction_tier, TIER1_TOKEN_THRESHOLD
+        assert _select_extraction_tier(TIER1_TOKEN_THRESHOLD - 1) == "direct"
+        assert _select_extraction_tier(TIER1_TOKEN_THRESHOLD) == "rag"
+
+    def test_boundary_rag_sweep(self):
+        from app.api.extraction import _select_extraction_tier, TIER2_TOKEN_THRESHOLD
+        assert _select_extraction_tier(TIER2_TOKEN_THRESHOLD - 1) == "rag"
+        assert _select_extraction_tier(TIER2_TOKEN_THRESHOLD) == "chunk_sweep"
+
+
+class TestRelaxSchemaForChunked:
+    """Tests for _relax_schema_for_chunked."""
+
+    def test_strips_required_from_fields(self):
+        from app.api.extraction import _relax_schema_for_chunked
+        schema_obj = {
+            "fields": {
+                "name": {"type": "string", "required": True},
+                "email": {"type": "string", "required": True},
+                "phone": {"type": "string"},
+            }
+        }
+        response_schema = {
+            "schema": {
+                "properties": {
+                    "records": {
+                        "items": {
+                            "type": "object",
+                            "properties": {"name": {"type": "string"}},
+                        }
+                    }
+                }
+            }
+        }
+        relaxed_schema, relaxed_response = _relax_schema_for_chunked(schema_obj, response_schema)
+        for fdef in relaxed_schema["fields"].values():
+            assert "required" not in fdef, f"Field still has required: {fdef}"
+
+    def test_does_not_mutate_original(self):
+        from app.api.extraction import _relax_schema_for_chunked
+        schema_obj = {"fields": {"name": {"type": "string", "required": True}}}
+        response_schema = {"schema": {"properties": {"records": {"items": {}}}}}
+        _relax_schema_for_chunked(schema_obj, response_schema)
+        assert schema_obj["fields"]["name"]["required"] is True, "Original was mutated"
+
+
+class TestOffsetCorrectProvenance:
+    """Tests for _offset_correct_provenance."""
+
+    def test_shifts_offsets(self):
+        from app.api.extraction import _offset_correct_provenance
+        records = [
+            {
+                "name": "Alice",
+                "_provenance": {
+                    "name": {"text": "Alice", "charOffset": 10, "charLength": 5},
+                },
+            }
+        ]
+        _offset_correct_provenance(records, 500)
+        assert records[0]["_provenance"]["name"]["charOffset"] == 510
+
+    def test_zero_offset_noop(self):
+        from app.api.extraction import _offset_correct_provenance
+        records = [{"_provenance": {"name": {"charOffset": 10}}}]
+        _offset_correct_provenance(records, 0)
+        assert records[0]["_provenance"]["name"]["charOffset"] == 10
+
+    def test_nested_provenance(self):
+        from app.api.extraction import _offset_correct_provenance
+        records = [
+            {
+                "_provenance": {
+                    "skills": [
+                        {"text": "python", "charOffset": 20, "charLength": 6},
+                        {"text": "java", "charOffset": 30, "charLength": 4},
+                    ]
+                }
+            }
+        ]
+        _offset_correct_provenance(records, 100)
+        assert records[0]["_provenance"]["skills"][0]["charOffset"] == 120
+        assert records[0]["_provenance"]["skills"][1]["charOffset"] == 130

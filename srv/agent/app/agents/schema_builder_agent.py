@@ -59,7 +59,7 @@ For schema generation from raw document content:
 - Identify the DOCUMENT TYPE (resume, invoice, contract, proposal, report, etc.)
 - `schemaName` must describe the document type, not a specific person/file
 - Use camelCase field names
-- Mark only truly essential fields as required (usually 2-4)
+- **CRITICAL: Be extremely conservative with required fields.** Mark a field as `required: true` ONLY if it is absolutely guaranteed to appear in EVERY document of this type AND the schema would be meaningless without it. Typically only 1-2 fields should be required (e.g. a person's name on a resume, a project title on a proposal). Most fields should NOT be required — set `required: false` or omit the `required` property entirely. When in doubt, do NOT mark a field as required.
 - Prefer practical fields that generalize across similar documents
 - Keep the schema concise and usable (typically 8-15 fields)
 
@@ -76,21 +76,21 @@ Fields without a `search` array are stored but not indexed. Examples:
 - A list of skills: `["keyword", "embed", "graph"]`
 - A phone number: no `search` (just stored)
 
-**Example Schema for Resumes:**
+**Example Schema for Resumes (note: only 1 field is required):**
 ```json
 {
   "displayName": "Parsed Resumes",
   "itemLabel": "Resume",
   "graphNode": "Resume",
   "fields": {
-    "name": {"type": "string", "required": true, "search": ["keyword", "graph"]},
-    "email": {"type": "string", "search": ["keyword"]},
-    "phone": {"type": "string"},
-    "summary": {"type": "string", "search": ["embed"]},
-    "skills": {"type": "array", "items": {"type": "string"}, "search": ["keyword", "embed", "graph"]},
-    "experience": {"type": "array", "items": {"type": "object"}, "search": ["embed"]},
-    "education": {"type": "array", "items": {"type": "object"}},
-    "certifications": {"type": "array", "items": {"type": "string"}, "search": ["keyword"]}
+    "name": {"type": "string", "required": true, "description": "Full name of the candidate", "search": ["keyword", "graph"]},
+    "email": {"type": "string", "description": "Contact email address", "search": ["keyword"]},
+    "phone": {"type": "string", "description": "Contact phone number"},
+    "summary": {"type": "string", "description": "Professional summary or objective", "search": ["embed"]},
+    "skills": {"type": "array", "items": {"type": "string"}, "description": "Technical and professional skills", "search": ["keyword", "embed", "graph"]},
+    "experience": {"type": "array", "items": {"type": "object"}, "description": "Work experience entries", "search": ["embed"]},
+    "education": {"type": "array", "items": {"type": "object"}, "description": "Education history"},
+    "certifications": {"type": "array", "items": {"type": "string"}, "description": "Professional certifications", "search": ["keyword"]}
   },
   "graphRelationships": [
     {"source_label": "Resume", "target_field": "name", "target_label": "Person", "relationship": "RESUME_OF"}

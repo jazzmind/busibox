@@ -22,10 +22,11 @@ litellm_home: /var/lib/litellm
 litellm_host: "0.0.0.0"
 litellm_port: 4000
 
-# Master Key (from base secrets)
+# Master Key - used for API authentication only (clients call LiteLLM with this)
 litellm_master_key: "{{ secrets.litellm_master_key | default('sk-litellm-master-key-change-me') }}"
-# Salt key for encrypting/decrypting stored provider keys.
-# Defaults to master key so it remains stable across restarts unless explicitly overridden.
+# Salt key - the SOLE encryption key for all DB-stored data. Changing it
+# invalidates all encrypted model configs, credentials, and env vars.
+# Falls back to master key for backward compat with pre-salt deployments.
 litellm_salt_key: "{{ secrets.litellm_salt_key | default(litellm_master_key) }}"
 
 # Backend Configuration

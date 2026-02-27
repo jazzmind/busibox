@@ -1046,6 +1046,7 @@ async def index_from_extraction(
         r for r in all_records
         if r.get("data", {}).get("_file_id") == file_id
         or r.get("metadata", {}).get("file_id") == file_id
+        or r.get("_sourceFileId") == file_id
     ]
 
     if not file_records:
@@ -1061,7 +1062,7 @@ async def index_from_extraction(
     field_entries: List[Dict] = []
 
     for record_idx, record in enumerate(file_records):
-        record_data = record.get("data", {})
+        record_data = record.get("data", record)
         all_tagged = set(keyword_fields) | set(embed_fields_list)
 
         for fname in all_tagged:

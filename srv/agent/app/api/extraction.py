@@ -9,6 +9,7 @@ and returns a task ID immediately. Clients poll GET /extract/status/{task_id}
 or watch the ``extraction.status`` field on file metadata for completion.
 """
 
+import copy
 import json
 import logging
 import math
@@ -37,12 +38,15 @@ router = APIRouter(prefix="/extract", tags=["extract"])
 # Keys are task_id (str), values are dicts with status/result/error.
 _extraction_tasks: Dict[str, Dict[str, Any]] = {}
 
-# Long-document field-batched extraction controls
-LONG_DOC_TOKEN_THRESHOLD = 12000
-MIN_FIELDS_FOR_BATCH_MODE = 8
-FIELD_BATCH_SIZE = 6
-FIELD_SEARCH_TOP_K = 6
-MAX_PARALLEL_BATCH_RUNS = 3
+# Three-tier progressive extraction thresholds
+TIER1_TOKEN_THRESHOLD = 12_000     # below this: single-shot direct extraction
+TIER2_TOKEN_THRESHOLD = 100_000    # below this: RAG-guided, above: chunk sweep
+CHUNK_WINDOW_TOKENS = 8_000        # target tokens per chunk window (tier 3)
+CHUNK_OVERLAP_TOKENS = 500         # overlap between adjacent windows (tier 3)
+MAX_PARALLEL_CHUNK_RUNS = 4        # parallel LLM calls for tier 3
+MAX_RECORDS_PER_CHUNK = 5          # max records the LLM can return per chunk
+FIELD_SEARCH_TOP_K = 6             # top-K chunks per field for RAG retrieval
+RAG_CONTEXT_MAX_TOKENS = 16_000    # max assembled context for tier 2
 
 # Built-in agent IDs used for extraction routing decisions.
 SCHEMA_BUILDER_AGENT_ID = str(
@@ -198,30 +202,65 @@ def _parse_json_text(text: str) -> Optional[Dict[str, Any]]:
 
 
 def _extract_records(output: Dict[str, Any]) -> List[Dict[str, Any]]:
+    output_keys = list(output.keys()) if isinstance(output, dict) else []
+    logger.debug("_extract_records called", extra={
+        "output_keys": output_keys,
+        "output_type": type(output).__name__,
+    })
+
     if isinstance(output.get("records"), list):
-        return [r for r in output["records"] if isinstance(r, dict)]
+        recs = [r for r in output["records"] if isinstance(r, dict)]
+        logger.debug("_extract_records: matched top-level records", extra={"count": len(recs)})
+        return recs
 
     data_obj = output.get("data")
     if isinstance(data_obj, dict) and isinstance(data_obj.get("records"), list):
-        return [r for r in data_obj["records"] if isinstance(r, dict)]
+        recs = [r for r in data_obj["records"] if isinstance(r, dict)]
+        logger.debug("_extract_records: matched data.records", extra={"count": len(recs)})
+        return recs
     if isinstance(data_obj, list):
-        return [r for r in data_obj if isinstance(r, dict)]
+        recs = [r for r in data_obj if isinstance(r, dict)]
+        if recs:
+            logger.debug("_extract_records: matched data as list", extra={"count": len(recs)})
+            return recs
 
     result_obj = output.get("result")
     if isinstance(result_obj, dict):
         if isinstance(result_obj.get("records"), list):
-            return [r for r in result_obj["records"] if isinstance(r, dict)]
-        return [result_obj]
+            recs = [r for r in result_obj["records"] if isinstance(r, dict)]
+            logger.debug("_extract_records: matched result.records (dict)", extra={"count": len(recs)})
+            return recs
+        keys = [k for k in result_obj if k not in ("_provenance", "records")]
+        if keys:
+            logger.debug("_extract_records: treating result dict as single record", extra={"keys": keys})
+            return [result_obj]
 
     if isinstance(result_obj, str):
+        logger.debug("_extract_records: result is string", extra={"result_len": len(result_obj), "preview": result_obj[:200]})
         parsed = _parse_json_text(result_obj)
         if parsed and isinstance(parsed.get("records"), list):
-            return [r for r in parsed["records"] if isinstance(r, dict)]
+            recs = [r for r in parsed["records"] if isinstance(r, dict)]
+            logger.debug("_extract_records: matched parsed result.records", extra={"count": len(recs)})
+            return recs
         if parsed and isinstance(parsed.get("record"), dict):
+            logger.debug("_extract_records: matched parsed result.record (singular)")
             return [parsed["record"]]
-        if parsed and parsed:
-            return [parsed]
+        if parsed:
+            keys = [k for k in parsed if k not in ("_provenance", "records")]
+            if keys:
+                logger.debug("_extract_records: treating parsed result as single record", extra={"keys": keys})
+                return [parsed]
 
+    for key, val in output.items():
+        if isinstance(val, str) and val.strip().startswith(("{", "[")):
+            parsed = _parse_json_text(val)
+            if parsed and isinstance(parsed.get("records"), list):
+                recs = [r for r in parsed["records"] if isinstance(r, dict)]
+                if recs:
+                    logger.debug("_extract_records: matched via last-resort string parse", extra={"key": key, "count": len(recs)})
+                    return recs
+
+    logger.warning("_extract_records: no records found in output", extra={"output_keys": output_keys})
     return []
 
 
@@ -474,26 +513,29 @@ def _map_field_type_to_json_schema(field_def: Dict[str, Any]) -> Dict[str, Any]:
 def _build_records_response_schema(schema_obj: Dict[str, Any], max_records: int = 5) -> Dict[str, Any]:
     fields = schema_obj.get("fields", {}) if isinstance(schema_obj, dict) else {}
     record_properties: Dict[str, Any] = {}
-    required: List[str] = []
 
     if isinstance(fields, dict):
         for field_name, field_def in fields.items():
             if not isinstance(field_name, str) or not isinstance(field_def, dict):
                 continue
             record_properties[field_name] = _map_field_type_to_json_schema(field_def)
-            if bool(field_def.get("required")):
-                required.append(field_name)
 
-    # Provenance fields we enrich server-side, but allow model to provide too.
     record_properties["_provenance"] = {"type": "object", "additionalProperties": True}
 
+    # Never mark individual record fields as required in the response schema.
+    # With strict structured output, a required field the LLM can't populate
+    # forces it to return an empty records array instead of a partial record.
+    # Required-field validation is handled server-side in
+    # _validate_and_enrich_records where it can be lenient.
+    #
+    # Use additionalProperties: False to prevent local LLMs (vLLM/Outlines)
+    # from encoding records as stringified JSON inside the array. All known
+    # fields + _provenance are explicitly listed in properties.
     record_schema: Dict[str, Any] = {
         "type": "object",
-        "additionalProperties": True,
+        "additionalProperties": False,
         "properties": record_properties,
     }
-    if required:
-        record_schema["required"] = required
 
     return {
         "name": "extraction_records",
@@ -563,16 +605,352 @@ def _estimate_markdown_tokens(markdown: str) -> int:
     return max(1, int(math.ceil(len(markdown) / 4)))
 
 
-def _should_use_field_batch_mode(markdown_tokens: int, schema_obj: Dict[str, Any]) -> bool:
-    fields = schema_obj.get("fields", {}) if isinstance(schema_obj, dict) else {}
-    field_count = len(fields) if isinstance(fields, dict) else 0
-    return markdown_tokens >= LONG_DOC_TOKEN_THRESHOLD and field_count >= MIN_FIELDS_FOR_BATCH_MODE
+def _select_extraction_tier(markdown_tokens: int) -> str:
+    """Return ``"direct"``, ``"rag"``, or ``"chunk_sweep"`` based on doc size."""
+    if markdown_tokens < TIER1_TOKEN_THRESHOLD:
+        return "direct"
+    if markdown_tokens < TIER2_TOKEN_THRESHOLD:
+        return "rag"
+    return "chunk_sweep"
 
 
-def _partition_fields(schema_obj: Dict[str, Any], batch_size: int) -> List[List[str]]:
+def _relax_schema_for_chunked(
+    schema_obj: Dict[str, Any],
+    response_schema: Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Clone *schema_obj* and *response_schema*, stripping ``required`` markers.
+
+    Used by Tiers 2 and 3 where the LLM only sees partial document content
+    and cannot be expected to populate every field.
+    """
+    relaxed_schema = copy.deepcopy(schema_obj)
+    fields = relaxed_schema.get("fields")
+    if isinstance(fields, dict):
+        for field_def in fields.values():
+            if isinstance(field_def, dict):
+                field_def.pop("required", None)
+
+    relaxed_response = copy.deepcopy(response_schema)
+    inner = relaxed_response.get("schema", {})
+    records_def = (inner.get("properties") or {}).get("records", {})
+    items = records_def.get("items")
+    if isinstance(items, dict):
+        items.pop("required", None)
+
+    return relaxed_schema, relaxed_response
+
+
+def _offset_correct_provenance(
+    records: List[Dict[str, Any]],
+    window_char_offset: int,
+) -> None:
+    """Shift every ``charOffset`` in ``_provenance`` by *window_char_offset*."""
+    if window_char_offset == 0:
+        return
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            if "charOffset" in node and isinstance(node["charOffset"], (int, float)):
+                node["charOffset"] = int(node["charOffset"]) + window_char_offset
+            for v in node.values():
+                _walk(v)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    for record in records:
+        prov = record.get("_provenance")
+        if prov:
+            _walk(prov)
+
+
+def _identify_field(schema_obj: Dict[str, Any]) -> Optional[str]:
+    """
+    Find the best identity field for multi-record grouping.
+
+    Prefers the first required string field with keyword search, then falls
+    back to the field with the lowest ``display_order``.
+    """
     fields = schema_obj.get("fields", {}) if isinstance(schema_obj, dict) else {}
-    field_names = list(fields.keys()) if isinstance(fields, dict) else []
-    return [field_names[i : i + batch_size] for i in range(0, len(field_names), batch_size)]
+    if not isinstance(fields, dict):
+        return None
+
+    best_keyword: Optional[str] = None
+    best_order_name: Optional[str] = None
+    best_order_val: Optional[int] = None
+
+    for name, fdef in fields.items():
+        if not isinstance(fdef, dict):
+            continue
+        ftype = fdef.get("type", "string")
+        if ftype != "string":
+            continue
+
+        search = fdef.get("search", [])
+        is_keyword = isinstance(search, list) and "keyword" in search
+        is_required = bool(fdef.get("required"))
+        order = fdef.get("display_order")
+
+        if is_required and is_keyword and best_keyword is None:
+            best_keyword = name
+
+        if order is not None:
+            try:
+                order_int = int(order)
+            except (ValueError, TypeError):
+                continue
+            if best_order_val is None or order_int < best_order_val:
+                best_order_val = order_int
+                best_order_name = name
+
+    return best_keyword or best_order_name
+
+
+def _fuzzy_match(a: str, b: str) -> bool:
+    """Case-insensitive containment check for grouping records."""
+    a_lower = a.strip().lower()
+    b_lower = b.strip().lower()
+    if not a_lower or not b_lower:
+        return False
+    return a_lower in b_lower or b_lower in a_lower
+
+
+def _group_partial_records(
+    records: List[Dict[str, Any]],
+    identity_field: Optional[str],
+) -> List[List[Dict[str, Any]]]:
+    """
+    Group partial records by *identity_field* using fuzzy matching.
+
+    Returns a list of groups; each group is a list of partial records that
+    belong to the same logical entity.
+    """
+    if not records:
+        return []
+    if not identity_field:
+        return [records]
+
+    groups: List[List[Dict[str, Any]]] = []
+    group_keys: List[str] = []
+
+    for rec in records:
+        val = rec.get(identity_field)
+        if not isinstance(val, str) or not val.strip():
+            if groups:
+                groups[0].append(rec)
+            else:
+                groups.append([rec])
+                group_keys.append("")
+            continue
+
+        matched = False
+        for idx, gk in enumerate(group_keys):
+            if gk and _fuzzy_match(val, gk):
+                groups[idx].append(rec)
+                matched = True
+                break
+
+        if not matched:
+            groups.append([rec])
+            group_keys.append(val.strip())
+
+    return groups
+
+
+def _merge_partial_group(
+    group: List[Dict[str, Any]],
+    schema_obj: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Merge a group of partial records into one, collecting conflicting
+    scalar values as lists for later LLM reconciliation.
+    """
+    if len(group) == 1:
+        return group[0]
+
+    merged: Dict[str, Any] = {}
+    fields = schema_obj.get("fields", {}) if isinstance(schema_obj, dict) else {}
+
+    for record in group:
+        for key, value in record.items():
+            if key == "_provenance":
+                merged["_provenance"] = _merge_provenance(merged.get("_provenance"), value)
+                continue
+            if value is None:
+                continue
+
+            field_def = fields.get(key, {}) if isinstance(fields, dict) else {}
+            field_type = field_def.get("type") if isinstance(field_def, dict) else None
+
+            if field_type == "array" and isinstance(value, list):
+                existing = merged.get(key, [])
+                if not isinstance(existing, list):
+                    existing = [existing] if existing is not None else []
+                for item in value:
+                    if item not in existing:
+                        existing.append(item)
+                max_items = int(field_def.get("maxItems", 50) or 50) if isinstance(field_def, dict) else 50
+                merged[key] = existing[:max_items]
+            elif key in merged:
+                existing = merged[key]
+                if existing != value:
+                    if isinstance(existing, list):
+                        if value not in existing:
+                            existing.append(value)
+                    else:
+                        merged[key] = [existing, value]
+            else:
+                merged[key] = value
+
+    return merged
+
+
+async def _reconcile_conflicts(
+    record: Dict[str, Any],
+    schema_obj: Dict[str, Any],
+    principal: "Principal",
+    agent_uuid: "uuid.UUID",
+) -> Dict[str, Any]:
+    """
+    Use a lightweight LLM call to resolve scalar fields that have
+    multiple conflicting candidate values after merge.
+    """
+    fields = schema_obj.get("fields", {}) if isinstance(schema_obj, dict) else {}
+    conflicts: Dict[str, List[Any]] = {}
+    for key, value in record.items():
+        if key.startswith("_"):
+            continue
+        field_def = fields.get(key, {}) if isinstance(fields, dict) else {}
+        field_type = field_def.get("type") if isinstance(field_def, dict) else None
+        if field_type == "array":
+            continue
+        if isinstance(value, list) and len(value) > 1:
+            conflicts[key] = value
+
+    if not conflicts:
+        return record
+
+    conflict_desc_parts = []
+    for field_name, candidates in conflicts.items():
+        desc = (fields.get(field_name, {}) or {}).get("description", "")
+        conflict_desc_parts.append(
+            f"Field '{field_name}' (description: {desc}): "
+            f"candidates = {json.dumps(candidates, default=str)}"
+        )
+
+    prompt = (
+        "You are resolving conflicting values extracted from different parts "
+        "of the same document. For each field below, select the most accurate "
+        "single value or synthesize a combined answer.\n\n"
+        + "\n".join(conflict_desc_parts)
+        + "\n\nReturn ONLY valid JSON with the resolved field values."
+    )
+
+    resolution_props = {}
+    for field_name in conflicts:
+        resolution_props[field_name] = _map_field_type_to_json_schema(
+            fields.get(field_name, {}) if isinstance(fields, dict) else {}
+        )
+
+    resolution_schema = {
+        "name": "conflict_resolution",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": list(conflicts.keys()),
+            "properties": resolution_props,
+        },
+    }
+
+    try:
+        async with SessionLocal() as session:
+            reconcile_run = await create_run(
+                session=session,
+                principal=principal,
+                agent_id=agent_uuid,
+                payload={
+                    "prompt": prompt,
+                    "response_schema": resolution_schema,
+                    "max_tokens": 2048,
+                },
+                scopes=["agent.execute"],
+                purpose="extraction-conflict-resolution",
+                agent_tier="simple",
+            )
+        if reconcile_run.status == "succeeded":
+            resolved = _extract_records(reconcile_run.output or {})
+            if resolved:
+                for key in conflicts:
+                    val = resolved[0].get(key)
+                    if val is not None:
+                        record[key] = val
+            else:
+                raw_output = reconcile_run.output or {}
+                result_str = raw_output.get("result", "")
+                if isinstance(result_str, str):
+                    try:
+                        parsed = json.loads(result_str)
+                        if isinstance(parsed, dict):
+                            for key in conflicts:
+                                val = parsed.get(key)
+                                if val is not None:
+                                    record[key] = val
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+    except Exception as exc:
+        logger.warning(
+            "LLM reconciliation failed, using first-value fallback",
+            extra={"error": str(exc)},
+        )
+
+    for key, value in record.items():
+        if isinstance(value, list) and key not in (
+            k for k, fd in fields.items()
+            if isinstance(fd, dict) and fd.get("type") == "array"
+        ):
+            record[key] = value[0]
+
+    return record
+
+
+async def _merge_multi_record_results(
+    all_records: List[Dict[str, Any]],
+    schema_obj: Dict[str, Any],
+    principal: "Principal",
+    agent_uuid: "uuid.UUID",
+) -> List[Dict[str, Any]]:
+    """
+    Two-phase merge for multi-chunk extraction results.
+
+    Phase A: deterministic grouping by identity field + structural merge.
+    Phase B: LLM reconciliation for conflicting scalar values.
+    """
+    if not all_records:
+        return []
+    if len(all_records) == 1:
+        return all_records
+
+    identity_field = _identify_field(schema_obj)
+    logger.info(
+        "Multi-record merge starting",
+        extra={
+            "total_partials": len(all_records),
+            "identity_field": identity_field,
+        },
+    )
+
+    groups = _group_partial_records(all_records, identity_field)
+    merged_records = [_merge_partial_group(g, schema_obj) for g in groups]
+
+    reconciled = []
+    for rec in merged_records:
+        reconciled.append(
+            await _reconcile_conflicts(rec, schema_obj, principal, agent_uuid)
+        )
+
+    return reconciled
 
 
 def _build_field_query(field_name: str, field_def: Dict[str, Any], schema_name: Optional[str]) -> str:
@@ -627,40 +1005,6 @@ async def _search_context_for_field(
         return ""
 
 
-def _merge_partial_records(
-    partial_records: List[Dict[str, Any]],
-    schema_obj: Dict[str, Any],
-) -> List[Dict[str, Any]]:
-    if not partial_records:
-        return []
-
-    merged: Dict[str, Any] = {}
-    fields = schema_obj.get("fields", {}) if isinstance(schema_obj, dict) else {}
-
-    for record in partial_records:
-        for key, value in record.items():
-            if key == "_provenance":
-                merged["_provenance"] = _merge_provenance(merged.get("_provenance"), value)
-                continue
-            if value is None:
-                continue
-            field_def = fields.get(key, {}) if isinstance(fields, dict) else {}
-            field_type = field_def.get("type")
-            if field_type == "array" and isinstance(value, list):
-                existing = merged.get(key, [])
-                if not isinstance(existing, list):
-                    existing = []
-                for item in value:
-                    if item not in existing:
-                        existing.append(item)
-                max_items = int(field_def.get("maxItems", 20) or 20)
-                merged[key] = existing[:max_items]
-            elif key not in merged:
-                merged[key] = value
-
-    return [merged] if merged else []
-
-
 def _build_extraction_prompt(
     *,
     schema_document_id: str,
@@ -684,7 +1028,9 @@ def _build_extraction_prompt(
     )
     mode_instructions = (
         "Return ONLY valid JSON with shape {\"records\":[...]} and no markdown/prose. "
-        "If a field is not present, omit it or set null. "
+        "If a field is not present in the document, omit it or set null — do NOT return an empty records array just because some fields are missing. "
+        "Always extract at least one record if the document contains ANY relevant data. "
+        "Ignore the 'required' flags in the schema; extract whatever you can find. "
         "Do not invent data. "
         "Do not produce exhaustive lists; include only the most salient values. "
         "For array fields, include at most 25 items (compact mode) "
@@ -692,6 +1038,9 @@ def _build_extraction_prompt(
         if compact_mode
         else (
             "Return strict JSON with shape {\"records\":[...]} and no markdown/prose. "
+            "If a field is not present in the document, omit it or set null — do NOT return an empty records array just because some fields are missing. "
+            "Always extract at least one record if the document contains ANY relevant data. "
+            "Ignore the 'required' flags in the schema; extract whatever you can find. "
             "Do not produce exhaustive lists; include only the most salient values "
             "(typically <= 12 items for list fields)."
         )
@@ -1029,9 +1378,10 @@ def _validate_and_enrich_records(
         # Unknown/custom field types pass through as-is.
         return value
 
-    for record in records:
+    for record_idx, record in enumerate(records):
         active_coercions = []
         row = dict(record)
+        missing_required: List[str] = []
         for field_name, field_def in fields.items():
             if not isinstance(field_def, dict):
                 continue
@@ -1039,21 +1389,58 @@ def _validate_and_enrich_records(
             current_value = row.get(field_name)
 
             if required and current_value is None:
-                raise ValueError(f"Missing required field: {field_name}")
+                missing_required.append(field_name)
+                continue
 
             if current_value is not None:
-                row[field_name] = _coerce_to_field_type(field_name, current_value, field_def)
+                try:
+                    row[field_name] = _coerce_to_field_type(field_name, current_value, field_def)
+                except (ValueError, TypeError) as coerce_err:
+                    logger.warning(
+                        "Field coercion failed, setting to null",
+                        extra={
+                            "record_idx": record_idx,
+                            "field_name": field_name,
+                            "error": str(coerce_err),
+                        },
+                    )
+                    row[field_name] = None
+                    active_coercions.append({
+                        "field": field_name,
+                        "reason": f"coercion_failed: {coerce_err}",
+                    })
+                    continue
 
-                # Numeric range checks (keep parity with data-api validation)
                 field_type = field_def.get("type", "string")
                 if field_type in ("integer", "number"):
                     min_val = field_def.get("min")
                     max_val = field_def.get("max")
                     value = row[field_name]
-                    if min_val is not None and value < min_val:
-                        raise ValueError(f"Field '{field_name}' must be >= {min_val}")
-                    if max_val is not None and value > max_val:
-                        raise ValueError(f"Field '{field_name}' must be <= {max_val}")
+                    if min_val is not None and isinstance(value, (int, float)) and value < min_val:
+                        logger.warning(
+                            "Field below minimum, clamping",
+                            extra={"field_name": field_name, "value": value, "min": min_val},
+                        )
+                        row[field_name] = min_val
+                    if max_val is not None and isinstance(value, (int, float)) and value > max_val:
+                        logger.warning(
+                            "Field above maximum, clamping",
+                            extra={"field_name": field_name, "value": value, "max": max_val},
+                        )
+                        row[field_name] = max_val
+
+        if missing_required:
+            logger.warning(
+                "Record missing required fields — including record anyway",
+                extra={
+                    "record_idx": record_idx,
+                    "missing_fields": missing_required,
+                },
+            )
+            active_coercions.append({
+                "field": ", ".join(missing_required),
+                "reason": "missing_required_field_allowed",
+            })
 
         if "_provenance" not in row or not isinstance(row.get("_provenance"), dict):
             row["_provenance"] = {}
@@ -1093,6 +1480,324 @@ async def _resolve_principal(
     )
 
 
+async def _run_tier2_rag_extraction(
+    *,
+    task_id: str,
+    payload: ExtractRequest,
+    principal: Principal,
+    client: BusiboxClient,
+    schema_obj: Dict[str, Any],
+    schema_doc: Dict[str, Any],
+    agent_uuid: uuid.UUID,
+    instructions: str,
+    response_schema: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """
+    Tier 2: RAG-guided extraction.
+
+    Uses search-api to retrieve the most relevant chunks for ALL fields,
+    deduplicates, assembles in document order, then runs one or more LLM
+    calls with the full (relaxed) schema.
+    """
+    _extraction_tasks[task_id]["step"] = "tier2_rag_retrieval"
+
+    try:
+        search_api_token = await get_service_token(
+            user_token=principal.token,
+            user_id=principal.sub,
+            target_audience="search-api",
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Failed to get search-api token: {exc}") from exc
+
+    search_client = BusiboxClient(search_api_token)
+    fields = (schema_obj.get("fields") or {}) if isinstance(schema_obj, dict) else {}
+    schema_name = schema_doc.get("name")
+
+    field_names = list(fields.keys()) if isinstance(fields, dict) else []
+    search_tasks = []
+    for field_name in field_names:
+        field_def = fields.get(field_name)
+        if isinstance(field_def, dict):
+            search_tasks.append(
+                _search_context_for_field(
+                    search_client=search_client,
+                    file_id=payload.file_id,
+                    field_name=field_name,
+                    field_def=field_def,
+                    schema_name=schema_name,
+                )
+            )
+        else:
+            search_tasks.append(asyncio.sleep(0, result=""))
+
+    field_contexts = await asyncio.gather(*search_tasks)
+
+    seen_snippets: Dict[str, int] = {}
+    ordered_chunks: List[Tuple[int, str]] = []
+    for ctx_text in field_contexts:
+        if not ctx_text:
+            continue
+        for line in ctx_text.split("\n\n"):
+            line = line.strip()
+            if not line or line in seen_snippets:
+                continue
+            order_key = len(seen_snippets)
+            chunk_match = re.search(r"chunk\s+(\d+)", line)
+            if chunk_match:
+                order_key = int(chunk_match.group(1))
+            seen_snippets[line] = order_key
+            ordered_chunks.append((order_key, line))
+
+    ordered_chunks.sort(key=lambda x: x[0])
+    assembled_context = "\n\n".join(c[1] for c in ordered_chunks)
+    context_tokens = _estimate_markdown_tokens(assembled_context)
+
+    relaxed_schema, relaxed_response = _relax_schema_for_chunked(schema_obj, response_schema)
+    estimated_max = _estimate_max_tokens_for_response_schema(relaxed_response)
+
+    if context_tokens <= RAG_CONTEXT_MAX_TOKENS:
+        _extraction_tasks[task_id]["step"] = "tier2_rag_extraction"
+        prompt = _build_extraction_prompt(
+            schema_document_id=payload.schema_document_id,
+            file_id=payload.file_id,
+            schema_obj=relaxed_schema,
+            markdown=assembled_context,
+            instructions=instructions + "\nThis is a subset of the document (most relevant sections). Extract all records you can find.",
+            compact_mode=False,
+        )
+        async with SessionLocal() as session:
+            run = await create_run(
+                session=session,
+                principal=principal,
+                agent_id=agent_uuid,
+                payload={
+                    "prompt": prompt,
+                    "response_schema": relaxed_response,
+                    "max_tokens": estimated_max,
+                },
+                scopes=["agent.execute", "data.read", "data.write", "search.read", "graph.read", "graph.write"],
+                purpose="structured-extraction-rag",
+                agent_tier="complex",
+            )
+        if run.status != "succeeded":
+            raise RuntimeError(f"RAG extraction run failed: run_id={run.id}, status={run.status}")
+        output = run.output or {}
+        if not isinstance(output, dict):
+            output = {"result": str(output)}
+        records = _extract_records(output)
+        logger.info("Tier 2 RAG extraction complete", extra={"run_id": str(run.id), "record_count": len(records)})
+        return records
+
+    chunk_lines = [c[1] for c in ordered_chunks]
+    windows: List[str] = []
+    current_window: List[str] = []
+    current_tokens = 0
+    for line in chunk_lines:
+        line_tokens = _estimate_markdown_tokens(line)
+        if current_tokens + line_tokens > RAG_CONTEXT_MAX_TOKENS and current_window:
+            windows.append("\n\n".join(current_window))
+            current_window = []
+            current_tokens = 0
+        current_window.append(line)
+        current_tokens += line_tokens
+    if current_window:
+        windows.append("\n\n".join(current_window))
+
+    semaphore = asyncio.Semaphore(MAX_PARALLEL_CHUNK_RUNS)
+    all_records: List[Dict[str, Any]] = []
+
+    async def _run_rag_window(window_idx: int, window_text: str) -> List[Dict[str, Any]]:
+        _extraction_tasks[task_id]["step"] = f"tier2_rag_window_{window_idx + 1}_of_{len(windows)}"
+        prompt = _build_extraction_prompt(
+            schema_document_id=payload.schema_document_id,
+            file_id=payload.file_id,
+            schema_obj=relaxed_schema,
+            markdown=window_text,
+            instructions=instructions + f"\nThis is section {window_idx + 1} of {len(windows)} of the most relevant document sections. Extract all matching records.",
+            compact_mode=False,
+        )
+        async with semaphore:
+            async with SessionLocal() as session:
+                run = await create_run(
+                    session=session,
+                    principal=principal,
+                    agent_id=agent_uuid,
+                    payload={
+                        "prompt": prompt,
+                        "response_schema": relaxed_response,
+                        "max_tokens": estimated_max,
+                    },
+                    scopes=["agent.execute", "data.read", "data.write", "search.read", "graph.read", "graph.write"],
+                    purpose=f"structured-extraction-rag-window-{window_idx}",
+                    agent_tier="complex",
+                )
+        if run.status == "succeeded":
+            output = run.output or {}
+            if not isinstance(output, dict):
+                output = {"result": str(output)}
+            return _extract_records(output)
+        return []
+
+    window_results = await asyncio.gather(
+        *[_run_rag_window(i, w) for i, w in enumerate(windows)]
+    )
+    for recs in window_results:
+        all_records.extend(recs)
+
+    logger.info("Tier 2 RAG multi-window extraction complete", extra={"window_count": len(windows), "total_records": len(all_records)})
+    return all_records
+
+
+async def _run_tier3_chunk_sweep(
+    *,
+    task_id: str,
+    payload: ExtractRequest,
+    principal: Principal,
+    client: BusiboxClient,
+    schema_obj: Dict[str, Any],
+    agent_uuid: uuid.UUID,
+    instructions: str,
+    response_schema: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """
+    Tier 3: Progressive chunk sweep for very large documents.
+
+    Fetches all chunks from data-api, groups them into token windows with
+    overlap, runs parallel LLM extractions, and offset-corrects provenance.
+    """
+    _extraction_tasks[task_id]["step"] = "tier3_fetching_chunks"
+
+    chunks: List[Dict[str, Any]] = []
+    page = 1
+    page_size = 100
+    while True:
+        try:
+            resp = await client.request(
+                "GET",
+                f"/files/{payload.file_id}/chunks",
+                params={"page": page, "pageSize": page_size},
+            )
+        except Exception as exc:
+            logger.warning("Failed to fetch chunks for tier 3", extra={"error": str(exc)})
+            break
+
+        page_chunks = resp.get("chunks", []) if isinstance(resp, dict) else []
+        if not page_chunks:
+            break
+        chunks.extend(page_chunks)
+        total_pages = resp.get("totalPages", 1)
+        if page >= total_pages:
+            break
+        page += 1
+
+    if not chunks:
+        raise RuntimeError("Tier 3 chunk sweep: no chunks available for this document")
+
+    chunks.sort(key=lambda c: c.get("chunkIndex", c.get("chunk_index", 0)))
+
+    windows: List[Tuple[str, int]] = []
+    current_texts: List[str] = []
+    current_tokens = 0
+    window_start_offset = chunks[0].get("charOffset", chunks[0].get("char_offset", 0)) if chunks else 0
+    overlap_buffer: List[Dict[str, Any]] = []
+
+    for chunk in chunks:
+        text = chunk.get("text", "")
+        token_count = chunk.get("tokenCount", chunk.get("token_count")) or _estimate_markdown_tokens(text)
+        char_offset = chunk.get("charOffset", chunk.get("char_offset", 0))
+
+        if current_tokens + token_count > CHUNK_WINDOW_TOKENS and current_texts:
+            windows.append(("\n\n".join(current_texts), window_start_offset))
+
+            overlap_texts: List[str] = []
+            overlap_tokens = 0
+            for ob in reversed(overlap_buffer):
+                ob_text = ob.get("text", "")
+                ob_tokens = ob.get("tokenCount", ob.get("token_count")) or _estimate_markdown_tokens(ob_text)
+                if overlap_tokens + ob_tokens > CHUNK_OVERLAP_TOKENS:
+                    break
+                overlap_texts.insert(0, ob_text)
+                overlap_tokens += ob_tokens
+
+            current_texts = overlap_texts
+            current_tokens = overlap_tokens
+            window_start_offset = char_offset - (sum(len(t) for t in overlap_texts)) if overlap_texts else char_offset
+
+        current_texts.append(text)
+        current_tokens += token_count
+        overlap_buffer.append(chunk)
+        if len(overlap_buffer) > 10:
+            overlap_buffer = overlap_buffer[-10:]
+
+    if current_texts:
+        windows.append(("\n\n".join(current_texts), window_start_offset))
+
+    logger.info(
+        "Tier 3 chunk windows prepared",
+        extra={"chunk_count": len(chunks), "window_count": len(windows)},
+    )
+
+    relaxed_schema, relaxed_response = _relax_schema_for_chunked(schema_obj, response_schema)
+    estimated_max = _estimate_max_tokens_for_response_schema(relaxed_response)
+    semaphore = asyncio.Semaphore(MAX_PARALLEL_CHUNK_RUNS)
+    all_records: List[Dict[str, Any]] = []
+
+    async def _run_chunk_window(window_idx: int, window_text: str, char_offset: int) -> List[Dict[str, Any]]:
+        _extraction_tasks[task_id]["step"] = f"chunk_extraction_{window_idx + 1}_of_{len(windows)}"
+        prompt = _build_extraction_prompt(
+            schema_document_id=payload.schema_document_id,
+            file_id=payload.file_id,
+            schema_obj=relaxed_schema,
+            markdown=window_text,
+            instructions=(
+                f"{instructions}\n"
+                f"This is chunk window {window_idx + 1} of {len(windows)} from a large document. "
+                "Extract all records found in this section. Fields not present in this section should be null."
+            ),
+            compact_mode=False,
+        )
+        async with semaphore:
+            async with SessionLocal() as session:
+                run = await create_run(
+                    session=session,
+                    principal=principal,
+                    agent_id=agent_uuid,
+                    payload={
+                        "prompt": prompt,
+                        "response_schema": relaxed_response,
+                        "max_tokens": estimated_max,
+                    },
+                    scopes=["agent.execute", "data.read", "data.write", "search.read", "graph.read", "graph.write"],
+                    purpose=f"structured-extraction-chunk-{window_idx}",
+                    agent_tier="complex",
+                )
+        if run.status == "succeeded":
+            output = run.output or {}
+            if not isinstance(output, dict):
+                output = {"result": str(output)}
+            records = _extract_records(output)
+            _offset_correct_provenance(records, char_offset)
+            return records
+        logger.warning(
+            "Tier 3 chunk window extraction failed",
+            extra={"window_idx": window_idx, "run_id": str(run.id), "status": run.status},
+        )
+        return []
+
+    window_results = await asyncio.gather(
+        *[_run_chunk_window(i, text, offset) for i, (text, offset) in enumerate(windows)]
+    )
+    for recs in window_results:
+        all_records.extend(recs)
+
+    logger.info(
+        "Tier 3 chunk sweep extraction complete",
+        extra={"window_count": len(windows), "total_records": len(all_records)},
+    )
+    return all_records
+
+
 async def _run_extraction_pipeline(
     *,
     task_id: str,
@@ -1104,7 +1809,7 @@ async def _run_extraction_pipeline(
     schema_obj: Dict[str, Any],
     agent_uuid: uuid.UUID,
     instructions: str,
-    batch_mode: bool,
+    extraction_tier: str,
     response_schema: Dict[str, Any],
     estimated_max_tokens: int,
 ) -> None:
@@ -1112,129 +1817,88 @@ async def _run_extraction_pipeline(
     Background coroutine that performs LLM extraction, stores records, creates
     graph entities, indexes to Milvus, and updates file metadata.
 
+    Uses a three-tier approach based on document size:
+      - **direct** (<12k tokens): single-shot LLM call with full doc
+      - **rag** (12k-100k tokens): RAG-guided retrieval + LLM extraction
+      - **chunk_sweep** (>100k tokens): progressive chunk-by-chunk extraction
+
     Progress is tracked via ``_extraction_tasks[task_id]`` and the file's
     ``metadata.extraction.status`` field (visible through normal file-metadata polling).
     """
     try:
         _extraction_tasks[task_id]["status"] = "running"
-        _extraction_tasks[task_id]["step"] = "llm_extraction"
+        _extraction_tasks[task_id]["step"] = f"llm_extraction_tier_{extraction_tier}"
 
         run = None
         output: Dict[str, Any] = {}
         records: List[Dict[str, Any]] = []
+        run_id = "unknown"
 
-        if batch_mode:
+        logger.info(
+            "Extraction pipeline starting",
+            extra={
+                "task_id": task_id,
+                "extraction_tier": extraction_tier,
+                "file_id": payload.file_id,
+                "markdown_tokens": _estimate_markdown_tokens(markdown),
+            },
+        )
+
+        if extraction_tier == "rag":
             try:
-                search_api_token = await get_service_token(
-                    user_token=principal.token,
-                    user_id=principal.sub,
-                    target_audience="search-api",
+                records = await _run_tier2_rag_extraction(
+                    task_id=task_id,
+                    payload=payload,
+                    principal=principal,
+                    client=client,
+                    schema_obj=schema_obj if isinstance(schema_obj, dict) else {},
+                    schema_doc=schema_doc,
+                    agent_uuid=agent_uuid,
+                    instructions=instructions,
+                    response_schema=response_schema,
                 )
-            except Exception as exc:
-                raise RuntimeError(f"Failed to get search-api token: {exc}") from exc
-
-            search_client = BusiboxClient(search_api_token)
-            fields = (schema_obj.get("fields") or {}) if isinstance(schema_obj, dict) else {}
-            schema_name = schema_doc.get("name")
-
-            field_context_tasks = []
-            field_names = list(fields.keys()) if isinstance(fields, dict) else []
-            for field_name in field_names:
-                field_def = fields.get(field_name)
-                if isinstance(field_def, dict):
-                    field_context_tasks.append(
-                        _search_context_for_field(
-                            search_client=search_client,
-                            file_id=payload.file_id,
-                            field_name=field_name,
-                            field_def=field_def,
-                            schema_name=schema_name,
-                        )
+                if records:
+                    records = await _merge_multi_record_results(
+                        records, schema_obj if isinstance(schema_obj, dict) else {},
+                        principal, agent_uuid,
                     )
-                else:
-                    field_context_tasks.append(asyncio.sleep(0, result=""))
-            field_context_values = await asyncio.gather(*field_context_tasks)
-            field_context_map = {name: field_context_values[idx] for idx, name in enumerate(field_names)}
-
-            field_batches = _partition_fields(schema_obj if isinstance(schema_obj, dict) else {}, FIELD_BATCH_SIZE)
-            semaphore = asyncio.Semaphore(MAX_PARALLEL_BATCH_RUNS)
-
-            async def _run_field_batch(batch_index: int, batch_fields: List[str]) -> Dict[str, Any]:
-                subset_fields = {f: fields[f] for f in batch_fields if f in fields}
-                subset_schema = {
-                    "schemaName": schema_obj.get("schemaName"),
-                    "displayName": schema_obj.get("displayName"),
-                    "itemLabel": schema_obj.get("itemLabel"),
-                    "fields": subset_fields,
-                }
-                subset_response_schema = _build_records_response_schema(subset_schema, max_records=1)
-                subset_max_tokens = _estimate_max_tokens_for_response_schema(subset_response_schema)
-
-                context_blocks: List[str] = []
-                for field_name in batch_fields:
-                    context_text = field_context_map.get(field_name, "")
-                    if context_text:
-                        context_blocks.append(f"Field: {field_name}\nRelevant chunks:\n{context_text}")
-
-                retrieved_context = "\n\n".join(context_blocks).strip()
-                if not retrieved_context:
-                    retrieved_context = markdown[:12000]
-
-                batch_prompt = (
-                    f"{instructions}\n\n"
-                    "You are running FIELD-BATCHED extraction for long documents.\n"
-                    "Extract ONLY the fields listed in this batch schema.\n"
-                    "Return ONLY valid JSON matching the response schema (no prose).\n\n"
-                    f"Batch index: {batch_index}\n"
-                    f"Source file ID: {payload.file_id}\n"
-                    f"Schema document ID: {payload.schema_document_id}\n\n"
-                    f"Batch schema:\n```json\n{json.dumps(subset_schema, indent=2)}\n```\n\n"
-                    f"Retrieved evidence chunks:\n{retrieved_context}\n"
+                    output = {"result": "tier2-rag", "tier": "rag"}
+            except Exception as tier2_exc:
+                logger.warning(
+                    "Tier 2 RAG extraction failed, falling back to direct",
+                    extra={"error": str(tier2_exc)},
                 )
+                records = []
 
-                async with semaphore:
-                    async with SessionLocal() as batch_session:
-                        batch_run = await create_run(
-                            session=batch_session,
-                            principal=principal,
-                            agent_id=agent_uuid,
-                            payload={
-                                "prompt": batch_prompt,
-                                "response_schema": subset_response_schema,
-                                "max_tokens": subset_max_tokens,
-                            },
-                            scopes=["agent.execute", "data.read", "data.write", "search.read", "graph.read", "graph.write"],
-                            purpose=f"structured-extraction-batch-{batch_index}",
-                            agent_tier="complex",
-                        )
+        elif extraction_tier == "chunk_sweep":
+            try:
+                records = await _run_tier3_chunk_sweep(
+                    task_id=task_id,
+                    payload=payload,
+                    principal=principal,
+                    client=client,
+                    schema_obj=schema_obj if isinstance(schema_obj, dict) else {},
+                    agent_uuid=agent_uuid,
+                    instructions=instructions,
+                    response_schema=response_schema,
+                )
+                if records:
+                    records = await _merge_multi_record_results(
+                        records, schema_obj if isinstance(schema_obj, dict) else {},
+                        principal, agent_uuid,
+                    )
+                    output = {"result": "tier3-chunk-sweep", "tier": "chunk_sweep"}
+            except Exception as tier3_exc:
+                logger.warning(
+                    "Tier 3 chunk sweep failed, falling back to direct with truncated markdown",
+                    extra={"error": str(tier3_exc)},
+                )
+                records = []
+                markdown = markdown[: TIER1_TOKEN_THRESHOLD * 4]
 
-                    batch_output = batch_run.output or {}
-                    if not isinstance(batch_output, dict):
-                        batch_output = {"result": str(batch_output)}
-                    batch_records = _extract_records(batch_output) if batch_run.status == "succeeded" else []
-                    return {
-                        "run": batch_run,
-                        "output": batch_output,
-                        "records": batch_records,
-                    }
-
-            batch_results = await asyncio.gather(
-                *[_run_field_batch(i + 1, batch_fields) for i, batch_fields in enumerate(field_batches)]
-            )
-            successful_runs = [r["run"] for r in batch_results if r.get("run") and r["run"].status == "succeeded"]
-            partial_records = []
-            for result_item in batch_results:
-                partial_records.extend(result_item.get("records", []))
-
-            records = _merge_partial_records(partial_records, schema_obj if isinstance(schema_obj, dict) else {})
-            if successful_runs:
-                run = successful_runs[0]
-                output = {"result": "field-batched", "batchRunIds": [str(r.id) for r in successful_runs]}
-            elif batch_results:
-                run = batch_results[0].get("run")
-                output = batch_results[0].get("output", {})
-
+        # Tier 1 (direct) or fallback from failed higher tiers
         if not records:
+            _extraction_tasks[task_id]["step"] = "tier1_direct_extraction"
             prompt = _build_extraction_prompt(
                 schema_document_id=payload.schema_document_id,
                 file_id=payload.file_id,
@@ -1254,7 +1918,7 @@ async def _run_extraction_pipeline(
                         "max_tokens": estimated_max_tokens,
                     },
                     scopes=["agent.execute", "data.read", "data.write", "search.read", "graph.read", "graph.write"],
-                    purpose="structured-extraction",
+                    purpose="structured-extraction-direct",
                     agent_tier="complex",
                 )
 
@@ -1266,9 +1930,22 @@ async def _run_extraction_pipeline(
             output = run.output or {}
             if not isinstance(output, dict):
                 output = {"result": str(output)}
+            logger.info(
+                "Tier 1 direct extraction output",
+                extra={
+                    "run_id": str(run.id),
+                    "output_keys": list(output.keys()) if isinstance(output, dict) else type(output).__name__,
+                    "output_preview": str(output)[:500],
+                },
+            )
             records = _extract_records(output)
+            logger.info(
+                "Tier 1 records parsed",
+                extra={"run_id": str(run.id), "record_count": len(records)},
+            )
 
             if not records:
+                _extraction_tasks[task_id]["step"] = "tier1_retry"
                 retry_prompt = _build_extraction_prompt(
                     schema_document_id=payload.schema_document_id,
                     file_id=payload.file_id,
@@ -1295,11 +1972,23 @@ async def _run_extraction_pipeline(
                         purpose="structured-extraction-retry",
                         agent_tier="complex",
                     )
+                logger.info(
+                    "Extraction retry run completed",
+                    extra={
+                        "retry_run_id": str(retry_run.id),
+                        "retry_status": retry_run.status,
+                        "retry_output_preview": str(retry_run.output)[:500] if retry_run.output else "None",
+                    },
+                )
                 if retry_run.status == "succeeded":
                     retry_output = retry_run.output or {}
                     if not isinstance(retry_output, dict):
                         retry_output = {"result": str(retry_output)}
                     retry_records = _extract_records(retry_output)
+                    logger.info(
+                        "Extraction retry records parsed",
+                        extra={"retry_run_id": str(retry_run.id), "record_count": len(retry_records)},
+                    )
                     if retry_records:
                         run = retry_run
                         output = retry_output
@@ -1307,6 +1996,16 @@ async def _run_extraction_pipeline(
 
         if not records:
             run_id = str(run.id) if run is not None else "unknown"
+            output_preview = str(output)[:300] if output else "None"
+            logger.error(
+                "Extraction produced no records after all tiers + retry",
+                extra={
+                    "run_id": run_id,
+                    "output_preview": output_preview,
+                    "output_type": type(output).__name__,
+                    "extraction_tier": extraction_tier,
+                },
+            )
             raise RuntimeError(
                 f"Agent did not return extractable records: run_id={run_id}"
             )
@@ -1580,8 +2279,9 @@ async def extract_document(
         "Include _provenance per extracted field with source text and char offsets when available."
     )
     markdown_tokens = _estimate_markdown_tokens(markdown)
-    batch_mode = _should_use_field_batch_mode(markdown_tokens, schema_obj if isinstance(schema_obj, dict) else {})
+    extraction_tier = _select_extraction_tier(markdown_tokens)
 
+    schema_field_count = len(schema_obj.get("fields", {})) if isinstance(schema_obj, dict) else 0
     logger.info(
         "Extraction request accepted (background)",
         extra={
@@ -1589,9 +2289,17 @@ async def extract_document(
             "schema_document_id": payload.schema_document_id,
             "resolved_agent_id": str(agent_uuid),
             "markdown_tokens": markdown_tokens,
-            "batch_mode": batch_mode,
+            "extraction_tier": extraction_tier,
+            "schema_field_count": schema_field_count,
+            "schema_keys": list(schema_obj.keys()) if isinstance(schema_obj, dict) else str(type(schema_obj).__name__),
+            "schema_preview": str(schema_obj)[:400],
         },
     )
+    if schema_field_count == 0:
+        logger.warning(
+            "Schema has no fields — extraction will likely produce empty records",
+            extra={"schema_document_id": payload.schema_document_id, "schema_obj": str(schema_obj)[:500]},
+        )
 
     # Mark extraction as running in file metadata immediately.
     task_id = str(uuid.uuid4())
@@ -1644,7 +2352,7 @@ async def extract_document(
             schema_obj=schema_obj,
             agent_uuid=agent_uuid,
             instructions=instructions,
-            batch_mode=batch_mode,
+            extraction_tier=extraction_tier,
             response_schema=response_schema,
             estimated_max_tokens=estimated_max_tokens,
         )

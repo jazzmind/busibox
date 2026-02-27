@@ -91,20 +91,22 @@ load_backend "$CURRENT_BACKEND"
 #   - session_secret: Legacy from better-auth era. Auth is now handled by AuthZ
 #     service with RS256 JWTs. Only busibox-agents receives it; rotating is harmless
 #     (worst case: users re-login). Consider removing entirely.
-#   - litellm_master_key + litellm_api_key: Consolidated into one entry. Most services
-#     use litellm_master_key for both server and client auth. litellm_api_key is only
-#     used by voice-agent. Rotating both together keeps them in sync.
+#   - litellm_master_key, litellm_api_key, litellm_salt_key: All three participate
+#     in LiteLLM's DB encryption. Rotating any of them invalidates encrypted
+#     model configs, credentials, and env vars. The rotation handler purges the
+#     LiteLLM DB so agent-api can re-sync config-file models on restart; cloud
+#     provider API keys must be re-entered by the admin afterward.
 
 declare -a SAFE_SECRETS=(
     "secrets.postgresql.password|PostgreSQL password|postgres,authz-api,data-api,data-worker,search-api,agent-api,litellm|safe"
     "secrets.minio.root_user,secrets.minio.root_password|MinIO credentials|minio,data-api,data-worker,search-api|safe"
     "secrets.session_secret|Session secret (legacy)|core-apps|safe"
-    "secrets.litellm_master_key,secrets.litellm_api_key|LiteLLM key (server + client)|litellm,agent-api,search-api,data-worker|safe"
 )
 
 declare -a DANGEROUS_SECRETS=(
     "secrets.authz_master_key|AuthZ master key (KEK re-encryption)|authz-api|dangerous"
     "secrets.jwt_secret|JWT secret / key passphrase (signing key re-encryption)|authz-api|dangerous"
+    "secrets.litellm_master_key,secrets.litellm_api_key,secrets.litellm_salt_key|LiteLLM keys (DB re-encryption)|litellm,agent-api,search-api,data-worker|dangerous"
 )
 
 # ============================================================================
@@ -167,6 +169,9 @@ rotate_secret() {
             secrets.litellm_api_key)
                 new_value="sk-$(_gen_secret 16)"
                 ;;
+            secrets.litellm_salt_key)
+                new_value="salt-$(_gen_secret 32)"
+                ;;
             secrets.minio.root_user)
                 # Don't rotate the username, only the password
                 info "  Keeping MinIO username unchanged"
@@ -191,6 +196,14 @@ rotate_secret() {
     # Special handling for PostgreSQL: ALTER USER before updating vault
     if [[ "$vault_keys" == *"postgresql.password"* ]]; then
         _rotate_postgres_password "${updates[0]#*=}"
+    fi
+    
+    # Special handling for LiteLLM salt key: purge encrypted data from DB
+    # All three LiteLLM keys participate in DB encryption. Purge encrypted
+    # data before changing any of them; agent-api re-syncs config models on
+    # restart and the admin must re-enter cloud API keys.
+    if [[ "$vault_keys" == *"litellm_master_key"* ]]; then
+        _rotate_litellm_keys
     fi
     
     # Update vault
@@ -261,6 +274,70 @@ _rotate_postgres_password() {
             warn "  Password will be updated in vault; redeploy postgres to apply"
             ;;
     esac
+}
+
+# Special LiteLLM salt key rotation
+# Purge all encrypted data from LiteLLM's DB before changing keys.
+# After this, agent-api startup re-syncs config-file models automatically.
+# Cloud provider API keys must be re-entered by the admin.
+_rotate_litellm_keys() {
+    info "  Purging encrypted data from LiteLLM database..."
+
+    local _psql_cmd=""
+
+    case "$CURRENT_BACKEND" in
+        docker)
+            local pg_container="${CONTAINER_PREFIX}-postgres"
+            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${pg_container}$"; then
+                _psql_cmd="docker exec $pg_container psql -U busibox_user -d litellm -t -A -c"
+            else
+                warn "  PostgreSQL container not running - encrypted data will be stale"
+                warn "  After deploying, run: make manage SERVICE=litellm ACTION=restart"
+                return 0
+            fi
+            ;;
+        k8s)
+            local kubeconfig=""
+            if [[ -n "$_active_profile" ]]; then
+                kubeconfig=$(profile_get_kubeconfig "$_active_profile" 2>/dev/null)
+            fi
+            kubeconfig="${kubeconfig:-${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml}"
+            local pg_pod
+            pg_pod=$(KUBECONFIG="$kubeconfig" kubectl get pods -n busibox \
+                -l app=postgres -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+            if [[ -n "$pg_pod" ]]; then
+                _psql_cmd="KUBECONFIG=$kubeconfig kubectl exec -n busibox $pg_pod -- psql -U busibox_user -d litellm -t -A -c"
+            else
+                warn "  PostgreSQL pod not found - encrypted data will be stale"
+                return 0
+            fi
+            ;;
+        proxmox)
+            warn "  Proxmox LiteLLM salt rotation requires SSH access to pg-lxc"
+            warn "  After rotation, run: make install SERVICE=litellm,agent-api"
+            return 0
+            ;;
+    esac
+
+    if [[ -n "$_psql_cmd" ]]; then
+        # Purge model deployments (re-created by agent-api on next startup)
+        eval "$_psql_cmd 'DELETE FROM \"LiteLLM_ProxyModelTable\"'" 2>/dev/null && \
+            info "    Purged LiteLLM_ProxyModelTable" || \
+            warn "    Failed to purge LiteLLM_ProxyModelTable (table may not exist yet)"
+
+        # Purge environment variables config
+        eval "$_psql_cmd 'DELETE FROM \"LiteLLM_Config\" WHERE param_name = '\\''environment_variables'\\'''" 2>/dev/null && \
+            info "    Purged LiteLLM_Config environment_variables" || \
+            warn "    Failed to purge LiteLLM_Config"
+
+        # Purge stored credentials
+        eval "$_psql_cmd 'DELETE FROM \"LiteLLM_CredentialsTable\"'" 2>/dev/null && \
+            info "    Purged LiteLLM_CredentialsTable" || \
+            warn "    Failed to purge LiteLLM_CredentialsTable"
+
+        success "  LiteLLM encrypted data purged"
+        warn "  Cloud provider API keys must be re-entered in Settings > AI Models"
+    fi
 }
 
 # Restart affected services after rotation
@@ -474,6 +551,12 @@ show_rotation_menu() {
                         echo -e "  ${BOLD}signing key PEM stored in the database.${NC}"
                         echo ""
                         echo -e "  ${YELLOW}This is NOT YET AUTOMATED and may cause auth failures.${NC}"
+                    elif [[ "$keys" == *"litellm_master_key"* ]]; then
+                        echo -e "  ${BOLD}Rotating LiteLLM keys will purge all encrypted data from${NC}"
+                        echo -e "  ${BOLD}LiteLLM's database: model configs, credentials, env vars.${NC}"
+                        echo ""
+                        echo -e "  ${YELLOW}Config-file models are re-synced automatically on restart.${NC}"
+                        echo -e "  ${YELLOW}Cloud provider API keys must be re-entered in Settings > AI Models.${NC}"
                     fi
                     
                     echo ""

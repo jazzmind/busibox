@@ -314,7 +314,9 @@ services:
     environment:
       PYTHONPATH: /app
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
-      # Stable salt key for encrypted provider keys in LiteLLM DB.
+      # Salt key is the SOLE encryption key for LiteLLM DB data (model configs,
+      # credentials, env vars). Must remain stable across restarts/deploys.
+      # Falls back to master key for backward compat with pre-salt deployments.
       LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-${LITELLM_MASTER_KEY:-sk-local-dev-key}}
       # MLX auto-start hook context
       LLM_BACKEND: ${LLM_BACKEND:-}
@@ -505,6 +507,7 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       MINIO_SECURE: "false"
       MINIO_BUCKET: documents
+      MINIO_EXTERNAL_BASE_URL: /files
       # Milvus
       MILVUS_HOST: milvus
       MILVUS_COLLECTION: documents
@@ -601,6 +604,7 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       MINIO_SECURE: "false"
       MINIO_BUCKET: documents
+      MINIO_EXTERNAL_BASE_URL: /files
       # Milvus
       MILVUS_HOST: milvus
       MILVUS_COLLECTION: documents

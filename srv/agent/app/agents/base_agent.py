@@ -1400,91 +1400,27 @@ class BaseStreamingAgent(StreamingAgent):
         context: "AgentContext",
     ) -> str:
         """
-        Run structured output using PydanticAI NativeOutput when possible.
+        Run structured output by sending our exact JSON Schema to the LLM
+        via ``_call_structured_output``.
 
-        Converts the runtime ``response_schema`` to a Pydantic model and uses
-        PydanticAI's ``NativeOutput`` mode, which sends ``response_format`` to the
-        provider *and* validates + retries on the application side.
-
-        When the backend does not enforce structured output (e.g. bare MLX),
-        skips NativeOutput entirely and delegates to ``_call_structured_output``
-        which injects the schema into the prompt.
-
-        Falls back to ``_call_structured_output`` if the schema cannot be
-        converted to a Pydantic model or NativeOutput is unavailable.
+        We bypass PydanticAI's NativeOutput because the Pydantic round-trip
+        (JSON Schema → Pydantic model → re-serialized JSON Schema) produces
+        a degraded schema: ``anyOf``/``null`` unions replace simple types,
+        ``$ref``/``$defs`` indirection confuses local models, ``maxLength``
+        and ``maxItems`` constraints are dropped, and ``additionalProperties``
+        properties like ``_provenance`` disappear.  The direct OpenAI path
+        sends our carefully-crafted schema verbatim and includes its own
+        jsonschema validation + retry loop.
         """
         response_schema = context.response_schema
         assert response_schema is not None
 
-        from app.utils.json_schema_to_pydantic import json_schema_to_pydantic
-
-        try:
-            dynamic_model = json_schema_to_pydantic(response_schema)
-        except Exception as e:
-            logger.warning(
-                f"{self.name} could not convert response_schema to Pydantic model, "
-                f"falling back to direct OpenAI call: {e}",
-            )
-            return await self._call_structured_output(
-                prompt=query,
-                system_prompt=self.config.instructions,
-                response_schema=response_schema,
-                max_tokens=context.max_tokens or self.config.max_tokens,
-            )
-
-        try:
-            from pydantic_ai import Agent as _Agent, NativeOutput
-        except ImportError:
-            logger.warning(
-                f"{self.name} NativeOutput not available in this pydantic-ai version, "
-                "falling back to direct OpenAI call",
-            )
-            return await self._call_structured_output(
-                prompt=query,
-                system_prompt=self.config.instructions,
-                response_schema=response_schema,
-                max_tokens=context.max_tokens or self.config.max_tokens,
-            )
-
-        schema_name = response_schema.get("name", "structured_output")
-
-        model_settings: Dict[str, Any] = {}
-        runtime_max_tokens = context.max_tokens if context.max_tokens is not None else self.config.max_tokens
-        if runtime_max_tokens is not None:
-            model_settings["max_tokens"] = runtime_max_tokens
-        else:
-            model_settings["max_tokens"] = 32768
-
-        if not self.config.allow_frontier_fallback:
-            model_settings.setdefault("extra_body", {})["disable_fallbacks"] = True
-
-        agent = _Agent(
-            model=self.synthesis_model,
+        return await self._call_structured_output(
+            prompt=query,
             system_prompt=self.config.instructions,
-            output_type=NativeOutput(dynamic_model, name=schema_name),
+            response_schema=response_schema,
+            max_tokens=context.max_tokens or self.config.max_tokens,
         )
-
-        logger.info(
-            f"{self.name} running PydanticAI NativeOutput structured call",
-            extra={
-                "schema_name": schema_name,
-                "model_class": dynamic_model.__name__,
-                "prompt_length": len(query),
-            },
-        )
-
-        result = await agent.run(
-            query,
-            deps=context.deps,
-            model_settings=model_settings if model_settings else None,
-        )
-
-        output = result.output
-        if hasattr(output, "model_dump"):
-            return json.dumps(output.model_dump(mode="json"))
-        if isinstance(output, (dict, list)):
-            return json.dumps(output)
-        return str(output)
 
     @staticmethod
     def _extract_json_from_response(content: str) -> str:
@@ -1527,6 +1463,43 @@ class BaseStreamingAgent(StreamingAgent):
                     continue
 
         return cleaned
+
+    @staticmethod
+    def _fixup_arrays(data: Any, schema: Dict[str, Any]) -> Any:
+        """Deduplicate and truncate arrays that exceed maxItems.
+
+        Local LLMs (MLX/vLLM) often ignore maxItems and return duplicate
+        records.  Rather than wasting a retry call, fix it up in-place.
+        """
+        if not isinstance(data, dict) or not isinstance(schema, dict):
+            return data
+
+        props = schema.get("properties", {})
+        for key, prop_schema in props.items():
+            if key not in data or not isinstance(prop_schema, dict):
+                continue
+            if prop_schema.get("type") == "array" and isinstance(data[key], list):
+                max_items = prop_schema.get("maxItems")
+                arr = data[key]
+                if len(arr) > 1:
+                    seen: list = []
+                    for item in arr:
+                        if item not in seen:
+                            seen.append(item)
+                    if len(seen) < len(arr):
+                        arr = seen
+                        data[key] = arr
+                if max_items is not None and len(arr) > max_items:
+                    data[key] = arr[:max_items]
+                items_schema = prop_schema.get("items", {})
+                if isinstance(items_schema, dict) and items_schema.get("type") == "object":
+                    for item in data[key]:
+                        if isinstance(item, dict):
+                            BaseStreamingAgent._fixup_arrays(item, items_schema)
+            elif prop_schema.get("type") == "object" and isinstance(data[key], dict):
+                BaseStreamingAgent._fixup_arrays(data[key], prop_schema)
+
+        return data
 
     async def _call_structured_output(
         self,
@@ -1619,6 +1592,9 @@ class BaseStreamingAgent(StreamingAgent):
                     ]
                     continue
                 raise ValueError(f"Structured output failed after {max_attempts} attempts: {last_error}")
+
+            parsed = self._fixup_arrays(parsed, json_schema)
+            content = json.dumps(parsed)
 
             try:
                 _jsonschema.validate(instance=parsed, schema=json_schema)

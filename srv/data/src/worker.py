@@ -1368,6 +1368,20 @@ class IngestWorker(PipelineMixin, TriggerMixin):
                             )
                         
                         image_count = len(images_data)
+
+                        # Save image metadata JSON for duplicate/decorative filtering
+                        if images_metadata:
+                            import json as json_mod
+                            meta_json = json_mod.dumps(images_metadata, default=str).encode("utf-8")
+                            meta_path = f"{images_path}/metadata.json"
+                            self.file_service.client.put_object(
+                                bucket_name=self.file_service.bucket,
+                                object_name=meta_path,
+                                data=io.BytesIO(meta_json),
+                                length=len(meta_json),
+                                content_type='application/json'
+                            )
+
                         logger.info(
                             "Images uploaded to MinIO",
                             file_id=file_id,

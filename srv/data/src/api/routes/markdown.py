@@ -244,6 +244,136 @@ async def get_html(fileId: str, request: Request):
         # Don't close - pg_service is a singleton shared across requests
         pass
 
+@router.get("/{fileId}/image-urls", dependencies=[Depends(require_data_read)])
+async def get_image_urls(fileId: str, request: Request, expiry: int = 3600):
+    """
+    Get presigned MinIO URLs for all images of a file in a single auth call.
+
+    The frontend can use these URLs directly in <img> tags, bypassing per-image
+    auth overhead. Each URL is self-authenticating via MinIO's presigned signature.
+
+    Args:
+        fileId: File UUID
+        expiry: URL expiration in seconds (default 1 hour)
+
+    Returns:
+        JSON with mapping of image index to presigned URL
+    """
+    user_id = request.state.user_id
+
+    config = Config().to_dict()
+    from api.main import pg_service as postgres_service
+    minio_service = MinIOService(config)
+
+    try:
+        file_uuid = uuid.UUID(fileId)
+        user_uuid = uuid.UUID(user_id)
+
+        file_data = await _get_file_metadata(
+            postgres_service,
+            file_uuid,
+            user_uuid,
+            ["file_id", "user_id", "images_path", "image_count"],
+            request=request,
+        )
+
+        if not file_data:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"error": "File not found or unauthorized"},
+            )
+
+        image_count = file_data.get("image_count") or 0
+        images_path = file_data.get("images_path")
+
+        if not images_path or image_count == 0:
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={"fileId": fileId, "imageCount": 0, "urls": {}},
+            )
+
+        import asyncio
+        import json as json_mod
+        from datetime import timedelta
+
+        loop = asyncio.get_event_loop()
+        urls: dict[str, str] = {}
+
+        # URL rewriting: convert internal MinIO URLs to external nginx proxy path
+        minio_endpoint = config.get("minio_endpoint", "minio:9000")
+        minio_secure = config.get("minio_secure", False)
+        internal_scheme = "https" if minio_secure else "http"
+        internal_prefix = f"{internal_scheme}://{minio_endpoint}/"
+        external_prefix = f"{config.get('minio_external_base_url', '/files')}/"
+
+        for idx in range(image_count):
+            image_path = f"{images_path}/image_{idx}.png"
+            try:
+                url = await loop.run_in_executor(
+                    None,
+                    lambda p=image_path: minio_service.client.presigned_get_object(
+                        minio_service.bucket, p, expires=timedelta(seconds=expiry)
+                    ),
+                )
+                urls[str(idx)] = url.replace(internal_prefix, external_prefix, 1)
+            except Exception as e:
+                logger.warning(
+                    "Failed to generate presigned URL for image",
+                    file_id=fileId,
+                    image_index=idx,
+                    error=str(e),
+                )
+
+        # Load image metadata (duplicate/decorative/background flags) if available
+        image_metadata: dict[str, dict] = {}
+        try:
+            metadata_path = f"{images_path}/metadata.json"
+            metadata_json = minio_service.get_file_content(metadata_path)
+            raw_metadata = json_mod.loads(metadata_json)
+            if isinstance(raw_metadata, list):
+                for item in raw_metadata:
+                    image_metadata[str(item.get("index", ""))] = {
+                        "width": item.get("width"),
+                        "height": item.get("height"),
+                        "is_duplicate": item.get("is_duplicate", False),
+                        "is_decorative": item.get("is_decorative", False),
+                        "is_background": item.get("is_background", False),
+                    }
+        except Exception:
+            pass
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "fileId": fileId,
+                "imageCount": image_count,
+                "urls": urls,
+                "metadata": image_metadata,
+                "expiresIn": expiry,
+            },
+        )
+
+    except ValueError as e:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "Invalid file ID format"},
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to get image URLs",
+            file_id=fileId,
+            user_id=user_id,
+            error=str(e),
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to generate image URLs"},
+        )
+    finally:
+        pass
+
+
 @router.get("/{fileId}/images/{imageIndex}", dependencies=[Depends(require_data_read)])
 async def get_image(fileId: str, imageIndex: int, request: Request):
     """

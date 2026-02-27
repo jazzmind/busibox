@@ -84,6 +84,21 @@ server {
 {% endfor %}
 {% endfor %}
 
+    # MinIO Object Storage - presigned URL proxy
+    # Presigned URLs are self-authenticating (signed by MinIO) so no auth needed.
+    # CRITICAL: Host header must match what MinIO used when signing.
+    location /files/ {
+        rewrite ^/files/(.*) /$1 break;
+        proxy_pass http://{{ minio_host }}:{{ minio_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Host {{ minio_host }}:{{ minio_port }};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "public, max-age=3600, immutable";
+    }
+
     # Dynamically deployed apps (managed by deploy-api at runtime)
     # Location snippets are written here when apps are deployed via Busibox Portal
     include /etc/nginx/app-locations/*.conf;

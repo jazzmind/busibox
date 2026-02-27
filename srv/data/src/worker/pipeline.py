@@ -344,6 +344,19 @@ class PipelineMixin:
                         length=len(img_data),
                         content_type='image/png',
                     )
+                # Save image metadata JSON for duplicate/decorative filtering
+                if images_metadata:
+                    import json as _json
+                    _meta_json = _json.dumps(images_metadata, default=str).encode("utf-8")
+                    _meta_path = f"{images_path}/metadata.json"
+                    self.file_service.client.put_object(
+                        bucket_name=self.file_service.bucket,
+                        object_name=_meta_path,
+                        data=_io.BytesIO(_meta_json),
+                        length=len(_meta_json),
+                        content_type='application/json',
+                    )
+
                 logger.info(
                     "Images extracted and uploaded",
                     file_id=file_id,

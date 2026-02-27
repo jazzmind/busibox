@@ -1459,7 +1459,10 @@ generate_secrets() {
     export AUTHZ_MASTER_KEY=$(openssl rand -base64 32)
     # LiteLLM uses master_key for authentication - services should use the same key
     export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 16)"
-    export LITELLM_API_KEY="${LITELLM_MASTER_KEY}"  # Same as master key for authentication
+    export LITELLM_API_KEY="${LITELLM_MASTER_KEY}"
+    # Salt key is separate from master key so master key rotation doesn't
+    # invalidate encrypted model/credential data in LiteLLM's DB.
+    export LITELLM_SALT_KEY="salt-$(openssl rand -hex 24)"
     export MINIO_ACCESS_KEY="minioadmin"
     export MINIO_SECRET_KEY=$(openssl rand -base64 24 | tr -d '/+=')
     
@@ -4855,7 +4858,8 @@ main() {
             export MINIO_SECRET_KEY=$(get_vault_secret "secrets.minio.root_password" || echo "")
             export AUTHZ_MASTER_KEY=$(get_vault_secret "secrets.authz_master_key" || echo "")
             export LITELLM_MASTER_KEY=$(get_vault_secret "secrets.litellm_master_key" || echo "")
-            export LITELLM_API_KEY="${LITELLM_MASTER_KEY}"  # Same as master key for authentication
+            export LITELLM_API_KEY="${LITELLM_MASTER_KEY}"
+            export LITELLM_SALT_KEY=$(get_vault_secret "secrets.litellm_salt_key" || echo "")
             
             # Restore protected config (admin settings from vault for integrity)
             local vault_admin_email=$(get_vault_secret "secrets.admin_emails" || echo "")

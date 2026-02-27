@@ -48,6 +48,7 @@ class Config:
         self.minio_secret_key = os.getenv("MINIO_SECRET_KEY") or os.getenv("MINIO_PASS", "minioadmin")
         self.minio_secure = os.getenv("MINIO_SECURE", "false").lower() == "true"
         self.minio_bucket = os.getenv("MINIO_BUCKET", "documents")
+        self.minio_external_base_url = os.getenv("MINIO_EXTERNAL_BASE_URL", "/files")
         
         # Embedding API configuration (dedicated embedding service)
         # When EMBEDDING_API_URL is set, uses remote service instead of local FastEmbed
@@ -129,6 +130,7 @@ class Config:
             "minio_secret_key": self.minio_secret_key,
             "minio_secure": self.minio_secure,
             "minio_bucket": self.minio_bucket,
+            "minio_external_base_url": self.minio_external_base_url,
             "embedding_api_url": self.embedding_api_url,
             "embedding_dimension": self.embedding_dimension,
             "fastembed_model": self.fastembed_model,

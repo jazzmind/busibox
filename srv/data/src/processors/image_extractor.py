@@ -5,6 +5,7 @@ Extracts images from PDF and DOCX documents.
 Converts images to standard format (PNG) and provides metadata.
 """
 
+import hashlib
 import os
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -72,9 +73,12 @@ class ImageExtractor:
             images_metadata = []
             images_data = []
             image_index = 0
+            seen_hashes: dict[str, int] = {}
 
             for page_num in range(len(doc)):
                 page = doc[page_num]
+                page_rect = page.rect
+                page_w, page_h = page_rect.width, page_rect.height
                 image_list = page.get_images(full=True)
 
                 for img_index, img in enumerate(image_list):
@@ -84,15 +88,12 @@ class ImageExtractor:
                         image_bytes = base_image["image"]
                         image_ext = base_image["ext"]
 
-                        # Load image with PIL for processing
                         pil_image = Image.open(BytesIO(image_bytes))
 
-                        # Convert to target format
                         output = BytesIO()
                         pil_image.save(output, format=self.target_format)
                         converted_bytes = output.getvalue()
 
-                        # Check size limit
                         if len(converted_bytes) > self.max_image_size:
                             logger.warning(
                                 "Image exceeds size limit, skipping",
@@ -103,16 +104,33 @@ class ImageExtractor:
                             )
                             continue
 
-                        # Store metadata
+                        content_hash = hashlib.sha256(image_bytes).hexdigest()
+                        w, h = pil_image.width, pil_image.height
+
+                        is_decorative = w < 50 or h < 50
+                        is_background = (
+                            page_w > 0 and page_h > 0
+                            and w >= page_w * 0.9 and h >= page_h * 0.9
+                        )
+
                         metadata = {
                             "index": image_index,
                             "page": page_num + 1,
-                            "width": pil_image.width,
-                            "height": pil_image.height,
+                            "width": w,
+                            "height": h,
                             "format": self.target_format.lower(),
                             "size": len(converted_bytes),
-                            "original_format": image_ext
+                            "original_format": image_ext,
+                            "content_hash": content_hash,
+                            "is_decorative": is_decorative,
+                            "is_background": is_background,
+                            "is_duplicate": False,
                         }
+
+                        if content_hash in seen_hashes:
+                            metadata["is_duplicate"] = True
+                        else:
+                            seen_hashes[content_hash] = image_index
 
                         images_metadata.append(metadata)
                         images_data.append(converted_bytes)
@@ -136,10 +154,18 @@ class ImageExtractor:
 
             doc.close()
 
+            filtered_count = sum(
+                1 for m in images_metadata
+                if m.get("is_duplicate") or m.get("is_decorative") or m.get("is_background")
+            )
             logger.info(
                 "PDF image extraction complete",
                 pdf_path=pdf_path,
-                total_images=len(images_data)
+                total_images=len(images_data),
+                filtered=filtered_count,
+                duplicates=sum(1 for m in images_metadata if m.get("is_duplicate")),
+                decorative=sum(1 for m in images_metadata if m.get("is_decorative")),
+                backgrounds=sum(1 for m in images_metadata if m.get("is_background")),
             )
 
             return images_metadata, images_data

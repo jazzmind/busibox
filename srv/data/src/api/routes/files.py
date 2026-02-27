@@ -1012,6 +1012,15 @@ async def get_presigned_url(fileId: str, request: Request, expiry: int = 3600):
                     )
                 )
                 
+                # Rewrite internal MinIO URL to external nginx proxy path
+                from shared.config import Config as _Cfg
+                _cfg = _Cfg()
+                minio_endpoint = _cfg.minio_endpoint
+                _scheme = "https" if _cfg.minio_secure else "http"
+                _internal = f"{_scheme}://{minio_endpoint}/"
+                _external = f"{_cfg.minio_external_base_url}/"
+                presigned_url = presigned_url.replace(_internal, _external, 1)
+
                 logger.info(
                     "Presigned URL generated successfully",
                     file_id=fileId,
@@ -1020,7 +1029,6 @@ async def get_presigned_url(fileId: str, request: Request, expiry: int = 3600):
                     filename=filename,
                     mime_type=mime_type,
                     expiry_seconds=expiry,
-                    presigned_url=presigned_url,
                     url_length=len(presigned_url),
                 )
                 
