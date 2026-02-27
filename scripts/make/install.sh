@@ -4008,9 +4008,10 @@ check_prerequisites() {
         fi
     fi
     
-    # Disk space
+    # Disk space — use runtime OS for df flags since BSD and GNU df
+    # differ (DETECTED_OS reflects the host, not the container)
     local available_gb
-    if [[ "$DETECTED_OS" == "Darwin" ]]; then
+    if [[ "$(uname -s)" == "Darwin" ]]; then
         available_gb=$(df -g "${REPO_ROOT}" | tail -1 | awk '{print $4}')
     else
         available_gb=$(df -BG "${REPO_ROOT}" | tail -1 | awk '{print $4}' | tr -d 'G')
@@ -4357,7 +4358,7 @@ check_existing_install() {
                             ensure_mlx_running
                         fi
                         info "Opening browser..."
-                        if [[ "$DETECTED_OS" == "Darwin" ]]; then
+                        if [[ "$(uname -s)" == "Darwin" ]]; then
                             open "$magic_link" 2>/dev/null || true
                         else
                             xdg-open "$magic_link" 2>/dev/null || true
@@ -4387,7 +4388,7 @@ check_existing_install() {
             if [[ "$LLM_BACKEND" == "mlx" ]]; then
                 ensure_mlx_running
             fi
-            if [[ "$DETECTED_OS" == "Darwin" ]]; then
+            if [[ "$(uname -s)" == "Darwin" ]]; then
                 open "$magic_link" 2>/dev/null || true
             else
                 xdg-open "$magic_link" 2>/dev/null || true
@@ -4970,9 +4971,10 @@ main() {
     # Show completion message
     show_completion "$magic_link"
     
-    # Open browser
+    # Open browser (use runtime OS — neither open nor xdg-open work
+    # inside the manager container, but the || true keeps it harmless)
     info "Opening browser..."
-    if [[ "$DETECTED_OS" == "Darwin" ]]; then
+    if [[ "$(uname -s)" == "Darwin" ]]; then
         open "$magic_link" 2>/dev/null || true
     else
         xdg-open "$magic_link" 2>/dev/null || true
