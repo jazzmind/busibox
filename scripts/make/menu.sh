@@ -1604,13 +1604,23 @@ services_view_logs() {
 # Select specific service for management
 # Usage: services_select_specific
 services_select_specific() {
-    # Detect platform for MLX/vLLM display
-    local os arch llm_backend_label=""
-    os=$(uname -s)
-    arch=$(uname -m)
-    if [[ "$os" == "Darwin" && ("$arch" == "arm64" || "$arch" == "aarch64") ]]; then
+    # Detect platform for MLX/vLLM display (prefer env vars forwarded
+    # by manager-run.sh over uname which reports container arch)
+    local llm_backend_label=""
+    local _llm_backend="${LLM_BACKEND:-}"
+    if [[ -z "$_llm_backend" ]]; then
+        local os arch
+        os="${HOST_OS:-$(uname -s)}"
+        arch="${HOST_ARCH:-$(uname -m)}"
+        if [[ "$os" == "Darwin" && ("$arch" == "arm64" || "$arch" == "aarch64") ]]; then
+            _llm_backend="mlx"
+        elif command -v nvidia-smi &>/dev/null && [[ $(nvidia-smi -L 2>/dev/null | wc -l) -gt 0 ]]; then
+            _llm_backend="vllm"
+        fi
+    fi
+    if [[ "$_llm_backend" == "mlx" ]]; then
         llm_backend_label="mlx (host)"
-    elif command -v nvidia-smi &>/dev/null && [[ $(nvidia-smi -L 2>/dev/null | wc -l) -gt 0 ]]; then
+    elif [[ "$_llm_backend" == "vllm" ]]; then
         llm_backend_label="vllm"
     fi
     
@@ -1719,15 +1729,22 @@ handle_services() {
     env=$(get_environment)
     backend=$(get_backend "$env")
     
-    # Detect LLM backend for menu display
+    # Detect LLM backend for menu display (prefer env vars forwarded
+    # by manager-run.sh over uname which reports container arch)
     local llm_backend_service=""
-    local os arch
-    os=$(uname -s)
-    arch=$(uname -m)
-    if [[ "$os" == "Darwin" && ("$arch" == "arm64" || "$arch" == "aarch64") ]]; then
-        llm_backend_service="mlx"
-    elif command -v nvidia-smi &>/dev/null && [[ $(nvidia-smi -L 2>/dev/null | wc -l) -gt 0 ]]; then
-        llm_backend_service="vllm"
+    local _llm="${LLM_BACKEND:-}"
+    if [[ -z "$_llm" ]]; then
+        local os arch
+        os="${HOST_OS:-$(uname -s)}"
+        arch="${HOST_ARCH:-$(uname -m)}"
+        if [[ "$os" == "Darwin" && ("$arch" == "arm64" || "$arch" == "aarch64") ]]; then
+            _llm="mlx"
+        elif command -v nvidia-smi &>/dev/null && [[ $(nvidia-smi -L 2>/dev/null | wc -l) -gt 0 ]]; then
+            _llm="vllm"
+        fi
+    fi
+    if [[ -n "$_llm" ]]; then
+        llm_backend_service="$_llm"
     fi
     
     case "$backend" in
