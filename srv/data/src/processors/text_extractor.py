@@ -119,6 +119,11 @@ class TextExtractor:
     _marker_last_used: float = 0.0
     _marker_idle_timeout: float = 30 * 60  # 30 minutes
     
+    # Class-level cache for Surya OCR predictors (~1GB of models)
+    _surya_foundation = None
+    _surya_recognition = None
+    _surya_detection = None
+    
     @classmethod
     def get_marker_models(cls):
         """Get or create cached Marker models (singleton pattern).
@@ -310,6 +315,9 @@ class TextExtractor:
             file_path=file_path,
             total_pages=total_page_count,
         )
+        
+        if progress_callback:
+            progress_callback(0, total_page_count)
         
         splits = self.pdf_splitter.split_single_pages(file_path)
         
@@ -1173,3 +1181,328 @@ class TextExtractor:
         except Exception as e:
             logger.error("ODS extraction failed", file_path=file_path, error=str(e), exc_info=True)
             raise
+    
+    # =========================================================================
+    # Progressive pipeline per-page extraction methods
+    # =========================================================================
+    
+    def extract_page_fast(self, file_path: str, page_number: int) -> str:
+        """
+        Fast per-page markdown extraction using pymupdf4llm with layout analysis.
+        
+        Importing pymupdf.layout before pymupdf4llm activates enhanced layout
+        detection (section headers, tables, lists, reading order). Falls back
+        to pdfplumber if pymupdf4llm is unavailable.
+        
+        Args:
+            file_path: Path to the PDF file
+            page_number: 1-based page number (pymupdf4llm uses 0-based internally)
+            
+        Returns:
+            Extracted markdown for the page, or empty string on failure
+        """
+        try:
+            import pymupdf.layout  # noqa: F401 -- activates layout mode
+            import pymupdf4llm
+            chunks = pymupdf4llm.to_markdown(
+                file_path,
+                pages=[page_number - 1],
+                page_chunks=True,
+            )
+            if chunks:
+                return chunks[0].get("text", "")
+            return ""
+        except Exception as e:
+            logger.warning(
+                "pymupdf4llm page extraction failed, falling back to pdfplumber",
+                file_path=file_path,
+                page_number=page_number,
+                error=str(e),
+            )
+            return self._extract_page_pdfplumber(file_path, page_number)
+    
+    def extract_all_pages_fast(self, file_path: str) -> List[str]:
+        """
+        Fast extraction of all pages using pymupdf4llm with layout analysis.
+        
+        pymupdf.layout activates enhanced page layout detection for better
+        heading, table, and multi-column handling. Falls back to pdfplumber
+        if unavailable.
+        
+        Returns a list of per-page markdown strings (index 0 = page 1).
+        """
+        try:
+            import pymupdf.layout  # noqa: F401 -- activates layout mode
+            import pymupdf4llm
+            chunks = pymupdf4llm.to_markdown(file_path, page_chunks=True)
+            page_texts = [chunk.get("text", "") for chunk in chunks]
+            
+            logger.info(
+                "Fast extraction complete (pymupdf4llm + layout)",
+                file_path=file_path,
+                pages=len(page_texts),
+                total_chars=sum(len(t) for t in page_texts),
+            )
+            return page_texts
+        except Exception as e:
+            logger.warning(
+                "pymupdf4llm extraction failed, falling back to pdfplumber",
+                file_path=file_path,
+                error=str(e),
+            )
+            return self._extract_all_pages_pdfplumber(file_path)
+    
+    def _extract_page_pdfplumber(self, file_path: str, page_number: int) -> str:
+        """Fallback per-page extraction using pdfplumber (raw text, no markdown)."""
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                if page_number < 1 or page_number > len(pdf.pages):
+                    return ""
+                page = pdf.pages[page_number - 1]
+                return page.extract_text() or ""
+        except Exception as e:
+            logger.error(
+                "pdfplumber page extraction also failed",
+                file_path=file_path,
+                page_number=page_number,
+                error=str(e),
+            )
+            return ""
+    
+    def _extract_all_pages_pdfplumber(self, file_path: str) -> List[str]:
+        """Fallback all-page extraction using pdfplumber (raw text, no markdown)."""
+        try:
+            page_texts = []
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    page_texts.append(page.extract_text() or "")
+            logger.info(
+                "Fast extraction complete (pdfplumber fallback)",
+                file_path=file_path,
+                pages=len(page_texts),
+                total_chars=sum(len(t) for t in page_texts),
+            )
+            return page_texts
+        except Exception as e:
+            logger.error(
+                "pdfplumber all-page extraction also failed",
+                file_path=file_path,
+                error=str(e),
+                exc_info=True,
+            )
+            return []
+    
+    def ocr_all_pages_tesseract(self, file_path: str, page_count: int) -> List[str]:
+        """
+        OCR all pages using Tesseract. Fast on CPU, no heavy model loading.
+        
+        Used in Pass 2 of progressive pipeline. Converts each page to an image
+        via pdf2image, then runs pytesseract on each.
+        
+        Args:
+            file_path: Path to the PDF file
+            page_count: Total number of pages
+            
+        Returns:
+            List of OCR'd text per page (index 0 = page 1)
+        """
+        try:
+            from pdf2image import convert_from_path
+            import pytesseract
+            
+            images = convert_from_path(file_path, dpi=300)
+            if not images:
+                return [""] * page_count
+            
+            page_texts = []
+            for image in images:
+                try:
+                    text = pytesseract.image_to_string(image)
+                    page_texts.append(text or "")
+                except Exception as e:
+                    logger.warning("Tesseract OCR failed for page", error=str(e))
+                    page_texts.append("")
+            
+            logger.info(
+                "Tesseract OCR complete",
+                file_path=file_path,
+                pages=len(page_texts),
+                total_chars=sum(len(t) for t in page_texts),
+            )
+            return page_texts
+        except ImportError as e:
+            logger.warning("pdf2image or pytesseract not available for OCR", error=str(e))
+            return [""] * page_count
+        except Exception as e:
+            logger.error(
+                "Tesseract batch OCR failed",
+                file_path=file_path,
+                error=str(e),
+                exc_info=True,
+            )
+            return [""] * page_count
+    
+    def ocr_page_surya(self, file_path: str, page_number: int) -> str:
+        """
+        OCR a single PDF page using Surya (requires GPU for reasonable speed).
+        
+        Args:
+            file_path: Path to the PDF file
+            page_number: 1-based page number
+            
+        Returns:
+            OCR'd text for the page, or empty string on failure
+        """
+        try:
+            from pdf2image import convert_from_path
+            
+            images = convert_from_path(
+                file_path,
+                first_page=page_number,
+                last_page=page_number,
+                dpi=300,
+            )
+            if not images:
+                return ""
+            
+            return self._surya_ocr_image(images[0])
+        except ImportError:
+            logger.warning("pdf2image not available for Surya OCR")
+            return ""
+        except Exception as e:
+            logger.error(
+                "Surya page OCR failed",
+                file_path=file_path,
+                page_number=page_number,
+                error=str(e),
+            )
+            return ""
+    
+    def ocr_all_pages_surya(self, file_path: str, page_count: int) -> List[str]:
+        """
+        OCR all pages using Surya in batch mode (requires GPU for reasonable speed).
+        
+        Args:
+            file_path: Path to the PDF file
+            page_count: Total number of pages
+            
+        Returns:
+            List of OCR'd text per page (index 0 = page 1)
+        """
+        try:
+            from pdf2image import convert_from_path
+            
+            images = convert_from_path(file_path, dpi=300)
+            if not images:
+                return [""] * page_count
+            
+            return self._surya_ocr_images_batch(images)
+        except ImportError:
+            logger.warning("pdf2image not available for Surya OCR batch")
+            return [""] * page_count
+        except Exception as e:
+            logger.error(
+                "Surya batch OCR failed",
+                file_path=file_path,
+                error=str(e),
+                exc_info=True,
+            )
+            return [""] * page_count
+    
+    @classmethod
+    def _get_surya_predictors(cls):
+        """Lazily initialize and cache Surya 0.17.x predictors."""
+        if cls._surya_foundation is None:
+            from surya.foundation import FoundationPredictor
+            from surya.recognition import RecognitionPredictor
+            from surya.detection import DetectionPredictor
+
+            logger.info("Loading Surya OCR models (first use)...")
+            cls._surya_foundation = FoundationPredictor()
+            cls._surya_recognition = RecognitionPredictor(cls._surya_foundation)
+            cls._surya_detection = DetectionPredictor()
+            logger.info("Surya OCR models loaded")
+        return cls._surya_recognition, cls._surya_detection
+
+    @staticmethod
+    def _surya_results_to_text(predictions) -> List[str]:
+        """Extract line text from Surya prediction results."""
+        page_texts = []
+        for page_result in predictions:
+            lines = [tl.text for tl in page_result.text_lines]
+            page_texts.append("\n".join(lines))
+        return page_texts
+
+    def _surya_ocr_image(self, image) -> str:
+        """Run Surya 0.17.x OCR on a single PIL image."""
+        try:
+            rec, det = self._get_surya_predictors()
+            predictions = rec([image], det_predictor=det)
+            texts = self._surya_results_to_text(predictions)
+            return texts[0] if texts else ""
+        except Exception as e:
+            logger.warning("Surya OCR failed, falling back to Tesseract", error=str(e))
+            return self._ocr_image_tesseract(image)
+
+    def _surya_ocr_images_batch(self, images: list) -> List[str]:
+        """Run Surya 0.17.x OCR on a batch of PIL images."""
+        try:
+            rec, det = self._get_surya_predictors()
+            predictions = rec(images, det_predictor=det)
+            return self._surya_results_to_text(predictions)
+        except Exception as e:
+            logger.warning("Surya batch OCR failed, falling back to Tesseract", error=str(e))
+            return [self._ocr_image_tesseract(img) for img in images]
+
+    def _ocr_image_tesseract(self, image) -> str:
+        """Last-resort OCR using Tesseract for a single image."""
+        try:
+            import pytesseract
+            return pytesseract.image_to_string(image)
+        except Exception as e:
+            logger.error("Tesseract fallback OCR failed", error=str(e))
+            return ""
+    
+    def extract_page_marker(self, file_path: str, page_number: int) -> str:
+        """
+        Extract a single page using Marker for high-quality structured output.
+        
+        Used in Pass 3 when LLM flags a page as needing Marker processing
+        (tables, multi-column, formulas, etc.).
+        
+        Args:
+            file_path: Path to the PDF file
+            page_number: 1-based page number
+            
+        Returns:
+            Marker-extracted markdown for the page
+        """
+        try:
+            splits = self.pdf_splitter.split_single_pages(file_path)
+            if not splits:
+                return ""
+            
+            target_split = None
+            for split_path, start_page, end_page in splits:
+                if start_page <= page_number <= end_page:
+                    target_split = split_path
+                    break
+            
+            if not target_split:
+                self.pdf_splitter.cleanup_splits(splits, file_path)
+                return ""
+            
+            try:
+                result = self._extract_single_pdf(target_split)
+                return result.markdown or result.text or ""
+            finally:
+                self.pdf_splitter.cleanup_splits(splits, file_path)
+                
+        except Exception as e:
+            logger.error(
+                "Marker page extraction failed",
+                file_path=file_path,
+                page_number=page_number,
+                error=str(e),
+            )
+            return ""

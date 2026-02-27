@@ -20,6 +20,11 @@ from api.middleware.jwt_auth import set_rls_session_vars_sync
 logger = structlog.get_logger()
 
 
+class FileDeletedError(Exception):
+    """Raised when a status update detects the file has been deleted."""
+    pass
+
+
 class PostgresService:
     """Service for PostgreSQL operations."""
     
@@ -105,6 +110,7 @@ class PostgresService:
         error_message: Optional[str] = None,
         status_message: Optional[str] = None,
         retry_count: Optional[int] = None,
+        request=None,
     ):
         """
         Update data status and send NOTIFY for SSE.
@@ -120,8 +126,9 @@ class PostgresService:
             error_message: Error message if failed
             status_message: Human-readable progress text
             retry_count: Number of retry attempts (optional)
+            request: Optional RLS context (FastAPI Request or WorkerRLSContext)
         """
-        conn = self._get_connection()
+        conn = self._get_connection(request)
         try:
             with conn.cursor() as cur:
                 if retry_count is not None:
@@ -183,6 +190,46 @@ class PostgresService:
                         ),
                     )
                 
+                if cur.rowcount == 0:
+                    logger.warning(
+                        "update_status matched 0 rows — file may have been deleted (orphaned job)",
+                        file_id=file_id,
+                        stage=stage,
+                    )
+                    try:
+                        insert_query = """
+                            INSERT INTO data_status (
+                                file_id, stage, progress, chunks_processed, total_chunks,
+                                pages_processed, total_pages, error_message, status_message,
+                                retry_count, updated_at
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                            ON CONFLICT (file_id) DO UPDATE SET
+                                stage = EXCLUDED.stage,
+                                progress = EXCLUDED.progress,
+                                chunks_processed = EXCLUDED.chunks_processed,
+                                total_chunks = EXCLUDED.total_chunks,
+                                pages_processed = EXCLUDED.pages_processed,
+                                total_pages = EXCLUDED.total_pages,
+                                error_message = EXCLUDED.error_message,
+                                status_message = EXCLUDED.status_message,
+                                retry_count = EXCLUDED.retry_count,
+                                updated_at = NOW()
+                        """
+                        cur.execute(
+                            insert_query,
+                            (
+                                file_id, stage, progress, chunks_processed, total_chunks,
+                                pages_processed, total_pages, error_message, status_message,
+                                retry_count or 0,
+                            ),
+                        )
+                    except Exception as insert_err:
+                        conn.rollback()
+                        raise FileDeletedError(
+                            f"File {file_id} was deleted during processing "
+                            f"(stage={stage}): {insert_err}"
+                        )
+
                 if stage == "parsing":
                     cur.execute(
                         "UPDATE data_status SET started_at = NOW() WHERE file_id = %s AND started_at IS NULL",
@@ -202,8 +249,11 @@ class PostgresService:
                     file_id=file_id,
                     stage=stage,
                     progress=progress,
+                    status_message=status_message,
                 )
         
+        except FileDeletedError:
+            raise
         except Exception as e:
             conn.rollback()
             logger.error(
@@ -276,6 +326,149 @@ class PostgresService:
         finally:
             self._return_connection(conn)
     
+    def update_pass_info(
+        self,
+        file_id: str,
+        processing_pass: int,
+        pass_metadata: Optional[dict] = None,
+        request=None,
+    ):
+        """
+        Update progressive pipeline pass info on data_status.
+        
+        Args:
+            file_id: File identifier
+            processing_pass: Current pass number (1-3)
+            pass_metadata: Per-pass metadata (page hashes, timing, etc.)
+            request: Optional RLS context
+        """
+        conn = self._get_connection(request)
+        try:
+            with conn.cursor() as cur:
+                if pass_metadata is not None:
+                    cur.execute(
+                        """
+                        UPDATE data_status
+                        SET processing_pass = %s,
+                            pass_metadata = %s::jsonb,
+                            updated_at = NOW()
+                        WHERE file_id = %s
+                        """,
+                        (processing_pass, json.dumps(pass_metadata), file_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE data_status
+                        SET processing_pass = %s,
+                            updated_at = NOW()
+                        WHERE file_id = %s
+                        """,
+                        (processing_pass, file_id),
+                    )
+                conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.error(
+                "Failed to update pass info",
+                file_id=file_id,
+                processing_pass=processing_pass,
+                error=str(e),
+            )
+            raise
+        finally:
+            self._return_connection(conn)
+    
+    def upsert_chunks(self, file_id: str, chunks: List[Dict], processing_pass: int = 1):
+        """
+        Insert or update chunks for a file (progressive pipeline).
+        
+        Uses ON CONFLICT DO UPDATE so subsequent passes can replace chunk text
+        with improved versions while preserving chunk_id.
+        
+        Args:
+            file_id: File identifier
+            chunks: List of chunk dictionaries with text, chunk_index, etc.
+            processing_pass: Which pass produced these chunks (1=fast, 2=OCR, 3=LLM+Marker)
+        """
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                upsert_query = """
+                    INSERT INTO data_chunks (
+                        file_id, chunk_index, text, char_offset,
+                        token_count, page_number, section_heading,
+                        processing_pass, metadata
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (file_id, chunk_index) DO UPDATE SET
+                        text = EXCLUDED.text,
+                        char_offset = EXCLUDED.char_offset,
+                        token_count = EXCLUDED.token_count,
+                        page_number = EXCLUDED.page_number,
+                        section_heading = EXCLUDED.section_heading,
+                        processing_pass = EXCLUDED.processing_pass,
+                        metadata = EXCLUDED.metadata
+                """
+                
+                for chunk in chunks:
+                    metadata = chunk.get("metadata", {})
+                    chunk_text = (chunk.get("text", "") or "").replace("\x00", "")
+                    section = chunk.get("section_heading")
+                    if isinstance(section, str):
+                        section = section.replace("\x00", "")
+                    cur.execute(
+                        upsert_query,
+                        (
+                            file_id,
+                            chunk.get("chunk_index", 0),
+                            chunk_text,
+                            chunk.get("char_offset"),
+                            chunk.get("token_count", 0),
+                            chunk.get("page_number"),
+                            section,
+                            processing_pass,
+                            json.dumps(metadata) if metadata else None,
+                        ),
+                    )
+                
+                conn.commit()
+                
+                logger.info(
+                    "Chunks upserted into PostgreSQL",
+                    file_id=file_id,
+                    chunk_count=len(chunks),
+                    processing_pass=processing_pass,
+                )
+        
+        except Exception as e:
+            conn.rollback()
+            logger.error(
+                "Failed to upsert chunks",
+                file_id=file_id,
+                error=str(e),
+                exc_info=True,
+            )
+            raise
+        finally:
+            self._return_connection(conn)
+    
+    def delete_chunks_for_file(self, file_id: str):
+        """Delete all chunks for a file (used before full re-chunking)."""
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM data_chunks WHERE file_id = %s", (file_id,))
+                deleted = cur.rowcount
+                conn.commit()
+                logger.info("Deleted chunks", file_id=file_id, deleted_count=deleted)
+                return deleted
+        except Exception as e:
+            conn.rollback()
+            logger.error("Failed to delete chunks", file_id=file_id, error=str(e))
+            raise
+        finally:
+            self._return_connection(conn)
+
     @staticmethod
     def _sanitize_pg_string(value):
         """Strip NUL (0x00) bytes that PostgreSQL rejects in text fields."""

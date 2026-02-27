@@ -10,6 +10,8 @@ from typing import Optional
 import redis as redis_sync
 import structlog
 
+from services.postgres_service import FileDeletedError
+
 logger = structlog.get_logger()
 
 
@@ -173,6 +175,7 @@ class ErrorHandler:
         file_id: str,
         job_data: dict,
         error: Exception,
+        rls_context=None,
     ) -> bool:
         """
         Requeue a job for retry.
@@ -182,6 +185,7 @@ class ErrorHandler:
             file_id: File identifier
             job_data: Original job data
             error: Exception that caused retry
+            rls_context: Optional RLS context for database access
             
         Returns:
             True if requeued successfully
@@ -201,6 +205,7 @@ class ErrorHandler:
                 progress=0,
                 error_message=f"Transient error (retry {new_retry_count}/{self.max_retries}): {str(error)}",
                 retry_count=new_retry_count,
+                request=rls_context,
             )
             
             # Re-add to Redis stream with maxlen to prevent unbounded growth
@@ -228,6 +233,12 @@ class ErrorHandler:
             )
             return True
             
+        except FileDeletedError:
+            logger.info(
+                "File deleted before requeue — skipping retry",
+                file_id=file_id,
+            )
+            return False
         except Exception as requeue_error:
             logger.error(
                 "Failed to re-queue job",
@@ -241,6 +252,7 @@ class ErrorHandler:
         file_id: str,
         error: Exception,
         retry_count: Optional[int] = None,
+        rls_context=None,
     ):
         """
         Mark job as permanently failed.
@@ -249,6 +261,7 @@ class ErrorHandler:
             file_id: File identifier
             error: Exception that caused failure
             retry_count: Number of retries attempted
+            rls_context: Optional RLS context for database access
         """
         if retry_count is None:
             retry_count = self.get_retry_count(file_id)
@@ -260,13 +273,21 @@ class ErrorHandler:
         else:
             error_msg = f"Permanent error: {str(error)}"
         
-        self.postgres_service.update_status(
-            file_id=file_id,
-            stage="failed",
-            progress=0,
-            error_message=error_msg,
-            retry_count=retry_count,
-        )
+        try:
+            self.postgres_service.update_status(
+                file_id=file_id,
+                stage="failed",
+                progress=0,
+                error_message=error_msg,
+                retry_count=retry_count,
+                request=rls_context,
+            )
+        except FileDeletedError:
+            logger.info(
+                "File deleted before failure could be recorded — skipping",
+                file_id=file_id,
+            )
+            return
         
         logger.error(
             "Job marked as failed",

@@ -28,7 +28,7 @@ from processors.processing_strategy import (
 )
 from processors.text_extractor import TextExtractor, ExtractionResult
 from processors.chunker import Chunker, Chunk
-from processors.embedder import Embedder
+from services.embedding_client import EmbeddingClient
 from processors.colpali import ColPaliEmbedder
 from processors.classifier import DocumentClassifier
 
@@ -56,7 +56,7 @@ class MultiFlowProcessor:
         # Initialize processors
         self.text_extractor = TextExtractor(config)
         self.chunker = Chunker(config)
-        self.embedder = Embedder(config)
+        self.embedder = EmbeddingClient(config)
         self.colpali = ColPaliEmbedder(config)
         self.classifier = DocumentClassifier(config)
         

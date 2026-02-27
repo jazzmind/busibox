@@ -3,6 +3,10 @@ Structured extraction API.
 
 Runs an agent against a document + schema and stores extracted records
 into the target data document with provenance metadata.
+
+Extraction is asynchronous: the POST endpoint kicks off a background task
+and returns a task ID immediately. Clients poll GET /extract/status/{task_id}
+or watch the ``extraction.status`` field on file metadata for completion.
 """
 
 import json
@@ -15,21 +19,23 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.tokens import validate_bearer
 from app.auth.tokens import get_service_token
 from app.clients.busibox import BusiboxClient
 from app.db.session import SessionLocal
-from app.db.session import get_session
 from app.schemas.auth import Principal
 from app.services.run_service import create_run
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/extract", tags=["extract"])
+
+# In-memory task tracker for background extractions.
+# Keys are task_id (str), values are dicts with status/result/error.
+_extraction_tasks: Dict[str, Dict[str, Any]] = {}
 
 # Long-document field-batched extraction controls
 LONG_DOC_TOKEN_THRESHOLD = 12000
@@ -1087,14 +1093,428 @@ async def _resolve_principal(
     )
 
 
+async def _run_extraction_pipeline(
+    *,
+    task_id: str,
+    payload: ExtractRequest,
+    principal: Principal,
+    client: BusiboxClient,
+    markdown: str,
+    schema_doc: Dict[str, Any],
+    schema_obj: Dict[str, Any],
+    agent_uuid: uuid.UUID,
+    instructions: str,
+    batch_mode: bool,
+    response_schema: Dict[str, Any],
+    estimated_max_tokens: int,
+) -> None:
+    """
+    Background coroutine that performs LLM extraction, stores records, creates
+    graph entities, indexes to Milvus, and updates file metadata.
+
+    Progress is tracked via ``_extraction_tasks[task_id]`` and the file's
+    ``metadata.extraction.status`` field (visible through normal file-metadata polling).
+    """
+    try:
+        _extraction_tasks[task_id]["status"] = "running"
+        _extraction_tasks[task_id]["step"] = "llm_extraction"
+
+        run = None
+        output: Dict[str, Any] = {}
+        records: List[Dict[str, Any]] = []
+
+        if batch_mode:
+            try:
+                search_api_token = await get_service_token(
+                    user_token=principal.token,
+                    user_id=principal.sub,
+                    target_audience="search-api",
+                )
+            except Exception as exc:
+                raise RuntimeError(f"Failed to get search-api token: {exc}") from exc
+
+            search_client = BusiboxClient(search_api_token)
+            fields = (schema_obj.get("fields") or {}) if isinstance(schema_obj, dict) else {}
+            schema_name = schema_doc.get("name")
+
+            field_context_tasks = []
+            field_names = list(fields.keys()) if isinstance(fields, dict) else []
+            for field_name in field_names:
+                field_def = fields.get(field_name)
+                if isinstance(field_def, dict):
+                    field_context_tasks.append(
+                        _search_context_for_field(
+                            search_client=search_client,
+                            file_id=payload.file_id,
+                            field_name=field_name,
+                            field_def=field_def,
+                            schema_name=schema_name,
+                        )
+                    )
+                else:
+                    field_context_tasks.append(asyncio.sleep(0, result=""))
+            field_context_values = await asyncio.gather(*field_context_tasks)
+            field_context_map = {name: field_context_values[idx] for idx, name in enumerate(field_names)}
+
+            field_batches = _partition_fields(schema_obj if isinstance(schema_obj, dict) else {}, FIELD_BATCH_SIZE)
+            semaphore = asyncio.Semaphore(MAX_PARALLEL_BATCH_RUNS)
+
+            async def _run_field_batch(batch_index: int, batch_fields: List[str]) -> Dict[str, Any]:
+                subset_fields = {f: fields[f] for f in batch_fields if f in fields}
+                subset_schema = {
+                    "schemaName": schema_obj.get("schemaName"),
+                    "displayName": schema_obj.get("displayName"),
+                    "itemLabel": schema_obj.get("itemLabel"),
+                    "fields": subset_fields,
+                }
+                subset_response_schema = _build_records_response_schema(subset_schema, max_records=1)
+                subset_max_tokens = _estimate_max_tokens_for_response_schema(subset_response_schema)
+
+                context_blocks: List[str] = []
+                for field_name in batch_fields:
+                    context_text = field_context_map.get(field_name, "")
+                    if context_text:
+                        context_blocks.append(f"Field: {field_name}\nRelevant chunks:\n{context_text}")
+
+                retrieved_context = "\n\n".join(context_blocks).strip()
+                if not retrieved_context:
+                    retrieved_context = markdown[:12000]
+
+                batch_prompt = (
+                    f"{instructions}\n\n"
+                    "You are running FIELD-BATCHED extraction for long documents.\n"
+                    "Extract ONLY the fields listed in this batch schema.\n"
+                    "Return ONLY valid JSON matching the response schema (no prose).\n\n"
+                    f"Batch index: {batch_index}\n"
+                    f"Source file ID: {payload.file_id}\n"
+                    f"Schema document ID: {payload.schema_document_id}\n\n"
+                    f"Batch schema:\n```json\n{json.dumps(subset_schema, indent=2)}\n```\n\n"
+                    f"Retrieved evidence chunks:\n{retrieved_context}\n"
+                )
+
+                async with semaphore:
+                    async with SessionLocal() as batch_session:
+                        batch_run = await create_run(
+                            session=batch_session,
+                            principal=principal,
+                            agent_id=agent_uuid,
+                            payload={
+                                "prompt": batch_prompt,
+                                "response_schema": subset_response_schema,
+                                "max_tokens": subset_max_tokens,
+                            },
+                            scopes=["agent.execute", "data.read", "data.write", "search.read", "graph.read", "graph.write"],
+                            purpose=f"structured-extraction-batch-{batch_index}",
+                            agent_tier="complex",
+                        )
+
+                    batch_output = batch_run.output or {}
+                    if not isinstance(batch_output, dict):
+                        batch_output = {"result": str(batch_output)}
+                    batch_records = _extract_records(batch_output) if batch_run.status == "succeeded" else []
+                    return {
+                        "run": batch_run,
+                        "output": batch_output,
+                        "records": batch_records,
+                    }
+
+            batch_results = await asyncio.gather(
+                *[_run_field_batch(i + 1, batch_fields) for i, batch_fields in enumerate(field_batches)]
+            )
+            successful_runs = [r["run"] for r in batch_results if r.get("run") and r["run"].status == "succeeded"]
+            partial_records = []
+            for result_item in batch_results:
+                partial_records.extend(result_item.get("records", []))
+
+            records = _merge_partial_records(partial_records, schema_obj if isinstance(schema_obj, dict) else {})
+            if successful_runs:
+                run = successful_runs[0]
+                output = {"result": "field-batched", "batchRunIds": [str(r.id) for r in successful_runs]}
+            elif batch_results:
+                run = batch_results[0].get("run")
+                output = batch_results[0].get("output", {})
+
+        if not records:
+            prompt = _build_extraction_prompt(
+                schema_document_id=payload.schema_document_id,
+                file_id=payload.file_id,
+                schema_obj=schema_obj if isinstance(schema_obj, dict) else {},
+                markdown=markdown,
+                instructions=instructions,
+                compact_mode=False,
+            )
+            async with SessionLocal() as bg_session:
+                run = await create_run(
+                    session=bg_session,
+                    principal=principal,
+                    agent_id=agent_uuid,
+                    payload={
+                        "prompt": prompt,
+                        "response_schema": response_schema,
+                        "max_tokens": estimated_max_tokens,
+                    },
+                    scopes=["agent.execute", "data.read", "data.write", "search.read", "graph.read", "graph.write"],
+                    purpose="structured-extraction",
+                    agent_tier="complex",
+                )
+
+            if run.status != "succeeded":
+                raise RuntimeError(
+                    f"Extraction run failed: run_id={run.id}, status={run.status}"
+                )
+
+            output = run.output or {}
+            if not isinstance(output, dict):
+                output = {"result": str(output)}
+            records = _extract_records(output)
+
+            if not records:
+                retry_prompt = _build_extraction_prompt(
+                    schema_document_id=payload.schema_document_id,
+                    file_id=payload.file_id,
+                    schema_obj=schema_obj if isinstance(schema_obj, dict) else {},
+                    markdown=markdown,
+                    instructions=(
+                        f"{instructions} "
+                        "Previous output was invalid or non-parseable. "
+                        "Retry with compact output."
+                    ),
+                    compact_mode=True,
+                )
+                async with SessionLocal() as retry_session:
+                    retry_run = await create_run(
+                        session=retry_session,
+                        principal=principal,
+                        agent_id=agent_uuid,
+                        payload={
+                            "prompt": retry_prompt,
+                            "response_schema": response_schema,
+                            "max_tokens": estimated_max_tokens,
+                        },
+                        scopes=["agent.execute", "data.read", "data.write", "search.read", "graph.read", "graph.write"],
+                        purpose="structured-extraction-retry",
+                        agent_tier="complex",
+                    )
+                if retry_run.status == "succeeded":
+                    retry_output = retry_run.output or {}
+                    if not isinstance(retry_output, dict):
+                        retry_output = {"result": str(retry_output)}
+                    retry_records = _extract_records(retry_output)
+                    if retry_records:
+                        run = retry_run
+                        output = retry_output
+                        records = retry_records
+
+        if not records:
+            run_id = str(run.id) if run is not None else "unknown"
+            raise RuntimeError(
+                f"Agent did not return extractable records: run_id={run_id}"
+            )
+
+        run_id = str(run.id) if run is not None else "unknown"
+        _extraction_tasks[task_id]["step"] = "post_processing"
+
+        _populate_provenance_from_markdown(
+            records=records,
+            markdown=markdown,
+            schema=schema_obj if isinstance(schema_obj, dict) else {},
+        )
+        enriched_records = _validate_and_enrich_records(
+            records=records,
+            schema=schema_obj if isinstance(schema_obj, dict) else {},
+            file_id=payload.file_id,
+            agent_id=str(agent_uuid),
+        )
+
+        _extraction_tasks[task_id]["step"] = "storing_records"
+
+        insert_result: Dict[str, Any] = {"stored": False, "count": 0}
+        if payload.store_results:
+            try:
+                result = await client.request(
+                    "POST",
+                    f"/data/{payload.schema_document_id}/records",
+                    json={"records": enriched_records, "validate": True},
+                )
+                insert_result = {
+                    "stored": True,
+                    "count": result.get("count", len(enriched_records)),
+                    "recordIds": result.get("recordIds", []),
+                }
+            except Exception as exc:
+                logger.error(
+                    "Failed to store extracted records",
+                    extra={
+                        "task_id": task_id,
+                        "file_id": payload.file_id,
+                        "error": str(exc),
+                    },
+                )
+                raise RuntimeError(f"Failed to store extracted records: {exc}") from exc
+
+        _extraction_tasks[task_id]["step"] = "graph_indexing"
+
+        graph_result: Dict[str, Any] = {"entity_count": 0}
+        try:
+            graph_result = await client.request(
+                "POST",
+                "/data/graph/from-extraction",
+                params={
+                    "file_id": payload.file_id,
+                    "schema_document_id": payload.schema_document_id,
+                },
+            )
+            logger.info(
+                "Graph entities created from extraction",
+                extra={
+                    "file_id": payload.file_id,
+                    "schema_document_id": payload.schema_document_id,
+                    "entity_count": graph_result.get("entity_count", 0),
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to create graph entities from extraction (non-fatal)",
+                extra={
+                    "file_id": payload.file_id,
+                    "schema_document_id": payload.schema_document_id,
+                    "error": str(exc),
+                },
+            )
+
+        _extraction_tasks[task_id]["step"] = "field_indexing"
+
+        index_result: Dict[str, Any] = {"indexed_count": 0}
+        try:
+            index_result = await client.request(
+                "POST",
+                "/data/index-from-extraction",
+                params={
+                    "file_id": payload.file_id,
+                    "schema_document_id": payload.schema_document_id,
+                },
+            )
+            logger.info(
+                "Field indexing complete from extraction",
+                extra={
+                    "file_id": payload.file_id,
+                    "schema_document_id": payload.schema_document_id,
+                    "indexed_count": index_result.get("indexed_count", 0),
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to index extracted fields (non-fatal)",
+                extra={
+                    "file_id": payload.file_id,
+                    "schema_document_id": payload.schema_document_id,
+                    "error": str(exc),
+                },
+            )
+
+        _extraction_tasks[task_id]["step"] = "finalizing"
+
+        try:
+            await client.request(
+                "PATCH",
+                f"/files/{payload.file_id}",
+                json={
+                    "metadata": {
+                        "extraction": {
+                            "schemaDocumentId": payload.schema_document_id,
+                            "schemaName": schema_doc.get("name"),
+                            "status": "completed",
+                            "runId": run_id,
+                            "agentId": str(agent_uuid),
+                            "recordCount": len(enriched_records),
+                            "records": enriched_records,
+                            "updatedAt": datetime.now(timezone.utc).isoformat(),
+                        }
+                    }
+                },
+            )
+        except Exception:
+            logger.warning(
+                "Failed to persist extracted data to file metadata",
+                extra={
+                    "file_id": payload.file_id,
+                    "schema_document_id": payload.schema_document_id,
+                    "run_id": run_id,
+                },
+            )
+
+        final_result = {
+            "success": True,
+            "runId": run_id,
+            "fileId": payload.file_id,
+            "schemaDocumentId": payload.schema_document_id,
+            "agentId": str(agent_uuid),
+            "recordCount": len(enriched_records),
+            "records": enriched_records,
+            "storage": insert_result,
+            "graph": graph_result,
+            "indexing": index_result,
+        }
+
+        _extraction_tasks[task_id]["status"] = "completed"
+        _extraction_tasks[task_id]["step"] = "done"
+        _extraction_tasks[task_id]["result"] = final_result
+
+        logger.info(
+            "Background extraction completed",
+            extra={
+                "task_id": task_id,
+                "file_id": payload.file_id,
+                "record_count": len(enriched_records),
+            },
+        )
+
+    except Exception as exc:
+        logger.error(
+            "Background extraction failed",
+            extra={
+                "task_id": task_id,
+                "file_id": payload.file_id,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            },
+            exc_info=True,
+        )
+        _extraction_tasks[task_id]["status"] = "failed"
+        _extraction_tasks[task_id]["error"] = str(exc)
+
+        try:
+            await client.request(
+                "PATCH",
+                f"/files/{payload.file_id}",
+                json={
+                    "metadata": {
+                        "extraction": {
+                            "schemaDocumentId": payload.schema_document_id,
+                            "schemaName": schema_doc.get("name"),
+                            "status": "failed",
+                            "error": str(exc),
+                            "updatedAt": datetime.now(timezone.utc).isoformat(),
+                        }
+                    }
+                },
+            )
+        except Exception:
+            pass
+
+
 @router.post("")
 async def extract_document(
     payload: ExtractRequest,
-    session: AsyncSession = Depends(get_session),
     authorization: Optional[str] = Header(default=None),
 ):
     """
-    Structured extraction endpoint used by UI and library triggers.
+    Kick off structured extraction as a background task.
+
+    Returns immediately with a ``taskId`` that can be polled via
+    ``GET /extract/status/{taskId}``.  The file's ``metadata.extraction.status``
+    is also updated throughout (running -> completed/failed) so the UI can
+    poll via normal document metadata refresh.
     """
     try:
         uuid.UUID(payload.file_id)
@@ -1148,8 +1568,6 @@ async def extract_document(
         not payload.agent_id
         and str(resolved_agent_id) == SCHEMA_BUILDER_AGENT_ID
     ):
-        # Schema-builder is for schema authoring/chat, not record extraction execution.
-        # Keep explicit payload.agent_id overrides intact.
         resolved_agent_id = DEFAULT_EXTRACTION_AGENT_ID
 
     try:
@@ -1157,33 +1575,26 @@ async def extract_document(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid agent_id: {resolved_agent_id}") from exc
 
-    logger.info(
-        "Resolved extraction agent",
-        extra={
-            "file_id": payload.file_id,
-            "schema_document_id": payload.schema_document_id,
-            "resolved_agent_id": str(agent_uuid),
-            "explicit_agent_override": payload.agent_id is not None,
-        },
-    )
-
     instructions = payload.prompt_override or (
         "Extract data from this document into records matching the schema. "
         "Include _provenance per extracted field with source text and char offsets when available."
     )
     markdown_tokens = _estimate_markdown_tokens(markdown)
     batch_mode = _should_use_field_batch_mode(markdown_tokens, schema_obj if isinstance(schema_obj, dict) else {})
+
     logger.info(
-        "Extraction mode selection",
+        "Extraction request accepted (background)",
         extra={
             "file_id": payload.file_id,
             "schema_document_id": payload.schema_document_id,
+            "resolved_agent_id": str(agent_uuid),
             "markdown_tokens": markdown_tokens,
             "batch_mode": batch_mode,
         },
     )
 
-    # Persist applied schema metadata immediately (without touching markdown/content).
+    # Mark extraction as running in file metadata immediately.
+    task_id = str(uuid.uuid4())
     try:
         await client.request(
             "PATCH",
@@ -1194,13 +1605,13 @@ async def extract_document(
                         "schemaDocumentId": payload.schema_document_id,
                         "schemaName": schema_doc.get("name"),
                         "status": "running",
+                        "taskId": task_id,
                         "appliedAt": datetime.now(timezone.utc).isoformat(),
                     }
                 }
             },
         )
     except Exception:
-        # Non-fatal for extraction flow
         logger.warning(
             "Failed to persist applied schema metadata",
             extra={
@@ -1211,356 +1622,67 @@ async def extract_document(
 
     response_schema = _build_records_response_schema(schema_obj if isinstance(schema_obj, dict) else {})
     estimated_max_tokens = _estimate_max_tokens_for_response_schema(response_schema)
-    run = None
-    output: Dict[str, Any] = {}
-    records: List[Dict[str, Any]] = []
 
-    if batch_mode:
-        # Acquire search token/client for field-centric retrieval over existing embeddings.
-        try:
-            search_api_token = await get_service_token(
-                user_token=principal.token,
-                user_id=principal.sub,
-                target_audience="search-api",
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Failed to get search-api token: {exc}") from exc
-
-        search_client = BusiboxClient(search_api_token)
-        fields = (schema_obj.get("fields") or {}) if isinstance(schema_obj, dict) else {}
-        schema_name = schema_doc.get("name")
-
-        # Retrieve relevant chunks for each field using embedding search.
-        field_context_tasks = []
-        field_names = list(fields.keys()) if isinstance(fields, dict) else []
-        for field_name in field_names:
-            field_def = fields.get(field_name)
-            if isinstance(field_def, dict):
-                field_context_tasks.append(
-                    _search_context_for_field(
-                        search_client=search_client,
-                        file_id=payload.file_id,
-                        field_name=field_name,
-                        field_def=field_def,
-                        schema_name=schema_name,
-                    )
-                )
-            else:
-                field_context_tasks.append(asyncio.sleep(0, result=""))
-        field_context_values = await asyncio.gather(*field_context_tasks)
-        field_context_map = {name: field_context_values[idx] for idx, name in enumerate(field_names)}
-
-        field_batches = _partition_fields(schema_obj if isinstance(schema_obj, dict) else {}, FIELD_BATCH_SIZE)
-        semaphore = asyncio.Semaphore(MAX_PARALLEL_BATCH_RUNS)
-
-        async def _run_field_batch(batch_index: int, batch_fields: List[str]) -> Dict[str, Any]:
-            subset_fields = {f: fields[f] for f in batch_fields if f in fields}
-            subset_schema = {
-                "schemaName": schema_obj.get("schemaName"),
-                "displayName": schema_obj.get("displayName"),
-                "itemLabel": schema_obj.get("itemLabel"),
-                "fields": subset_fields,
-            }
-            subset_response_schema = _build_records_response_schema(subset_schema, max_records=1)
-            subset_max_tokens = _estimate_max_tokens_for_response_schema(subset_response_schema)
-
-            context_blocks: List[str] = []
-            for field_name in batch_fields:
-                context_text = field_context_map.get(field_name, "")
-                if context_text:
-                    context_blocks.append(f"Field: {field_name}\nRelevant chunks:\n{context_text}")
-
-            # Fallback to short markdown slice if search context is empty.
-            retrieved_context = "\n\n".join(context_blocks).strip()
-            if not retrieved_context:
-                retrieved_context = markdown[:12000]
-
-            batch_prompt = (
-                f"{instructions}\n\n"
-                "You are running FIELD-BATCHED extraction for long documents.\n"
-                "Extract ONLY the fields listed in this batch schema.\n"
-                "Return ONLY valid JSON matching the response schema (no prose).\n\n"
-                f"Batch index: {batch_index}\n"
-                f"Source file ID: {payload.file_id}\n"
-                f"Schema document ID: {payload.schema_document_id}\n\n"
-                f"Batch schema:\n```json\n{json.dumps(subset_schema, indent=2)}\n```\n\n"
-                f"Retrieved evidence chunks:\n{retrieved_context}\n"
-            )
-
-            async with semaphore:
-                async with SessionLocal() as batch_session:
-                    batch_run = await create_run(
-                        session=batch_session,
-                        principal=principal,
-                        agent_id=agent_uuid,
-                        payload={
-                            "prompt": batch_prompt,
-                            "response_schema": subset_response_schema,
-                            "max_tokens": subset_max_tokens,
-                        },
-                        scopes=["agent.execute", "data.read", "data.write", "search.read", "graph.read", "graph.write"],
-                        purpose=f"structured-extraction-batch-{batch_index}",
-                        agent_tier="complex",
-                    )
-
-                batch_output = batch_run.output or {}
-                if not isinstance(batch_output, dict):
-                    batch_output = {"result": str(batch_output)}
-                batch_records = _extract_records(batch_output) if batch_run.status == "succeeded" else []
-                return {
-                    "run": batch_run,
-                    "output": batch_output,
-                    "records": batch_records,
-                }
-
-        batch_results = await asyncio.gather(
-            *[_run_field_batch(i + 1, batch_fields) for i, batch_fields in enumerate(field_batches)]
-        )
-        successful_runs = [r["run"] for r in batch_results if r.get("run") and r["run"].status == "succeeded"]
-        partial_records = []
-        for result_item in batch_results:
-            partial_records.extend(result_item.get("records", []))
-
-        records = _merge_partial_records(partial_records, schema_obj if isinstance(schema_obj, dict) else {})
-        if successful_runs:
-            run = successful_runs[0]
-            output = {"result": "field-batched", "batchRunIds": [str(r.id) for r in successful_runs]}
-        elif batch_results:
-            run = batch_results[0].get("run")
-            output = batch_results[0].get("output", {})
-
-    if not records:
-        prompt = _build_extraction_prompt(
-            schema_document_id=payload.schema_document_id,
-            file_id=payload.file_id,
-            schema_obj=schema_obj if isinstance(schema_obj, dict) else {},
-            markdown=markdown,
-            instructions=instructions,
-            compact_mode=False,
-        )
-        run = await create_run(
-            session=session,
-            principal=principal,
-            agent_id=agent_uuid,
-            payload={
-                "prompt": prompt,
-                "response_schema": response_schema,
-                "max_tokens": estimated_max_tokens,
-            },
-            scopes=["agent.execute", "data.read", "data.write", "search.read", "graph.read", "graph.write"],
-            purpose="structured-extraction",
-            agent_tier="complex",
-        )
-
-        if run.status != "succeeded":
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "message": "Extraction run failed",
-                    "run_id": str(run.id),
-                    "status": run.status,
-                    "output": run.output,
-                },
-            )
-
-        output = run.output or {}
-        if not isinstance(output, dict):
-            output = {"result": str(output)}
-        records = _extract_records(output)
-
-        # Retry once with stricter compact instructions if first output is verbose/truncated.
-        if not records:
-            retry_prompt = _build_extraction_prompt(
-                schema_document_id=payload.schema_document_id,
-                file_id=payload.file_id,
-                schema_obj=schema_obj if isinstance(schema_obj, dict) else {},
-                markdown=markdown,
-                instructions=(
-                    f"{instructions} "
-                    "Previous output was invalid or non-parseable. "
-                    "Retry with compact output."
-                ),
-                compact_mode=True,
-            )
-            retry_run = await create_run(
-                session=session,
-                principal=principal,
-                agent_id=agent_uuid,
-                payload={
-                    "prompt": retry_prompt,
-                    "response_schema": response_schema,
-                    "max_tokens": estimated_max_tokens,
-                },
-                scopes=["agent.execute", "data.read", "data.write", "search.read", "graph.read", "graph.write"],
-                purpose="structured-extraction-retry",
-                agent_tier="complex",
-            )
-            if retry_run.status == "succeeded":
-                retry_output = retry_run.output or {}
-                if not isinstance(retry_output, dict):
-                    retry_output = {"result": str(retry_output)}
-                retry_records = _extract_records(retry_output)
-                if retry_records:
-                    run = retry_run
-                    output = retry_output
-                    records = retry_records
-
-    if not records:
-        run_id = str(run.id) if run is not None else "unknown"
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": "Agent did not return extractable records",
-                "run_id": run_id,
-                "output": output,
-            },
-        )
-
-    run_id = str(run.id) if run is not None else "unknown"
-
-    try:
-        _populate_provenance_from_markdown(
-            records=records,
-            markdown=markdown,
-            schema=schema_obj if isinstance(schema_obj, dict) else {},
-        )
-        enriched_records = _validate_and_enrich_records(
-            records=records,
-            schema=schema_obj if isinstance(schema_obj, dict) else {},
-            file_id=payload.file_id,
-            agent_id=str(agent_uuid),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Schema validation failed: {exc}") from exc
-
-    insert_result: Dict[str, Any] = {"stored": False, "count": 0}
-    if payload.store_results:
-        try:
-            result = await client.request(
-                "POST",
-                f"/data/{payload.schema_document_id}/records",
-                json={"records": enriched_records, "validate": True},
-            )
-            insert_result = {
-                "stored": True,
-                "count": result.get("count", len(enriched_records)),
-                "recordIds": result.get("recordIds", []),
-            }
-        except Exception as exc:
-            response = getattr(exc, "response", None)
-            if response is not None:
-                detail_text: Any = None
-                try:
-                    detail_payload = response.json()
-                    detail_text = detail_payload.get("detail", detail_payload)
-                except Exception:
-                    detail_text = response.text or str(exc)
-
-                status_code = 422 if response.status_code in (400, 422) else 502
-                raise HTTPException(
-                    status_code=status_code,
-                    detail=f"Failed to store extracted records: {detail_text}",
-                ) from exc
-
-            raise HTTPException(status_code=502, detail=f"Failed to store extracted records: {exc}") from exc
-
-    # Create graph entities from graph-tagged fields in the schema
-    graph_result: Dict[str, Any] = {"entity_count": 0}
-    try:
-        graph_result = await client.request(
-            "POST",
-            "/data/graph/from-extraction",
-            params={
-                "file_id": payload.file_id,
-                "schema_document_id": payload.schema_document_id,
-            },
-        )
-        logger.info(
-            "Graph entities created from extraction",
-            extra={
-                "file_id": payload.file_id,
-                "schema_document_id": payload.schema_document_id,
-                "entity_count": graph_result.get("entity_count", 0),
-            },
-        )
-    except Exception as exc:
-        logger.warning(
-            "Failed to create graph entities from extraction (non-fatal)",
-            extra={
-                "file_id": payload.file_id,
-                "schema_document_id": payload.schema_document_id,
-                "error": str(exc),
-            },
-        )
-
-    # Index keyword and embed fields from extraction into Milvus
-    index_result: Dict[str, Any] = {"indexed_count": 0}
-    try:
-        index_result = await client.request(
-            "POST",
-            "/data/index-from-extraction",
-            params={
-                "file_id": payload.file_id,
-                "schema_document_id": payload.schema_document_id,
-            },
-        )
-        logger.info(
-            "Field indexing complete from extraction",
-            extra={
-                "file_id": payload.file_id,
-                "schema_document_id": payload.schema_document_id,
-                "indexed_count": index_result.get("indexed_count", 0),
-            },
-        )
-    except Exception as exc:
-        logger.warning(
-            "Failed to index extracted fields (non-fatal)",
-            extra={
-                "file_id": payload.file_id,
-                "schema_document_id": payload.schema_document_id,
-                "error": str(exc),
-            },
-        )
-
-    # Persist extraction results summary + records in source doc metadata.
-    try:
-        await client.request(
-            "PATCH",
-            f"/files/{payload.file_id}",
-            json={
-                "metadata": {
-                    "extraction": {
-                        "schemaDocumentId": payload.schema_document_id,
-                        "schemaName": schema_doc.get("name"),
-                        "status": "completed",
-                        "runId": run_id,
-                        "agentId": str(agent_uuid),
-                        "recordCount": len(enriched_records),
-                        "records": enriched_records,
-                        "updatedAt": datetime.now(timezone.utc).isoformat(),
-                    }
-                }
-            },
-        )
-    except Exception:
-        logger.warning(
-            "Failed to persist extracted data to file metadata",
-            extra={
-                "file_id": payload.file_id,
-                "schema_document_id": payload.schema_document_id,
-                "run_id": run_id,
-            },
-        )
-
-    return {
-        "success": True,
-        "runId": run_id,
+    _extraction_tasks[task_id] = {
+        "status": "accepted",
+        "step": "queued",
         "fileId": payload.file_id,
         "schemaDocumentId": payload.schema_document_id,
-        "agentId": str(agent_uuid),
-        "recordCount": len(enriched_records),
-        "records": enriched_records,
-        "storage": insert_result,
-        "graph": graph_result,
-        "indexing": index_result,
+        "startedAt": datetime.now(timezone.utc).isoformat(),
+        "result": None,
+        "error": None,
     }
+
+    asyncio.create_task(
+        _run_extraction_pipeline(
+            task_id=task_id,
+            payload=payload,
+            principal=principal,
+            client=client,
+            markdown=markdown,
+            schema_doc=schema_doc,
+            schema_obj=schema_obj,
+            agent_uuid=agent_uuid,
+            instructions=instructions,
+            batch_mode=batch_mode,
+            response_schema=response_schema,
+            estimated_max_tokens=estimated_max_tokens,
+        )
+    )
+
+    return {
+        "taskId": task_id,
+        "status": "accepted",
+        "fileId": payload.file_id,
+        "schemaDocumentId": payload.schema_document_id,
+        "message": "Extraction started in background. Poll GET /extract/status/{taskId} or watch file metadata for completion.",
+    }
+
+
+@router.get("/status/{task_id}")
+async def extraction_status(task_id: str):
+    """
+    Poll extraction task status.
+
+    Returns the current state of a background extraction task including
+    which step it's on.  When completed, includes the full extraction result.
+    """
+    task = _extraction_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Extraction task not found")
+
+    response: Dict[str, Any] = {
+        "taskId": task_id,
+        "status": task["status"],
+        "step": task.get("step"),
+        "fileId": task.get("fileId"),
+        "schemaDocumentId": task.get("schemaDocumentId"),
+        "startedAt": task.get("startedAt"),
+    }
+
+    if task["status"] == "completed" and task.get("result"):
+        response["result"] = task["result"]
+    elif task["status"] == "failed":
+        response["error"] = task.get("error")
+
+    return response

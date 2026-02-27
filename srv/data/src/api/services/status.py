@@ -26,8 +26,8 @@ class StatusService:
         self.user = config.get("postgres_user", "postgres")
         self.password = config.get("postgres_password", "")
     
-    async def get_current_status(self, file_id: str) -> Optional[Dict]:
-        """Get current status for a file."""
+    async def get_current_status(self, file_id: str, user_id: Optional[str] = None) -> Optional[Dict]:
+        """Get current status for a file, setting RLS context when user_id is provided."""
         conn = await asyncpg.connect(
             host=self.host,
             port=self.port,
@@ -37,6 +37,9 @@ class StatusService:
         )
         
         try:
+            if user_id:
+                await conn.execute(f"SET app.user_id = '{user_id}'")
+            
             row = await conn.fetchrow("""
                 SELECT 
                     s.file_id,
@@ -48,6 +51,8 @@ class StatusService:
                     s.total_pages,
                     s.error_message,
                     s.status_message,
+                    s.processing_pass,
+                    s.pass_metadata,
                     s.started_at,
                     s.completed_at,
                     s.updated_at
@@ -58,7 +63,7 @@ class StatusService:
             if not row:
                 return None
             
-            return {
+            result = {
                 "fileId": str(row["file_id"]),
                 "stage": row["stage"],
                 "progress": row["progress"],
@@ -72,6 +77,29 @@ class StatusService:
                 "completedAt": row["completed_at"].isoformat() if row["completed_at"] else None,
                 "updatedAt": row["updated_at"].isoformat() if row["updated_at"] else None,
             }
+            
+            # Include progressive pipeline pass details if present
+            processing_pass = row.get("processing_pass")
+            pass_metadata_raw = row.get("pass_metadata")
+            if processing_pass is not None:
+                result["processingPass"] = processing_pass
+                pass_metadata = {}
+                if pass_metadata_raw:
+                    if isinstance(pass_metadata_raw, str):
+                        try:
+                            pass_metadata = json.loads(pass_metadata_raw)
+                        except (json.JSONDecodeError, TypeError):
+                            pass_metadata = {}
+                    else:
+                        pass_metadata = dict(pass_metadata_raw) if pass_metadata_raw else {}
+                
+                result["passDetails"] = {
+                    "currentPass": pass_metadata.get("current_pass", processing_pass),
+                    "totalPasses": pass_metadata.get("total_passes", 3),
+                    "passName": pass_metadata.get("pass_name", ""),
+                }
+            
+            return result
         finally:
             await conn.close()
     
@@ -95,8 +123,11 @@ class StatusService:
         )
         
         try:
+            if user_id:
+                await conn.execute(f"SET app.user_id = '{user_id}'")
+            
             # Send current status immediately
-            current = await self.get_current_status(file_id)
+            current = await self.get_current_status(file_id, user_id=user_id)
             if current:
                 yield current
             else:
@@ -132,7 +163,7 @@ class StatusService:
             
             while timeout_count < max_timeout:
                 # Check for updates
-                updated = await self.get_current_status(file_id)
+                updated = await self.get_current_status(file_id, user_id=user_id)
                 if updated and updated.get("updatedAt") != last_update:
                     yield updated
                     last_update = updated.get("updatedAt")
