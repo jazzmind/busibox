@@ -92,9 +92,22 @@
   until: portal_health.status == 200
   failed_when: false
 
+- name: Verify Busibox Admin health endpoint
+  ansible.builtin.uri:
+    url: "http://core-apps:{{ admin_port | default(3002) }}/admin/api/health"
+    method: GET
+    status_code: [200]
+    timeout: 10
+  register: admin_health
+  retries: 30
+  delay: 10
+  until: admin_health.status == 200
+  failed_when: false
+
 - name: Display core-apps status
   ansible.builtin.debug:
     msg: |
       Core apps are running and ready
       Busibox Portal: http://core-apps:{{ ai_portal_port }}
+      Busibox Admin: http://core-apps:{{ admin_port | default(3002) }}
       Agent Manager: http://core-apps:{{ agent_manager_port }}

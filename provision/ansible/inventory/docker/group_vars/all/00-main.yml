@@ -88,6 +88,7 @@ deploy_port: 8011
 # Frontend ports
 ai_portal_port: 3000
 agent_manager_port: 3001
+admin_port: 3002
 
 # ============================================================================
 # Domain Configuration - Docker
@@ -209,3 +210,4 @@ docker_health_endpoints:
   search-api: "http://search-api:{{ search_port }}/health"
   agent-api: "http://agent-api:{{ agent_port }}/health"
   busibox-portal: "http://core-apps:{{ ai_portal_port }}/portal/api/health"
+  busibox-admin: "http://core-apps:{{ admin_port }}/admin/api/health"

@@ -909,6 +909,65 @@ except Exception as e:
     )
 
 
+class SetupMLXRequest(BaseModel):
+    packages: list[str] = ["mlx-lm", "huggingface_hub"]
+
+
+@app.post("/setup/mlx")
+async def setup_mlx_deps(
+    request: SetupMLXRequest,
+    _: bool = Depends(verify_token),
+):
+    """
+    Install MLX Python dependencies into the MLX venv.
+
+    Called by deploy-api during the setup wizard to install mlx-lm and
+    huggingface_hub *after* the host-agent is already running (Phase 2).
+    The venv at ~/.busibox/mlx-venv must already exist (created in Phase 1).
+    """
+    import json
+
+    venv_dir = Path.home() / ".busibox" / "mlx-venv"
+    pip_path = venv_dir / "bin" / "pip3"
+
+    if not pip_path.exists():
+        raise HTTPException(
+            status_code=500,
+            detail=f"MLX venv pip not found at {pip_path}. Run Phase 1 host setup first.",
+        )
+
+    async def generate():
+        yield f"data: {json.dumps({'type': 'info', 'message': f'Installing MLX packages: {request.packages}'})}\n\n"
+
+        process = await asyncio.create_subprocess_exec(
+            str(pip_path), "install", "-q", *request.packages,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        async for line in process.stdout:
+            msg = line.decode("utf-8", errors="replace").rstrip()
+            if msg:
+                yield f"data: {json.dumps({'type': 'log', 'stream': 'stdout', 'message': msg})}\n\n"
+
+        async for line in process.stderr:
+            msg = line.decode("utf-8", errors="replace").rstrip()
+            if msg:
+                yield f"data: {json.dumps({'type': 'log', 'stream': 'stderr', 'message': msg})}\n\n"
+
+        returncode = await process.wait()
+        if returncode == 0:
+            yield f"data: {json.dumps({'type': 'success', 'message': 'MLX dependencies installed', 'done': True})}\n\n"
+        else:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'pip install failed with code {returncode}', 'done': True})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
 @app.get("/media/status")
 async def media_status(_: bool = Depends(verify_token)):
     """Get status for all MLX media servers (transcribe, voice, image) with memory info."""

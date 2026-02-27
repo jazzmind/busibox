@@ -2001,17 +2001,17 @@ bootstrap_docker_ansible() {
         ((attempt++))
     done
     
-    # Phase 5: Core Apps (Busibox Portal + Agent Manager)
+    # Phase 5: Core Apps (Busibox Portal + Admin + Agent Manager)
     # This mirrors the Proxmox apps-lxc architecture
-    show_stage 80 "Deploying Core Apps" "Busibox Portal and Agent Manager."
+    show_stage 80 "Deploying Core Apps" "Busibox Portal, Admin, and Agent Manager."
     info "Running: ansible-playbook ... --tags core-apps"
     if ! run_ansible "core-apps"; then
         error "Core apps deployment failed"
         return 1
     fi
     
-    # Phase 7: Wait for Busibox Portal to be ready
-    show_stage 95 "Waiting for Busibox Portal" "Verifying services are healthy..."
+    # Phase 6: Wait for Busibox Portal and Admin to be ready
+    show_stage 90 "Waiting for Busibox Portal" "Verifying services are healthy..."
     info "Waiting for Busibox Portal to be healthy (this may take a minute on first run)..."
     max_attempts=90
     attempt=0
@@ -2030,6 +2030,27 @@ bootstrap_docker_ansible() {
     
     if [[ $attempt -ge $max_attempts ]]; then
         warn "Busibox Portal health check timed out, but it may still be starting"
+    fi
+    
+    # Wait for Busibox Admin (needed for setup wizard)
+    show_stage 95 "Waiting for Busibox Admin" "Setup wizard requires the admin app..."
+    info "Waiting for Busibox Admin to be healthy..."
+    attempt=0
+    while [[ $attempt -lt $max_attempts ]]; do
+        if curl -sf "http://${portal_host}:3002/admin/api/health" &>/dev/null; then
+            success "Busibox Admin is ready"
+            break
+        fi
+        sleep 2
+        ((attempt++))
+        if [[ $((attempt % 15)) -eq 0 ]]; then
+            echo -n "."
+        fi
+    done
+    echo ""
+    
+    if [[ $attempt -ge $max_attempts ]]; then
+        warn "Busibox Admin health check timed out - setup wizard may not be accessible yet"
     fi
     
     # Note: Additional services (MinIO, Milvus, Data-API, Search-API, Agent-API, 
@@ -2534,18 +2555,18 @@ bootstrap_proxmox_ansible() {
         fi
     fi
     
-    # Phase 6: Core Apps (Busibox Portal + Agent Manager)
+    # Phase 6: Core Apps (Busibox Portal + Admin + Agent Manager)
     if [[ "$FULL_INSTALL" != true ]] && is_service_healthy "ai_portal"; then
         info "Busibox Portal is already healthy - skipping deployment"
     else
-        show_stage 85 "Deploying Core Apps" "Busibox Portal and Agent Manager."
+        show_stage 85 "Deploying Core Apps" "Busibox Portal, Admin, and Agent Manager."
         if ! run_ansible_proxmox "apps"; then
             error "Core apps deployment failed"
             return 1
         fi
         
         # Phase 7: Wait for Busibox Portal to be ready
-        show_stage 95 "Waiting for Busibox Portal" "Verifying services are healthy..."
+        show_stage 90 "Waiting for Busibox Portal" "Verifying services are healthy..."
         local portal_health_url
         portal_health_url=$(get_service_health_url "ai_portal" "$ENVIRONMENT" "proxmox")
         info "Waiting for Busibox Portal to be healthy at ${portal_ip}..."
@@ -2566,6 +2587,27 @@ bootstrap_proxmox_ansible() {
         
         if [[ $attempt -ge $max_attempts ]]; then
             warn "Busibox Portal health check timed out, but it may still be starting"
+        fi
+        
+        # Wait for Busibox Admin (needed for setup wizard)
+        show_stage 95 "Waiting for Busibox Admin" "Setup wizard requires the admin app..."
+        info "Waiting for Busibox Admin to be healthy at ${portal_ip}..."
+        attempt=0
+        while [[ $attempt -lt $max_attempts ]]; do
+            if curl -sf "http://${portal_ip}:3002/admin/api/health" &>/dev/null; then
+                success "Busibox Admin is ready"
+                break
+            fi
+            sleep 2
+            ((attempt++))
+            if [[ $((attempt % 15)) -eq 0 ]]; then
+                echo -n "."
+            fi
+        done
+        echo ""
+        
+        if [[ $attempt -ge $max_attempts ]]; then
+            warn "Busibox Admin health check timed out - setup wizard may not be accessible yet"
         fi
     fi
     
@@ -2801,9 +2843,9 @@ bootstrap_docker() {
     fi
     
     # ==========================================================================
-    # PHASE 7: Wait for Busibox Portal to be ready
+    # PHASE 7: Wait for Busibox Portal and Admin to be ready
     # ==========================================================================
-    show_stage 95 "Waiting for services" "Bootstrap services starting up..."
+    show_stage 93 "Waiting for services" "Bootstrap services starting up..."
     
     info "Waiting for Busibox Portal to be healthy (this may take a minute on first run)..."
     max_attempts=90
@@ -2824,6 +2866,27 @@ bootstrap_docker() {
         warn "Busibox Portal health check timed out, but it may still be starting"
     else
         success "Busibox Portal is ready"
+    fi
+    
+    show_stage 97 "Waiting for Busibox Admin" "Setup wizard requires the admin app..."
+    info "Waiting for Busibox Admin to be healthy..."
+    attempt=0
+    while [[ $attempt -lt $max_attempts ]]; do
+        if curl -sf "http://${portal_host}:3002/admin/api/health" &>/dev/null; then
+            break
+        fi
+        sleep 2
+        ((attempt++))
+        if [[ $((attempt % 15)) -eq 0 ]]; then
+            echo -n "."
+        fi
+    done
+    echo ""
+    
+    if [[ $attempt -ge $max_attempts ]]; then
+        warn "Busibox Admin health check timed out - setup wizard may not be accessible yet"
+    else
+        success "Busibox Admin is ready"
     fi
 }
 
@@ -3026,6 +3089,21 @@ create_admin_user() {
         _run_pg_sql "INSERT INTO authz_user_roles (user_id, role_id) VALUES ('${user_id}'::uuid, '${admin_role_id}'::uuid);" authz >/dev/null
     fi
     
+    # Grant Admin role access to all core apps (RBAC role-to-resource bindings).
+    # Without these, getUserApps() returns empty and the portal shows "No Applications Available".
+    local core_app_ids=("busibox-portal" "busibox-admin" "busibox-agents" "busibox-appbuilder" "busibox-chat" "busibox-media" "busibox-documents")
+    for app_id in "${core_app_ids[@]}"; do
+        _run_pg_sql "INSERT INTO authz_role_bindings (role_id, resource_type, resource_id) VALUES ('${admin_role_id}'::uuid, 'app', '${app_id}') ON CONFLICT DO NOTHING;" authz >/dev/null 2>&1 || true
+    done
+    
+    # Also grant the User role access to portal so non-admin users can log in
+    local user_role_id
+    user_role_id=$(_run_pg_sql "SELECT id::text FROM authz_roles WHERE name = 'User' LIMIT 1;" authz 2>/dev/null)
+    user_role_id=$(echo "$user_role_id" | grep -v "^$" | head -1 | tr -d '[:space:]')
+    if [[ -n "$user_role_id" && "$user_role_id" != *"ERROR"* ]]; then
+        _run_pg_sql "INSERT INTO authz_role_bindings (role_id, resource_type, resource_id) VALUES ('${user_role_id}'::uuid, 'app', 'busibox-portal') ON CONFLICT DO NOTHING;" authz >/dev/null 2>&1 || true
+    fi
+    
     # Create magic link (24 hour expiry for initial setup)
     # First delete any existing magic links for this user
     _run_pg_sql "DELETE FROM authz_magic_links WHERE user_id = '${user_id}'::uuid;" authz >/dev/null
@@ -3129,7 +3207,8 @@ show_completion() {
     box_line "" "double" "${GREEN}"
     box_line "  • PostgreSQL     - Database with row-level security" "double" "${GREEN}"
     box_line "  • AuthZ API      - OAuth 2.0 authentication" "double" "${GREEN}"
-    box_line "  • Busibox Portal      - Web dashboard for managing Busibox" "double" "${GREEN}"
+    box_line "  • Busibox Portal - Web dashboard for managing Busibox" "double" "${GREEN}"
+    box_line "  • Busibox Admin  - Setup wizard and admin panel" "double" "${GREEN}"
     box_line "  • Nginx          - Reverse proxy with SSL" "double" "${GREEN}"
     if [[ "${LLM_BACKEND:-}" == "mlx" ]]; then
         box_line "  • Host Agent     - MLX control service (localhost:8089)" "double" "${GREEN}"
@@ -4467,16 +4546,17 @@ set_install_phase() {
 main() {
     parse_args "$@"
     
-    # MLX host setup mode: only run MLX steps on the macOS host.
+    # MLX host setup mode: bootstrap the host-agent on macOS.
     # Called by the Makefile after the manager container finishes.
+    # Only creates the venv and installs the host-agent service — the heavy
+    # MLX work (pip install mlx-lm, model download, server start) is deferred
+    # to Phase 2 where the setup wizard drives it via deploy-api -> host-agent.
     if [[ "${MLX_HOST_SETUP:-false}" == true ]]; then
         ENVIRONMENT="${BUSIBOX_ENV:-development}"
         LLM_BACKEND="mlx"
         PLATFORM="docker"
-        setup_mlx
+        setup_mlx_venv
         setup_host_agent
-        wait_for_model_download
-        ensure_mlx_running
         return $?
     fi
     
@@ -4703,11 +4783,11 @@ main() {
         DEV_APPS_DIR=""
     fi
     
-    # Start model downloads in background early
-    # This allows models to download while Docker containers are being built
-    if [[ "$LLM_BACKEND" == "mlx" ]]; then
-        start_model_download_background
-    fi
+    # MLX model downloads are handled in Phase 2 by the setup wizard via
+    # deploy-api -> host-agent, so no early background download is needed.
+    # Previously start_model_download_background was called here but it would
+    # either run inside the ephemeral manager container (losing downloads on exit)
+    # or create unnecessary work on the host that Phase 2 repeats.
     
     # Start embedding model download in background (needed for data-api/embedding-api)
     # This runs regardless of LLM backend since embeddings are always local
@@ -4917,20 +4997,24 @@ main() {
         exit 1
     fi
     
-    # Setup MLX and host-agent if on Apple Silicon.
-    # These operations require the actual macOS host (Apple Silicon Metal, launchd,
-    # pip install into host venv). When inside the manager container, write a marker
-    # so the Makefile runs MLX setup on the host after the container exits.
+    # Bootstrap host-agent for MLX on Apple Silicon.
+    # Only creates the venv and starts the host-agent service. The heavy MLX
+    # work (pip install mlx-lm, model download, server start) is deferred to
+    # Phase 2 where the setup wizard drives it via deploy-api -> host-agent.
+    # Inside the manager container, write a marker so the Makefile runs the
+    # lightweight host-agent bootstrap on the macOS host after the container exits.
     if [[ "$LLM_BACKEND" == "mlx" && ! -f /.dockerenv ]]; then
-        setup_mlx
+        setup_mlx_venv
         setup_host_agent
-        # Wait for background model download if still running
-        wait_for_model_download
-        # Ensure MLX server is running for Busibox Portal setup
-        ensure_mlx_running
+        # Embedding model is needed regardless of LLM backend
+        show_stage 92 "Downloading Embedding Model" "Pre-downloading FastEmbed model for document search."
+        download_embedding_model
     elif [[ "$LLM_BACKEND" == "mlx" && -f /.dockerenv ]]; then
-        info "MLX setup will run on the macOS host after container deployment completes..."
+        info "MLX host-agent setup will run on the macOS host after container deployment completes..."
         touch "${REPO_ROOT}/.mlx-setup-needed"
+        # Embedding model download uses Docker, which works inside the manager container
+        show_stage 92 "Downloading Embedding Model" "Pre-downloading FastEmbed model for document search."
+        download_embedding_model
     elif [[ "$PLATFORM" != "proxmox" && "$PLATFORM" != "k8s" ]]; then
         # For Docker non-MLX backends, download the embedding model
         # (embeddings run locally regardless of LLM backend)
