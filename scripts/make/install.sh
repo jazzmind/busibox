@@ -135,7 +135,7 @@ _update_state_file_for_env() {
         warn "Vault exists but is not encrypted: $VAULT_FILE"
         
         # Ensure password file exists
-        local vault_pass_file="${HOME}/.busibox-vault-pass-${prefix}"
+        local vault_pass_file="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}/.busibox-vault-pass-${prefix}"
         if [[ ! -f "$vault_pass_file" ]]; then
             info "Creating vault password file: $vault_pass_file"
             openssl rand -base64 32 > "$vault_pass_file"
@@ -1624,7 +1624,13 @@ get_state_file() {
 get_vault_pass_file() {
     local prefix
     prefix=$(get_container_prefix)
-    echo "${HOME}/.busibox-vault-pass-${prefix}"
+    local vault_dir="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}"
+    local pass_file="${vault_dir}/.busibox-vault-pass-${prefix}"
+    # Fall back to $HOME if file exists there (backward compat)
+    if [[ ! -f "$pass_file" && -f "${HOME}/.busibox-vault-pass-${prefix}" ]]; then
+        pass_file="${HOME}/.busibox-vault-pass-${prefix}"
+    fi
+    echo "$pass_file"
 }
 
 # Load GitHub token from vault (used during resume)
@@ -1863,10 +1869,13 @@ bootstrap_docker_ansible() {
     
     # Check for vault password file
     local vault_args=""
-    if [[ -f "${HOME}/.vault_pass" ]]; then
-        vault_args="--vault-password-file=${HOME}/.vault_pass"
+    local _vpd="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}"
+    if [[ -f "${_vpd}/.busibox-vault-pass-${container_prefix}" ]]; then
+        vault_args="--vault-password-file=${_vpd}/.busibox-vault-pass-${container_prefix}"
     elif [[ -f "${HOME}/.busibox-vault-pass-${container_prefix}" ]]; then
         vault_args="--vault-password-file=${HOME}/.busibox-vault-pass-${container_prefix}"
+    elif [[ -f "${HOME}/.vault_pass" ]]; then
+        vault_args="--vault-password-file=${HOME}/.vault_pass"
     fi
     
     # Build ansible-playbook command
@@ -2358,7 +2367,10 @@ bootstrap_proxmox_ansible() {
         demo) vault_prefix="demo" ;;
         *) vault_prefix="dev" ;;
     esac
-    if [[ -f "${HOME}/.busibox-vault-pass-${vault_prefix}" ]]; then
+    local _vpd="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}"
+    if [[ -f "${_vpd}/.busibox-vault-pass-${vault_prefix}" ]]; then
+        vault_args="--vault-password-file=${_vpd}/.busibox-vault-pass-${vault_prefix}"
+    elif [[ -f "${HOME}/.busibox-vault-pass-${vault_prefix}" ]]; then
         vault_args="--vault-password-file=${HOME}/.busibox-vault-pass-${vault_prefix}"
     elif [[ -f "${HOME}/.vault_pass" ]]; then
         vault_args="--vault-password-file=${HOME}/.vault_pass"
@@ -4851,11 +4863,17 @@ main() {
         # Set vault password for sync operation
         # Use environment-specific vault password file
         # VAULT_ENVIRONMENT is set by set_vault_environment() in vault.sh
+        local _vpd="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}"
+        local vault_pass_file=""
         if [[ -n "${VAULT_ENVIRONMENT:-}" ]]; then
-            local vault_pass_file="${HOME}/.busibox-vault-pass-${VAULT_ENVIRONMENT}"
+            if [[ -f "${_vpd}/.busibox-vault-pass-${VAULT_ENVIRONMENT}" ]]; then
+                vault_pass_file="${_vpd}/.busibox-vault-pass-${VAULT_ENVIRONMENT}"
+            else
+                vault_pass_file="${HOME}/.busibox-vault-pass-${VAULT_ENVIRONMENT}"
+            fi
         else
             # Fallback for legacy installations
-            local vault_pass_file="${HOME}/.vault_pass"
+            vault_pass_file="${HOME}/.vault_pass"
         fi
         
         # Generate vault password if it doesn't exist

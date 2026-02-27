@@ -80,7 +80,10 @@ if [[ -d "${HOME}/.ssh" ]]; then
     DOCKER_ARGS+=(-v "${HOME}/.ssh:/root/.ssh:ro")
 fi
 
-# Vault password files: mount each one found on the host
+# Vault password files: mount each one found in the host's home directory
+# so existing installations can still read them. New vault pass files are
+# created in the repo root (BUSIBOX_VAULT_PASS_DIR) which is already
+# mounted read-write.
 for vf in "${HOME}"/.busibox-vault-pass-*; do
     if [[ -f "$vf" ]]; then
         local_basename="$(basename "$vf")"
@@ -98,6 +101,10 @@ fi
 # Host path for docker compose volume resolution
 DOCKER_ARGS+=(-e "BUSIBOX_HOST_PATH=${REPO_ROOT}")
 
+# Vault password files are stored in the repo root inside the manager
+# container (since HOME=/root is ephemeral). The repo root is mounted rw.
+DOCKER_ARGS+=(-e "BUSIBOX_VAULT_PASS_DIR=${REPO_ROOT}")
+
 # Absolute host path for SSH key mount resolution inside docker compose.
 # Needed because manager container sets HOME=/root, which would otherwise
 # expand ~/.ssh to /root/.ssh on the host daemon (invalid on macOS).
@@ -108,7 +115,7 @@ DOCKER_ARGS+=(-e "CONTAINER_PREFIX=${CONTAINER_PREFIX:-dev}")
 DOCKER_ARGS+=(-e "COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-dev-busibox}")
 DOCKER_ARGS+=(-e "BUSIBOX_ENV=${BUSIBOX_ENV:-development}")
 
-# HOME=/root inside the container so scripts find vault files at /root/.busibox-vault-pass-*
+# HOME=/root inside the container so scripts find mounted vault files
 DOCKER_ARGS+=(-e "HOME=/root")
 
 # Terminal

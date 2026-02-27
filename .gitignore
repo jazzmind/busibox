@@ -71,6 +71,9 @@ provision/ansible/group_vars/all/model_config.yml
 .busibox-state
 .busibox-state-*
 
+# Vault password files (created in repo root when running inside manager container)
+.busibox-vault-pass-*
+
 # Deployment profiles directory (local workstation state)
 # Contains profiles.json, per-profile state files, env files, kubeconfigs
 .busibox/
