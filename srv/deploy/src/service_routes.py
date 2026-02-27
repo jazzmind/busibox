@@ -2122,8 +2122,9 @@ async def setup_mlx_full(
 
     Steps:
       1. Install MLX Python deps (mlx-lm, huggingface_hub) into venv
-      2. Download test model (Qwen3-0.6B-4bit)
+      2. Download all required models (LLM + STT/TTS/image media models)
       3. Start MLX server in dual mode
+      4. Verify MLX server is serving models
 
     If MLX is already running the endpoint short-circuits with success.
     Called by the setup wizard's mlx-ensure step during Phase 2 deployment.
@@ -2171,7 +2172,7 @@ async def setup_mlx_full(
         yield sse_event("info", "Host-agent is reachable, starting MLX setup...")
 
         # Step 1: Install MLX Python dependencies via host-agent
-        yield sse_event("info", "Step 1/3: Installing MLX Python dependencies...")
+        yield sse_event("info", "Step 1/4: Installing MLX Python dependencies...")
         step1_ok = False
         try:
             async with httpx.AsyncClient() as client:
@@ -2203,41 +2204,73 @@ async def setup_mlx_full(
             return
         yield sse_event("info", "MLX dependencies installed successfully")
 
-        # Step 2: Download test model via host-agent
-        yield sse_event("info", "Step 2/3: Downloading test model...")
-        test_model = "mlx-community/Qwen3-0.6B-4bit"
-        step2_ok = False
-        try:
-            async with httpx.AsyncClient() as client:
-                async with client.stream(
-                    "POST",
-                    f"{HOST_AGENT_URL}/mlx/models/download",
-                    headers=host_agent_headers,
-                    json={"model": test_model},
-                    timeout=httpx.Timeout(10.0, read=600.0),
-                ) as resp:
-                    if resp.status_code != 200:
-                        yield sse_event("warning", f"Model download returned {resp.status_code}, continuing anyway")
-                        step2_ok = True
-                    else:
-                        async for line in resp.aiter_lines():
-                            if line.startswith("data: "):
-                                try:
-                                    data = json.loads(line[6:])
-                                    yield f"{line}\n\n"
-                                    if data.get("done"):
-                                        step2_ok = data.get("type") != "error"
-                                except Exception:
-                                    yield f"{line}\n\n"
-        except Exception as exc:
-            yield sse_event("warning", f"Model download error: {exc}, continuing anyway")
-            step2_ok = True
+        # Step 2: Download required models (LLM + media) via host-agent
+        yield sse_event("info", "Step 2/4: Checking required models...")
 
-        if not step2_ok:
-            yield sse_event("warning", "Test model download failed, but continuing with MLX start")
+        # Query host-agent for all required models (LLM + STT/TTS/image)
+        models_to_download: list[str] = []
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{HOST_AGENT_URL}/models/required",
+                    headers=host_agent_headers,
+                )
+                if resp.status_code == 200:
+                    required = resp.json()
+                    for m in required.get("models", []):
+                        if not m.get("cached"):
+                            models_to_download.append(m["name"])
+                    if models_to_download:
+                        yield sse_event("info", f"{len(models_to_download)} model(s) to download: {', '.join(models_to_download)}")
+                    else:
+                        yield sse_event("info", "All required models already cached")
+                else:
+                    yield sse_event("warning", f"Could not query required models ({resp.status_code}), falling back to test model only")
+                    models_to_download = ["mlx-community/Qwen3-0.6B-4bit"]
+        except Exception as exc:
+            yield sse_event("warning", f"Could not query required models ({exc}), falling back to test model only")
+            models_to_download = ["mlx-community/Qwen3-0.6B-4bit"]
+
+        # Download each missing model
+        for idx, model_name in enumerate(models_to_download, 1):
+            yield sse_event("info", f"Downloading model {idx}/{len(models_to_download)}: {model_name}...")
+            model_ok = False
+            try:
+                async with httpx.AsyncClient() as client:
+                    async with client.stream(
+                        "POST",
+                        f"{HOST_AGENT_URL}/mlx/models/download",
+                        headers=host_agent_headers,
+                        json={"model": model_name},
+                        timeout=httpx.Timeout(10.0, read=600.0),
+                    ) as resp:
+                        if resp.status_code != 200:
+                            yield sse_event("warning", f"Download of {model_name} returned {resp.status_code}, skipping")
+                            model_ok = True
+                        else:
+                            async for line in resp.aiter_lines():
+                                if line.startswith("data: "):
+                                    try:
+                                        data = json.loads(line[6:])
+                                        yield f"{line}\n\n"
+                                        if data.get("done"):
+                                            model_ok = data.get("type") != "error"
+                                    except Exception:
+                                        yield f"{line}\n\n"
+            except Exception as exc:
+                yield sse_event("warning", f"Download of {model_name} failed: {exc}, skipping")
+                model_ok = True
+
+            if model_ok:
+                yield sse_event("info", f"Model {model_name} ready")
+            else:
+                yield sse_event("warning", f"Model {model_name} download had issues, continuing")
+
+        yield sse_event("info", "Model downloads complete")
 
         # Step 3: Start MLX server via host-agent
-        yield sse_event("info", "Step 3/3: Starting MLX server...")
+        yield sse_event("info", "Step 3/4: Starting MLX server...")
+        mlx_start_ok = False
         try:
             async with httpx.AsyncClient() as client:
                 async with client.stream(
@@ -2256,11 +2289,7 @@ async def setup_mlx_full(
                                 data = json.loads(line[6:])
                                 yield f"{line}\n\n"
                                 if data.get("done"):
-                                    if data.get("type") in ("success", "warning"):
-                                        yield sse_event("success", "MLX setup complete — server is running", done=True)
-                                    else:
-                                        yield sse_event("error", "MLX server failed to start", done=True)
-                                    return
+                                    mlx_start_ok = data.get("type") in ("success", "warning")
                             except Exception:
                                 yield f"{line}\n\n"
         except httpx.ConnectError:
@@ -2270,7 +2299,25 @@ async def setup_mlx_full(
             yield sse_event("error", f"MLX start error: {exc}", done=True)
             return
 
-        yield sse_event("error", "MLX setup ended without a clear result", done=True)
+        if not mlx_start_ok:
+            yield sse_event("error", "MLX server failed to start", done=True)
+            return
+
+        # Step 4: Verify MLX is serving models
+        yield sse_event("info", "Step 4/4: Verifying MLX server...")
+        for attempt in range(10):
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    resp = await client.get(f"{MLX_SERVER_URL}/v1/models")
+                    if resp.status_code == 200:
+                        model_count = len(resp.json().get("data", []))
+                        yield sse_event("success", f"MLX server verified — {model_count} model(s) loaded", done=True)
+                        return
+            except Exception:
+                pass
+            await asyncio.sleep(3)
+
+        yield sse_event("warning", "MLX server started but not yet responding — it may need more time to load", done=True)
 
     return StreamingResponse(
         event_generator(),
