@@ -304,7 +304,32 @@ def get_docker_compose_base_cmd(busibox_host_path: str) -> list:
 # Host Agent configuration (for MLX control on Apple Silicon)
 # The host-agent runs on the host machine and is accessible via host.docker.internal
 HOST_AGENT_URL = os.getenv("HOST_AGENT_URL", "http://host.docker.internal:8089")
-HOST_AGENT_TOKEN = os.getenv("HOST_AGENT_TOKEN", "")
+_HOST_AGENT_TOKEN_ENV = os.getenv("HOST_AGENT_TOKEN", "")
+
+def _resolve_host_agent_token() -> str:
+    """Resolve the host-agent token dynamically.
+    
+    During initial install the host-agent token is generated AFTER the
+    deploy-api container starts, so the env-var captured at import time may
+    be empty/stale.  The busibox repo root is volume-mounted at
+    BUSIBOX_HOST_PATH, so we can read the current value from the .env file.
+    """
+    if _HOST_AGENT_TOKEN_ENV:
+        return _HOST_AGENT_TOKEN_ENV
+    busibox_path = os.getenv("BUSIBOX_HOST_PATH", "")
+    prefix = os.getenv("CONTAINER_PREFIX", "dev")
+    if busibox_path:
+        env_file = os.path.join(busibox_path, f".env.{prefix}")
+        try:
+            with open(env_file) as f:
+                for line in f:
+                    if line.startswith("HOST_AGENT_TOKEN="):
+                        token = line.split("=", 1)[1].strip()
+                        if token:
+                            return token
+        except FileNotFoundError:
+            pass
+    return ""
 
 # Lock mechanism to prevent concurrent deployments of the same service
 # Maps service name to asyncio.Lock
@@ -387,8 +412,9 @@ async def start_service(
                 
                 # Call host-agent to start MLX
                 headers = {}
-                if HOST_AGENT_TOKEN:
-                    headers["Authorization"] = f"Bearer {HOST_AGENT_TOKEN}"
+                _token = _resolve_host_agent_token()
+                if _token:
+                    headers["Authorization"] = f"Bearer {_token}"
                 
                 try:
                     async with httpx.AsyncClient() as client:
@@ -1061,8 +1087,9 @@ async def start_service_sse(
                     
                     # Connect to host-agent SSE endpoint
                     headers = {}
-                    if HOST_AGENT_TOKEN:
-                        headers["Authorization"] = f"Bearer {HOST_AGENT_TOKEN}"
+                    _token = _resolve_host_agent_token()
+                    if _token:
+                        headers["Authorization"] = f"Bearer {_token}"
                     
                     try:
                         async with httpx.AsyncClient() as client:
@@ -1882,9 +1909,10 @@ async def ensure_mlx_quick(
         }
     
     # Build headers for host-agent
+    _token = _resolve_host_agent_token()
     host_agent_headers = {'Content-Type': 'application/json'}
-    if HOST_AGENT_TOKEN:
-        host_agent_headers['Authorization'] = f'Bearer {HOST_AGENT_TOKEN}'
+    if _token:
+        host_agent_headers['Authorization'] = f'Bearer {_token}'
     
     async with httpx.AsyncClient(timeout=15.0) as client:
         # Step 1: Check if MLX is already running
@@ -1993,9 +2021,10 @@ async def ensure_mlx_running(
         yield sse_event('info', 'Ensuring MLX server is running...')
         
         # Build headers for host-agent (requires auth)
+        _token = _resolve_host_agent_token()
         host_agent_headers = {'Content-Type': 'application/json'}
-        if HOST_AGENT_TOKEN:
-            host_agent_headers['Authorization'] = f'Bearer {HOST_AGENT_TOKEN}'
+        if _token:
+            host_agent_headers['Authorization'] = f'Bearer {_token}'
         
         async with httpx.AsyncClient(timeout=60.0) as client:
             # Step 1: Check if MLX is already running directly
@@ -2109,9 +2138,10 @@ async def setup_mlx_full(
             yield sse_event("success", "Skipped (not MLX)", done=True)
             return
 
+        _token = _resolve_host_agent_token()
         host_agent_headers: dict[str, str] = {"Content-Type": "application/json"}
-        if HOST_AGENT_TOKEN:
-            host_agent_headers["Authorization"] = f"Bearer {HOST_AGENT_TOKEN}"
+        if _token:
+            host_agent_headers["Authorization"] = f"Bearer {_token}"
 
         # Quick check: if MLX is already healthy, nothing to do.
         try:
@@ -2371,9 +2401,10 @@ async def validate_llm_chain(
         llm_url = ''
         
         # Build headers for host-agent (requires auth)
+        _token = _resolve_host_agent_token()
         host_agent_headers = {'Content-Type': 'application/json'}
-        if HOST_AGENT_TOKEN:
-            host_agent_headers['Authorization'] = f'Bearer {HOST_AGENT_TOKEN}'
+        if _token:
+            host_agent_headers['Authorization'] = f'Bearer {_token}'
         
         # Try to detect/start MLX via host-agent
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -2907,8 +2938,9 @@ litellm_settings:
 def _host_agent_headers() -> dict:
     """Build auth headers for host-agent requests."""
     headers = {}
-    if HOST_AGENT_TOKEN:
-        headers["Authorization"] = f"Bearer {HOST_AGENT_TOKEN}"
+    _token = _resolve_host_agent_token()
+    if _token:
+        headers["Authorization"] = f"Bearer {_token}"
     return headers
 
 
