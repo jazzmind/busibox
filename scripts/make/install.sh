@@ -434,28 +434,37 @@ show_stage() {
 
 detect_system() {
     local os arch ram_gb ram_bytes
-    
-    os=$(uname -s)
-    arch=$(uname -m)
-    
+
+    # Prefer HOST_OS/HOST_ARCH/HOST_RAM_GB env vars (forwarded by
+    # manager-run.sh from the host). Inside the manager container uname
+    # reports the container's Linux arch, not the host's.
+    os="${HOST_OS:-$(uname -s)}"
+    arch="${HOST_ARCH:-$(uname -m)}"
+
     # Detect RAM (with fallback on error)
-    ram_gb=8  # Default fallback
-    if [[ "$os" == "Darwin" ]]; then
-        ram_bytes=$(sysctl -n hw.memsize 2>/dev/null || echo "")
-        if [[ -n "$ram_bytes" && "$ram_bytes" =~ ^[0-9]+$ ]]; then
-            ram_gb=$((ram_bytes / 1024 / 1024 / 1024))
-        fi
-    else
-        local mem_kb
-        mem_kb=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "")
-        if [[ -n "$mem_kb" && "$mem_kb" =~ ^[0-9]+$ ]]; then
-            ram_gb=$((mem_kb / 1024 / 1024))
+    ram_gb="${HOST_RAM_GB:-}"
+    if [[ -z "$ram_gb" || ! "$ram_gb" =~ ^[0-9]+$ ]]; then
+        ram_gb=8  # Default fallback
+        if [[ "$os" == "Darwin" ]]; then
+            ram_bytes=$(sysctl -n hw.memsize 2>/dev/null || echo "")
+            if [[ -n "$ram_bytes" && "$ram_bytes" =~ ^[0-9]+$ ]]; then
+                ram_gb=$((ram_bytes / 1024 / 1024 / 1024))
+            fi
+        else
+            local mem_kb
+            mem_kb=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "")
+            if [[ -n "$mem_kb" && "$mem_kb" =~ ^[0-9]+$ ]]; then
+                ram_gb=$((mem_kb / 1024 / 1024))
+            fi
         fi
     fi
-    
-    # Detect LLM backend capability
+
+    # Detect LLM backend capability.
+    # Check LLM_BACKEND env var first (set by manager-run.sh).
     local backend="cloud"
-    if [[ "$os" == "Darwin" && ("$arch" == "arm64" || "$arch" == "aarch64") ]]; then
+    if [[ -n "${LLM_BACKEND:-}" ]]; then
+        backend="$LLM_BACKEND"
+    elif [[ "$os" == "Darwin" && ("$arch" == "arm64" || "$arch" == "aarch64") ]]; then
         backend="mlx"
     elif command -v nvidia-smi &>/dev/null; then
         local gpu_count
@@ -464,7 +473,7 @@ detect_system() {
             backend="vllm"
         fi
     fi
-    
+
     # Determine tier based on RAM
     local tier="minimal"
     if [[ $ram_gb -ge 256 ]]; then
@@ -478,7 +487,7 @@ detect_system() {
     elif [[ $ram_gb -ge 24 ]]; then
         tier="standard"
     fi
-    
+
     # Export for use
     export DETECTED_OS="$os"
     export DETECTED_ARCH="$arch"

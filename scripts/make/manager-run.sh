@@ -114,11 +114,31 @@ DOCKER_ARGS+=(-e "HOME=/root")
 # Terminal
 DOCKER_ARGS+=(-e "TERM=${TERM:-xterm-256color}")
 
+# Forward host platform info so scripts inside the manager container
+# can detect capabilities without relying on uname (which would report
+# the container's Linux arch, not the host's).
+HOST_OS="${HOST_OS:-$(uname -s)}"
+HOST_ARCH="${HOST_ARCH:-$(uname -m)}"
+if [[ -z "${HOST_RAM_GB:-}" ]]; then
+    if [[ "$HOST_OS" == "Darwin" ]]; then
+        _ram_bytes=$(sysctl -n hw.memsize 2>/dev/null || echo "")
+        if [[ -n "$_ram_bytes" && "$_ram_bytes" =~ ^[0-9]+$ ]]; then
+            HOST_RAM_GB=$((_ram_bytes / 1024 / 1024 / 1024))
+        fi
+    else
+        _mem_kb=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "")
+        if [[ -n "$_mem_kb" && "$_mem_kb" =~ ^[0-9]+$ ]]; then
+            HOST_RAM_GB=$((_mem_kb / 1024 / 1024))
+        fi
+    fi
+fi
+DOCKER_ARGS+=(-e "HOST_OS=${HOST_OS}")
+DOCKER_ARGS+=(-e "HOST_ARCH=${HOST_ARCH}")
+DOCKER_ARGS+=(-e "HOST_RAM_GB=${HOST_RAM_GB:-}")
+
 # Auto-detect LLM_BACKEND from host platform if not already set
 if [[ -z "${LLM_BACKEND:-}" ]]; then
-    _host_os=$(uname -s)
-    _host_arch=$(uname -m)
-    if [[ "$_host_os" == "Darwin" && ("$_host_arch" == "arm64" || "$_host_arch" == "aarch64") ]]; then
+    if [[ "$HOST_OS" == "Darwin" && ("$HOST_ARCH" == "arm64" || "$HOST_ARCH" == "aarch64") ]]; then
         LLM_BACKEND="mlx"
     elif command -v nvidia-smi &>/dev/null && nvidia-smi -L &>/dev/null 2>&1; then
         LLM_BACKEND="vllm"

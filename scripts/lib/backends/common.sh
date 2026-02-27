@@ -35,8 +35,8 @@ is_apple_silicon() {
         return
     fi
     local os arch
-    os=$(uname -s)
-    arch=$(uname -m)
+    os="${HOST_OS:-$(uname -s)}"
+    arch="${HOST_ARCH:-$(uname -m)}"
     [[ "$os" == "Darwin" && ("$arch" == "arm64" || "$arch" == "aarch64") ]]
 }
 
