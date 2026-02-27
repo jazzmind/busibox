@@ -768,7 +768,20 @@ handle_install() {
     # - Continue/Full/Clean options if existing install detected
     # Using --from-launcher so it knows to use 'b = back' and clear screen
     bash "${SCRIPT_DIR}/install-menu.sh" --from-launcher
-    # If install-menu.sh returns (user pressed 'b'), we return to main menu
+    local rc=$?
+    # exit 2 = user pressed 'b' (back) → return to launcher menu immediately
+    if [[ $rc -eq 2 ]]; then
+        return
+    fi
+    # Install finished (or failed). Hold the screen so output stays visible.
+    # Only 'b' returns to menu, 'q' quits, anything else is ignored.
+    while true; do
+        read -n 1 -s -r -p "" key
+        case "$key" in
+            b|B) return ;;
+            q|Q) echo ""; exit 0 ;;
+        esac
+    done
 }
 
 # Perform uninstall based on environment and backend

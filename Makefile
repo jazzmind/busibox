@@ -786,6 +786,17 @@ endif
 		echo "[INFO] Running MLX setup on macOS host..."; \
 		bash scripts/make/mlx-host-setup.sh; \
 	fi
+	@if [ -f .busibox-setup-link ]; then \
+		echo ""; \
+		echo "══════════════════════════════════════════════════════════════════════════════"; \
+		echo "  Open the Busibox Portal to complete setup:"; \
+		echo ""; \
+		echo "  $$(cat .busibox-setup-link)"; \
+		echo ""; \
+		echo "══════════════════════════════════════════════════════════════════════════════"; \
+		echo ""; \
+		rm -f .busibox-setup-link; \
+	fi
 else
 ifdef SERVICE
 	@bash scripts/make/service-deploy.sh "$(SERVICE)"

@@ -1334,10 +1334,18 @@ detect_app_directories() {
         fi
     fi
     
-    # If still not found, auto-clone as a sibling of busibox
+    # If still not found, clone from GitHub as a sibling of busibox
     if [[ -z "${BUSIBOX_FRONTEND_DIR:-}" ]]; then
         local clone_target="${parent_dir}/busibox-frontend"
-        info "busibox-frontend not found locally — cloning to ${clone_target}"
+        info "busibox-frontend not found locally — will clone to ${clone_target}"
+        
+        # Determine which ref (branch/tag) to clone
+        local ref="${DEPLOY_REF:-}"
+        if [[ -z "$ref" ]]; then
+            # Interactive: let user pick a release or branch
+            ref=$(select_github_ref "jazzmind/busibox-frontend" "main")
+            info "Selected ref: ${ref}"
+        fi
         
         # Build the clone URL, injecting the token for private repo access
         local clone_url="https://github.com/jazzmind/busibox-frontend.git"
@@ -1346,9 +1354,12 @@ detect_app_directories() {
             clone_url="https://${token}@github.com/jazzmind/busibox-frontend.git"
         fi
         
-        if git clone --depth 1 "$clone_url" "$clone_target" 2>&1; then
+        # Full clone (no --depth 1) to ensure all files are present, then
+        # checkout the selected ref.
+        info "Cloning busibox-frontend (ref: ${ref})..."
+        if git clone --branch "$ref" "$clone_url" "$clone_target" 2>&1; then
             export BUSIBOX_FRONTEND_DIR="$clone_target"
-            success "Cloned busibox-frontend to ${clone_target}"
+            success "Cloned busibox-frontend (${ref}) to ${clone_target}"
         else
             warn "Failed to clone busibox-frontend"
             echo ""
@@ -3209,9 +3220,13 @@ show_completion() {
     box_line "  Core services are running! Open the Busibox Portal in your browser:" "double" "${GREEN}"
     box_line "" "double" "${GREEN}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "  ${CYAN}${magic_link}${NC}"
-    echo ""
+    # Inside the manager container the Makefile re-displays the link after exit
+    # (and after any MLX setup), so only show it here on the host.
+    if [[ ! -f /.dockerenv ]]; then
+        echo ""
+        echo -e "  ${CYAN}${magic_link}${NC}"
+        echo ""
+    fi
     
     # Second box - What's Running (green double-line box)
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
@@ -4428,11 +4443,13 @@ check_existing_install() {
                         if [[ "$LLM_BACKEND" == "mlx" && ! -f /.dockerenv ]]; then
                             ensure_mlx_running
                         fi
-                        info "Opening browser..."
-                        if [[ "$(uname -s)" == "Darwin" ]]; then
-                            open "$magic_link" 2>/dev/null || true
-                        else
-                            xdg-open "$magic_link" 2>/dev/null || true
+                        if [[ ! -f /.dockerenv ]]; then
+                            info "Opening browser..."
+                            if [[ "$(uname -s)" == "Darwin" ]]; then
+                                open "$magic_link" 2>/dev/null || true
+                            else
+                                xdg-open "$magic_link" 2>/dev/null || true
+                            fi
                         fi
                         exit 0
                         ;;
@@ -4459,10 +4476,12 @@ check_existing_install() {
             if [[ "$LLM_BACKEND" == "mlx" && ! -f /.dockerenv ]]; then
                 ensure_mlx_running
             fi
-            if [[ "$(uname -s)" == "Darwin" ]]; then
-                open "$magic_link" 2>/dev/null || true
-            else
-                xdg-open "$magic_link" 2>/dev/null || true
+            if [[ ! -f /.dockerenv ]]; then
+                if [[ "$(uname -s)" == "Darwin" ]]; then
+                    open "$magic_link" 2>/dev/null || true
+                else
+                    xdg-open "$magic_link" 2>/dev/null || true
+                fi
             fi
             exit 0
         fi
@@ -5063,16 +5082,23 @@ main() {
     local magic_link
     magic_link=$(generate_admin_link true)
     
+    # Inside the manager container, persist the link so the Makefile can
+    # display it once after the container (and any MLX setup) finishes.
+    if [[ -f /.dockerenv ]]; then
+        echo "$magic_link" > "${REPO_ROOT}/.busibox-setup-link"
+    fi
+    
     # Show completion message
     show_completion "$magic_link"
     
-    # Open browser (use runtime OS — neither open nor xdg-open work
-    # inside the manager container, but the || true keeps it harmless)
-    info "Opening browser..."
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-        open "$magic_link" 2>/dev/null || true
-    else
-        xdg-open "$magic_link" 2>/dev/null || true
+    # Open browser on the host (skip inside manager container)
+    if [[ ! -f /.dockerenv ]]; then
+        info "Opening browser..."
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            open "$magic_link" 2>/dev/null || true
+        else
+            xdg-open "$magic_link" 2>/dev/null || true
+        fi
     fi
 }
 
