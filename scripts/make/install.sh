@@ -3381,8 +3381,8 @@ start_embedding_download_background() {
         return 0
     fi
     
-    # Check if Docker daemon is running
-    if ! docker info &>/dev/null 2>&1; then
+    # Check if Docker daemon is reachable (skip inside manager container with socket)
+    if ! [[ -f /.dockerenv && -S /var/run/docker.sock ]] && ! docker info &>/dev/null 2>&1; then
         warn "Docker daemon not running - embedding model will be downloaded later"
         return 0
     fi
@@ -3964,7 +3964,12 @@ check_prerequisites() {
         if ! command -v docker &>/dev/null; then
             error "Docker is not installed"
             ((errors++))
-        elif ! docker info &>/dev/null; then
+        elif [[ -f /.dockerenv ]] && [[ -S /var/run/docker.sock ]]; then
+            # Running inside the manager container with Docker socket mounted.
+            # docker info may fail due to socket permissions or cgroup issues
+            # even though docker commands work fine via the socket.
+            success "Docker available (manager container)"
+        elif ! docker info &>/dev/null 2>&1; then
             error "Docker daemon is not running"
             ((errors++))
         else
@@ -4120,8 +4125,10 @@ validate_install_health() {
     FIRST_UNHEALTHY_SERVICE=""
     FIRST_UNHEALTHY_PHASE=""
     
-    # Check if Docker daemon is running
-    if ! docker info &>/dev/null 2>&1; then
+    # Check if Docker daemon is reachable
+    if [[ -f /.dockerenv ]] && [[ -S /var/run/docker.sock ]]; then
+        : # Inside manager container with socket mounted — skip docker info
+    elif ! docker info &>/dev/null 2>&1; then
         FIRST_UNHEALTHY_SERVICE="docker-daemon"
         FIRST_UNHEALTHY_PHASE="infrastructure"
         return 1
