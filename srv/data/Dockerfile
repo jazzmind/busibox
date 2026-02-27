@@ -23,9 +23,11 @@ WORKDIR /app
 # Install system dependencies
 # - poppler-utils: for PDF page image extraction (pdftoppm for ColPali)
 # - libmagic1: for file type detection
+# - tesseract-ocr: fallback OCR when Surya is unavailable
 RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
     libmagic1 \
+    tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first (for caching)

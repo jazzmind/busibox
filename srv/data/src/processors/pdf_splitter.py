@@ -17,7 +17,7 @@ import structlog
 logger = structlog.get_logger()
 
 # Default number of pages per split chunk
-DEFAULT_PAGES_PER_SPLIT = 5
+DEFAULT_PAGES_PER_SPLIT = 1
 
 
 class PDFSplitter:

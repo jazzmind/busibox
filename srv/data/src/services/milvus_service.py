@@ -846,6 +846,52 @@ class MilvusService:
             if raise_on_unavailable:
                 raise
     
+    def update_file_vectors(
+        self,
+        file_id: str,
+        user_id: str,
+        chunks: List[Dict],
+        embeddings: List[List[float]],
+        content_hash: str,
+        visibility: str = "personal",
+        role_ids: Optional[List[str]] = None,
+    ) -> int:
+        """
+        Update vectors for a file by deleting existing ones and re-inserting.
+        
+        Used by the progressive pipeline to replace vectors when chunk text
+        improves across passes. This is a delete-then-insert operation since
+        Milvus doesn't support in-place updates.
+        
+        Args:
+            file_id: File identifier
+            user_id: User identifier
+            chunks: Updated chunk list
+            embeddings: Updated embeddings
+            content_hash: Content hash
+            visibility: personal or shared
+            role_ids: Role IDs for shared docs
+            
+        Returns:
+            Number of vectors inserted
+        """
+        partition_names = self.get_partition_names_for_document(visibility, user_id, role_ids)
+        
+        self.delete_file_vectors(
+            file_id=file_id,
+            partition_names=partition_names,
+        )
+        
+        return self.insert_text_chunks(
+            file_id=file_id,
+            user_id=user_id,
+            chunks=chunks,
+            embeddings=embeddings,
+            content_hash=content_hash,
+            visibility=visibility,
+            role_ids=role_ids,
+        )
+    
     def copy_vectors_to_partition(
         self,
         file_id: str,

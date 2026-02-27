@@ -186,7 +186,7 @@ def get_data_schema() -> SchemaManager:
             stage VARCHAR(50) NOT NULL DEFAULT 'queued' CHECK (stage IN (
                 'queued', 'parsing', 'classifying', 'extracting_metadata',
                 'chunking', 'cleanup', 'markdown', 'entity_extraction',
-                'embedding', 'indexing', 'completed', 'failed'
+                'embedding', 'indexing', 'available', 'completed', 'failed'
             )),
             progress INTEGER NOT NULL DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
             chunks_processed INTEGER,
@@ -196,6 +196,8 @@ def get_data_schema() -> SchemaManager:
             error_message TEXT,
             status_message TEXT,
             retry_count INTEGER DEFAULT 0,
+            processing_pass INTEGER DEFAULT 1,
+            pass_metadata JSONB DEFAULT '{}'::jsonb,
             started_at TIMESTAMP,
             completed_at TIMESTAMP,
             updated_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -214,6 +216,7 @@ def get_data_schema() -> SchemaManager:
             page_number INTEGER,
             section_heading VARCHAR(500),
             processing_strategy VARCHAR(50) DEFAULT 'simple',
+            processing_pass INTEGER DEFAULT 1,
             metadata JSONB DEFAULT '{}',
             created_at TIMESTAMP NOT NULL DEFAULT NOW(),
             UNIQUE (file_id, chunk_index)
@@ -317,6 +320,7 @@ def get_data_schema() -> SchemaManager:
             created_by UUID NOT NULL,
             delegation_token TEXT,
             delegation_scopes JSONB DEFAULT '[]'::jsonb,
+            run_at_pass JSONB DEFAULT '[3]'::jsonb,
             execution_count INTEGER DEFAULT 0,
             last_execution_at TIMESTAMP,
             last_error TEXT,
@@ -661,6 +665,69 @@ def get_data_schema() -> SchemaManager:
                         'chunking', 'cleanup', 'markdown', 'entity_extraction',
                         'embedding', 'indexing', 'completed', 'failed'
                     ));
+            END IF;
+        END $$;
+    """)
+    
+    # Add 'available' stage and progressive processing columns to data_status
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            -- Update stage CHECK to include 'available' (content viewable, still enhancing)
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'data_status_stage_check'
+                  AND pg_get_constraintdef(oid) LIKE '%available%'
+            ) THEN
+                ALTER TABLE data_status DROP CONSTRAINT IF EXISTS data_status_stage_check;
+                ALTER TABLE data_status ADD CONSTRAINT data_status_stage_check
+                    CHECK (stage IN (
+                        'queued', 'parsing', 'classifying', 'extracting_metadata',
+                        'chunking', 'cleanup', 'markdown', 'entity_extraction',
+                        'embedding', 'indexing', 'available', 'completed', 'failed'
+                    ));
+            END IF;
+            
+            -- Track which progressive pass is running (1=fast, 2=OCR, 3=LLM+Marker)
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'data_status' AND column_name = 'processing_pass'
+            ) THEN
+                ALTER TABLE data_status ADD COLUMN processing_pass INTEGER DEFAULT 1;
+            END IF;
+            
+            -- Per-pass metadata: page text hashes, timing, pages enhanced/skipped
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'data_status' AND column_name = 'pass_metadata'
+            ) THEN
+                ALTER TABLE data_status ADD COLUMN pass_metadata JSONB DEFAULT '{}'::jsonb;
+            END IF;
+        END $$;
+    """)
+    
+    # Add processing_pass column to data_chunks for tracking which pass produced each chunk
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'data_chunks' AND column_name = 'processing_pass'
+            ) THEN
+                ALTER TABLE data_chunks ADD COLUMN processing_pass INTEGER DEFAULT 1;
+            END IF;
+        END $$;
+    """)
+    
+    # Add run_at_pass to library_triggers for progressive trigger timing
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'library_triggers' AND column_name = 'run_at_pass'
+            ) THEN
+                ALTER TABLE library_triggers ADD COLUMN run_at_pass JSONB DEFAULT '[3]'::jsonb;
             END IF;
         END $$;
     """)

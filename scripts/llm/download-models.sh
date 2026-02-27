@@ -168,6 +168,82 @@ check_all_models() {
     fi
 }
 
+# ── Marker / Surya model pre-download ──────────────────────────────────────────
+# Downloads models into the Docker model_cache volume (mounted at /root/.cache)
+# so the data-worker doesn't need to fetch them on first document processing.
+# Uses the surya S3 download API via a one-shot Python script inside the
+# data-worker container.
+
+MARKER_MODELS=(
+    "text_detection/2025_05_07"
+    "text_recognition/2025_09_23"
+    "layout/2025_09_23"
+    "table_recognition/2025_02_18"
+    "ocr_error_detection/2025_02_18"
+)
+
+check_marker_models_cached() {
+    local cache_dir="${HOME}/.cache/datalab/models"
+    local all_cached=true
+
+    for model in "${MARKER_MODELS[@]}"; do
+        local model_dir="${cache_dir}/${model}"
+        if [[ -d "$model_dir" && -f "${model_dir}/manifest.json" ]]; then
+            echo -e "  ${GREEN}✓${NC} marker: ${model}"
+        else
+            echo -e "  ${YELLOW}○${NC} marker: ${model} (not cached)"
+            all_cached=false
+        fi
+    done
+
+    $all_cached
+}
+
+download_marker_models() {
+    info "Pre-downloading Marker/Surya models into model_cache volume..."
+
+    # Run inside the data-worker container so we have surya installed
+    local container="dev-data-worker"
+    if ! docker ps --format '{{.Names}}' | grep -q "^${container}$"; then
+        warn "data-worker container not running -- Marker models will download on first use"
+        return 0
+    fi
+
+    docker exec "$container" python3 -c "
+import os, sys
+from surya.common.s3 import download_directory
+from surya.settings import settings
+
+models = [
+    ('text_detection/2025_05_07',       settings.DETECTOR_MODEL_CHECKPOINT),
+    ('text_recognition/2025_09_23',     settings.RECOGNITION_MODEL_CHECKPOINT),
+    ('layout/2025_09_23',               settings.LAYOUT_MODEL_CHECKPOINT),
+    ('table_recognition/2025_02_18',    settings.TABLE_REC_MODEL_CHECKPOINT),
+    ('ocr_error_detection/2025_02_18',  settings.OCR_ERROR_MODEL_CHECKPOINT),
+]
+
+cache_dir = settings.MODEL_CACHE_DIR
+for model_path, checkpoint in models:
+    local_path = os.path.join(cache_dir, model_path)
+    manifest = os.path.join(local_path, 'manifest.json')
+    if os.path.exists(manifest):
+        print(f'  Already cached: {model_path}')
+        continue
+    os.makedirs(local_path, exist_ok=True)
+    print(f'  Downloading: {model_path}')
+    download_directory(model_path, local_path)
+    print(f'  Done: {model_path}')
+
+print('All Marker/Surya models cached.')
+" 2>&1
+
+    if [[ $? -eq 0 ]]; then
+        success "Marker/Surya models cached"
+    else
+        warn "Marker model download had errors -- models will download on first use"
+    fi
+}
+
 # Main
 main() {
     local target="${1:-all}"
@@ -185,6 +261,9 @@ main() {
     case "$target" in
         --check)
             check_all_models
+            echo ""
+            echo "Checking Marker/Surya model cache..."
+            check_marker_models_cached
             ;;
         fast)
             download_model "$LLM_MODEL_FAST"
@@ -195,6 +274,9 @@ main() {
         frontier)
             download_model "$LLM_MODEL_FRONTIER"
             ;;
+        marker)
+            download_marker_models
+            ;;
         all)
             info "Downloading all models for ${TIER} tier..."
             echo ""
@@ -202,10 +284,12 @@ main() {
             download_model "$LLM_MODEL_AGENT"
             download_model "$LLM_MODEL_FRONTIER"
             echo ""
+            download_marker_models
+            echo ""
             success "All models downloaded"
             ;;
         *)
-            echo "Usage: $0 [fast|agent|frontier|all|--check]" >&2
+            echo "Usage: $0 [fast|agent|frontier|all|marker|--check]" >&2
             exit 1
             ;;
     esac

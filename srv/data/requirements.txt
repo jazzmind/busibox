@@ -14,7 +14,6 @@ asyncpg>=0.29.0,<0.30.0
 # Vector Database - compatible with Milvus v2.6.x
 # Milvus 2.6+ handles BM25 sparse vectors internally via Function API
 pymilvus>=2.6.0,<2.7.0
-scipy>=1.11.0,<2.0.0  # Scientific computing utilities
 
 # Object Storage
 minio>=7.2.3,<8.0.0
@@ -51,6 +50,8 @@ bleach>=6.0.0,<7.0.0  # HTML sanitization
 reportlab>=4.0.0,<5.0.0  # PDF generation
 Pillow>=10.0.0,<11.0.0  # Image processing
 PyMuPDF>=1.23.0,<2.0.0  # PDF image extraction (fitz)
+pymupdf4llm>=0.0.17,<1.0.0  # Fast PDF-to-markdown extraction for Pass 1
+pymupdf-layout>=1.26.0,<2.0.0  # Enhanced page layout analysis for pymupdf4llm
 
 # Text Processing & Chunking
 spacy>=3.7.2,<4.0.0
@@ -58,9 +59,7 @@ spacy>=3.7.2,<4.0.0
 langdetect>=1.0.9,<2.0.0  # Language detection
 tiktoken>=0.5.1,<1.0.0  # Token counting
 
-# LLM Integration (for embeddings)
-fastembed>=0.4.2,<1.0.0  # Local embeddings (ONNX runtime)
-litellm>=1.17.0,<2.0.0  # For future LLM calls if needed
+# LLM Integration
 openai>=1.65.2  # Required by marker-pdf
 tenacity>=8.2.3,<9.0.0  # Retry logic
 

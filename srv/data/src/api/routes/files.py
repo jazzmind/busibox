@@ -40,6 +40,31 @@ def _get_postgres_service():
 
 router = APIRouter()
 
+
+def _build_pass_details(status_row) -> dict:
+    """Build progressive pipeline pass details from status row."""
+    processing_pass = status_row.get("processing_pass")
+    if processing_pass is None:
+        return None
+    
+    pass_metadata_raw = status_row.get("pass_metadata")
+    pass_metadata = {}
+    if pass_metadata_raw:
+        if isinstance(pass_metadata_raw, str):
+            try:
+                pass_metadata = json.loads(pass_metadata_raw)
+            except (json.JSONDecodeError, TypeError):
+                pass_metadata = {}
+        elif isinstance(pass_metadata_raw, dict):
+            pass_metadata = pass_metadata_raw
+    
+    return {
+        "currentPass": pass_metadata.get("current_pass", processing_pass),
+        "totalPasses": pass_metadata.get("total_passes", 3),
+        "passName": pass_metadata.get("pass_name", ""),
+    }
+
+
 # Scope dependencies
 require_data_read = ScopeChecker("data.read")
 require_data_write = ScopeChecker("data.write")
@@ -441,6 +466,7 @@ async def get_file_metadata(fileId: str, request: Request):
                 SELECT 
                     stage, progress, chunks_processed, total_chunks,
                     pages_processed, total_pages, error_message,
+                    status_message, processing_pass, pass_metadata,
                     started_at, completed_at, updated_at
                 FROM data_status
                 WHERE file_id = $1
@@ -587,6 +613,9 @@ async def get_file_metadata(fileId: str, request: Request):
                         "pagesProcessed": status_row["pages_processed"] if status_row else None,
                         "totalPages": status_row["total_pages"] if status_row else None,
                         "errorMessage": status_row["error_message"] if status_row else None,
+                        "statusMessage": status_row["status_message"] if status_row else None,
+                        "processingPass": status_row["processing_pass"] if status_row else None,
+                        "passDetails": _build_pass_details(status_row) if status_row else None,
                         "startedAt": status_row["started_at"].isoformat() if status_row and status_row["started_at"] else None,
                         "completedAt": status_row["completed_at"].isoformat() if status_row and status_row["completed_at"] else None,
                         "updatedAt": status_row["updated_at"].isoformat() if status_row and status_row["updated_at"] else None,
@@ -1413,9 +1442,9 @@ async def search_within_document(
                     content={"error": "Unauthorized access"}
                 )
             
-            # Generate embedding for query
-            from processors.embedder import Embedder
-            embedder = Embedder(config)
+            # Generate embedding for query via embedding-api service
+            from services.embedding_client import EmbeddingClient
+            embedder = EmbeddingClient(config)
             query_embedding = await embedder.embed_single(search_request.query)
             
             if not query_embedding:
