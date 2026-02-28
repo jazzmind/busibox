@@ -1165,10 +1165,13 @@ update_docker_ansible() {
     
     # Check for vault password file
     local vault_args=""
-    if [[ -f "${HOME}/.vault_pass" ]]; then
-        vault_args="--vault-password-file=${HOME}/.vault_pass"
+    local _vpd="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}"
+    if [[ -f "${_vpd}/.busibox-vault-pass-${container_prefix}" ]]; then
+        vault_args="--vault-password-file=${_vpd}/.busibox-vault-pass-${container_prefix}"
     elif [[ -f "${HOME}/.busibox-vault-pass-${container_prefix}" ]]; then
         vault_args="--vault-password-file=${HOME}/.busibox-vault-pass-${container_prefix}"
+    elif [[ -f "${HOME}/.vault_pass" ]]; then
+        vault_args="--vault-password-file=${HOME}/.vault_pass"
     fi
     
     # Pull latest code first

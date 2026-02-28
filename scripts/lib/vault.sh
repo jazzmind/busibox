@@ -24,6 +24,17 @@
 
 # Base paths (relative to REPO_ROOT)
 _VAULT_BASE_DIR="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}/provision/ansible/roles/secrets/vars"
+_REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+
+# Directory for vault password files.
+# Inside the manager container HOME=/root which is ephemeral, so we store
+# vault pass files in the repo root (mounted read-write from the host).
+# On the host, we default to $HOME for the traditional location.
+if [[ -f /.dockerenv ]]; then
+    BUSIBOX_VAULT_PASS_DIR="${BUSIBOX_VAULT_PASS_DIR:-${_REPO_ROOT}}"
+else
+    BUSIBOX_VAULT_PASS_DIR="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}"
+fi
 
 # Current vault environment (set by set_vault_environment)
 VAULT_ENVIRONMENT=""
@@ -53,7 +64,13 @@ set_vault_environment() {
     
     # Environment-specific vault file
     local env_vault="${_VAULT_BASE_DIR}/vault.${env_prefix}.yml"
-    local env_pass_file="$HOME/.busibox-vault-pass-${env_prefix}"
+    
+    # Resolve vault pass file: check BUSIBOX_VAULT_PASS_DIR first, then
+    # fall back to $HOME for backward compat with existing installations
+    local env_pass_file="${BUSIBOX_VAULT_PASS_DIR}/.busibox-vault-pass-${env_prefix}"
+    if [[ ! -f "$env_pass_file" && -f "$HOME/.busibox-vault-pass-${env_prefix}" ]]; then
+        env_pass_file="$HOME/.busibox-vault-pass-${env_prefix}"
+    fi
     
     # Environment-specific vault MUST exist - no fallback to vault.yml
     if [[ -f "$env_vault" ]]; then
@@ -87,9 +104,13 @@ get_vault_file_for_env() {
 # Usage: get_vault_pass_file_for_env "prod"
 get_vault_pass_file_for_env() {
     local env_prefix="$1"
-    local env_pass="$HOME/.busibox-vault-pass-${env_prefix}"
+    local env_pass="${BUSIBOX_VAULT_PASS_DIR}/.busibox-vault-pass-${env_prefix}"
     
-    # Always return the environment-specific path - no fallback
+    # Fall back to $HOME if file exists there (backward compat)
+    if [[ ! -f "$env_pass" && -f "$HOME/.busibox-vault-pass-${env_prefix}" ]]; then
+        env_pass="$HOME/.busibox-vault-pass-${env_prefix}"
+    fi
+    
     echo "$env_pass"
 }
 

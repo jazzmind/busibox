@@ -135,7 +135,7 @@ _update_state_file_for_env() {
         warn "Vault exists but is not encrypted: $VAULT_FILE"
         
         # Ensure password file exists
-        local vault_pass_file="${HOME}/.busibox-vault-pass-${prefix}"
+        local vault_pass_file="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}/.busibox-vault-pass-${prefix}"
         if [[ ! -f "$vault_pass_file" ]]; then
             info "Creating vault password file: $vault_pass_file"
             openssl rand -base64 32 > "$vault_pass_file"
@@ -311,6 +311,10 @@ parse_args() {
                 ;;
             --full-install)
                 FULL_INSTALL=true
+                shift
+                ;;
+            --mlx-host-setup)
+                MLX_HOST_SETUP=true
                 shift
                 ;;
             --env)
@@ -1330,10 +1334,18 @@ detect_app_directories() {
         fi
     fi
     
-    # If still not found, auto-clone as a sibling of busibox
+    # If still not found, clone from GitHub as a sibling of busibox
     if [[ -z "${BUSIBOX_FRONTEND_DIR:-}" ]]; then
         local clone_target="${parent_dir}/busibox-frontend"
-        info "busibox-frontend not found locally — cloning to ${clone_target}"
+        info "busibox-frontend not found locally — will clone to ${clone_target}"
+        
+        # Determine which ref (branch/tag) to clone
+        local ref="${DEPLOY_REF:-}"
+        if [[ -z "$ref" ]]; then
+            # Interactive: let user pick a release or branch
+            ref=$(select_github_ref "jazzmind/busibox-frontend" "main")
+            info "Selected ref: ${ref}"
+        fi
         
         # Build the clone URL, injecting the token for private repo access
         local clone_url="https://github.com/jazzmind/busibox-frontend.git"
@@ -1342,9 +1354,12 @@ detect_app_directories() {
             clone_url="https://${token}@github.com/jazzmind/busibox-frontend.git"
         fi
         
-        if git clone --depth 1 "$clone_url" "$clone_target" 2>&1; then
+        # Full clone (no --depth 1) to ensure all files are present, then
+        # checkout the selected ref.
+        info "Cloning busibox-frontend (ref: ${ref})..."
+        if git clone --branch "$ref" "$clone_url" "$clone_target" 2>&1; then
             export BUSIBOX_FRONTEND_DIR="$clone_target"
-            success "Cloned busibox-frontend to ${clone_target}"
+            success "Cloned busibox-frontend (${ref}) to ${clone_target}"
         else
             warn "Failed to clone busibox-frontend"
             echo ""
@@ -1620,7 +1635,13 @@ get_state_file() {
 get_vault_pass_file() {
     local prefix
     prefix=$(get_container_prefix)
-    echo "${HOME}/.busibox-vault-pass-${prefix}"
+    local vault_dir="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}"
+    local pass_file="${vault_dir}/.busibox-vault-pass-${prefix}"
+    # Fall back to $HOME if file exists there (backward compat)
+    if [[ ! -f "$pass_file" && -f "${HOME}/.busibox-vault-pass-${prefix}" ]]; then
+        pass_file="${HOME}/.busibox-vault-pass-${prefix}"
+    fi
+    echo "$pass_file"
 }
 
 # Load GitHub token from vault (used during resume)
@@ -1859,10 +1880,13 @@ bootstrap_docker_ansible() {
     
     # Check for vault password file
     local vault_args=""
-    if [[ -f "${HOME}/.vault_pass" ]]; then
-        vault_args="--vault-password-file=${HOME}/.vault_pass"
+    local _vpd="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}"
+    if [[ -f "${_vpd}/.busibox-vault-pass-${container_prefix}" ]]; then
+        vault_args="--vault-password-file=${_vpd}/.busibox-vault-pass-${container_prefix}"
     elif [[ -f "${HOME}/.busibox-vault-pass-${container_prefix}" ]]; then
         vault_args="--vault-password-file=${HOME}/.busibox-vault-pass-${container_prefix}"
+    elif [[ -f "${HOME}/.vault_pass" ]]; then
+        vault_args="--vault-password-file=${HOME}/.vault_pass"
     fi
     
     # Build ansible-playbook command
@@ -1947,12 +1971,21 @@ bootstrap_docker_ansible() {
         return 1
     fi
     
+    # Resolve health check hosts: inside the manager container, localhost doesn't
+    # reach other Docker containers — use Docker compose service hostnames instead.
+    local authz_host="localhost" deploy_host="localhost" portal_host="localhost"
+    if [[ -f /.dockerenv ]]; then
+        authz_host="authz-api"
+        deploy_host="deploy-api"
+        portal_host="core-apps"
+    fi
+    
     # Wait for AuthZ to be ready before creating admin user
     info "Waiting for AuthZ API to be healthy..."
     local max_attempts=30
     local attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
-        if curl -sf http://localhost:8010/health/live &>/dev/null; then
+        if curl -sf "http://${authz_host}:8010/health/live" &>/dev/null; then
             success "AuthZ API is ready"
             break
         fi
@@ -1980,7 +2013,7 @@ bootstrap_docker_ansible() {
     info "Waiting for Deploy API to be healthy..."
     attempt=0
     while [[ $attempt -lt 30 ]]; do
-        if curl -sf http://localhost:8011/health/live &>/dev/null; then
+        if curl -sf "http://${deploy_host}:8011/health/live" &>/dev/null; then
             success "Deploy API is ready"
             break
         fi
@@ -1988,22 +2021,22 @@ bootstrap_docker_ansible() {
         ((attempt++))
     done
     
-    # Phase 5: Core Apps (Busibox Portal + Agent Manager)
+    # Phase 5: Core Apps (Busibox Portal + Admin + Agent Manager)
     # This mirrors the Proxmox apps-lxc architecture
-    show_stage 80 "Deploying Core Apps" "Busibox Portal and Agent Manager."
+    show_stage 80 "Deploying Core Apps" "Busibox Portal, Admin, and Agent Manager."
     info "Running: ansible-playbook ... --tags core-apps"
     if ! run_ansible "core-apps"; then
         error "Core apps deployment failed"
         return 1
     fi
     
-    # Phase 7: Wait for Busibox Portal to be ready
-    show_stage 95 "Waiting for Busibox Portal" "Verifying services are healthy..."
+    # Phase 6: Wait for Busibox Portal and Admin to be ready
+    show_stage 90 "Waiting for Busibox Portal" "Verifying services are healthy..."
     info "Waiting for Busibox Portal to be healthy (this may take a minute on first run)..."
     max_attempts=90
     attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
-        if curl -sf http://localhost:3000/portal/api/health &>/dev/null; then
+        if curl -sf "http://${portal_host}:3000/portal/api/health" &>/dev/null; then
             success "Busibox Portal is ready"
             break
         fi
@@ -2017,6 +2050,27 @@ bootstrap_docker_ansible() {
     
     if [[ $attempt -ge $max_attempts ]]; then
         warn "Busibox Portal health check timed out, but it may still be starting"
+    fi
+    
+    # Wait for Busibox Admin (needed for setup wizard)
+    show_stage 95 "Waiting for Busibox Admin" "Setup wizard requires the admin app..."
+    info "Waiting for Busibox Admin to be healthy..."
+    attempt=0
+    while [[ $attempt -lt $max_attempts ]]; do
+        if curl -sf "http://${portal_host}:3002/admin/api/health" &>/dev/null; then
+            success "Busibox Admin is ready"
+            break
+        fi
+        sleep 2
+        ((attempt++))
+        if [[ $((attempt % 15)) -eq 0 ]]; then
+            echo -n "."
+        fi
+    done
+    echo ""
+    
+    if [[ $attempt -ge $max_attempts ]]; then
+        warn "Busibox Admin health check timed out - setup wizard may not be accessible yet"
     fi
     
     # Note: Additional services (MinIO, Milvus, Data-API, Search-API, Agent-API, 
@@ -2324,7 +2378,10 @@ bootstrap_proxmox_ansible() {
         demo) vault_prefix="demo" ;;
         *) vault_prefix="dev" ;;
     esac
-    if [[ -f "${HOME}/.busibox-vault-pass-${vault_prefix}" ]]; then
+    local _vpd="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}"
+    if [[ -f "${_vpd}/.busibox-vault-pass-${vault_prefix}" ]]; then
+        vault_args="--vault-password-file=${_vpd}/.busibox-vault-pass-${vault_prefix}"
+    elif [[ -f "${HOME}/.busibox-vault-pass-${vault_prefix}" ]]; then
         vault_args="--vault-password-file=${HOME}/.busibox-vault-pass-${vault_prefix}"
     elif [[ -f "${HOME}/.vault_pass" ]]; then
         vault_args="--vault-password-file=${HOME}/.vault_pass"
@@ -2521,18 +2578,18 @@ bootstrap_proxmox_ansible() {
         fi
     fi
     
-    # Phase 6: Core Apps (Busibox Portal + Agent Manager)
+    # Phase 6: Core Apps (Busibox Portal + Admin + Agent Manager)
     if [[ "$FULL_INSTALL" != true ]] && is_service_healthy "ai_portal"; then
         info "Busibox Portal is already healthy - skipping deployment"
     else
-        show_stage 85 "Deploying Core Apps" "Busibox Portal and Agent Manager."
+        show_stage 85 "Deploying Core Apps" "Busibox Portal, Admin, and Agent Manager."
         if ! run_ansible_proxmox "apps"; then
             error "Core apps deployment failed"
             return 1
         fi
         
         # Phase 7: Wait for Busibox Portal to be ready
-        show_stage 95 "Waiting for Busibox Portal" "Verifying services are healthy..."
+        show_stage 90 "Waiting for Busibox Portal" "Verifying services are healthy..."
         local portal_health_url
         portal_health_url=$(get_service_health_url "ai_portal" "$ENVIRONMENT" "proxmox")
         info "Waiting for Busibox Portal to be healthy at ${portal_ip}..."
@@ -2553,6 +2610,27 @@ bootstrap_proxmox_ansible() {
         
         if [[ $attempt -ge $max_attempts ]]; then
             warn "Busibox Portal health check timed out, but it may still be starting"
+        fi
+        
+        # Wait for Busibox Admin (needed for setup wizard)
+        show_stage 95 "Waiting for Busibox Admin" "Setup wizard requires the admin app..."
+        info "Waiting for Busibox Admin to be healthy at ${portal_ip}..."
+        attempt=0
+        while [[ $attempt -lt $max_attempts ]]; do
+            if curl -sf "http://${portal_ip}:3002/admin/api/health" &>/dev/null; then
+                success "Busibox Admin is ready"
+                break
+            fi
+            sleep 2
+            ((attempt++))
+            if [[ $((attempt % 15)) -eq 0 ]]; then
+                echo -n "."
+            fi
+        done
+        echo ""
+        
+        if [[ $attempt -ge $max_attempts ]]; then
+            warn "Busibox Admin health check timed out - setup wizard may not be accessible yet"
         fi
     fi
     
@@ -2638,11 +2716,19 @@ bootstrap_docker() {
         ADMIN_EMAIL="${ADMIN_EMAIL}" docker compose $compose_files up -d --no-deps authz-api 2>&1 | grep -v "^$" || true
     fi
     
+    # Resolve health check hosts for the legacy path too
+    local authz_host="localhost" deploy_host="localhost" portal_host="localhost"
+    if [[ -f /.dockerenv ]]; then
+        authz_host="authz-api"
+        deploy_host="deploy-api"
+        portal_host="core-apps"
+    fi
+    
     # Wait for authz
     info "Waiting for AuthZ API to be healthy..."
     attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
-        if curl -sf http://localhost:8010/health/live &>/dev/null; then
+        if curl -sf "http://${authz_host}:8010/health/live" &>/dev/null; then
             break
         fi
         sleep 2
@@ -2692,7 +2778,7 @@ bootstrap_docker() {
     info "Waiting for Deploy API to be healthy..."
     attempt=0
     while [[ $attempt -lt 30 ]]; do
-        if curl -sf http://localhost:8011/health/live > /dev/null 2>&1; then
+        if curl -sf "http://${deploy_host}:8011/health/live" > /dev/null 2>&1; then
             success "Deploy API is ready"
             break
         fi
@@ -2780,15 +2866,15 @@ bootstrap_docker() {
     fi
     
     # ==========================================================================
-    # PHASE 7: Wait for Busibox Portal to be ready
+    # PHASE 7: Wait for Busibox Portal and Admin to be ready
     # ==========================================================================
-    show_stage 95 "Waiting for services" "Bootstrap services starting up..."
+    show_stage 93 "Waiting for services" "Bootstrap services starting up..."
     
     info "Waiting for Busibox Portal to be healthy (this may take a minute on first run)..."
     max_attempts=90
     attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
-        if curl -sf http://localhost:3000/portal/api/health &>/dev/null; then
+        if curl -sf "http://${portal_host}:3000/portal/api/health" &>/dev/null; then
             break
         fi
         sleep 2
@@ -2803,6 +2889,27 @@ bootstrap_docker() {
         warn "Busibox Portal health check timed out, but it may still be starting"
     else
         success "Busibox Portal is ready"
+    fi
+    
+    show_stage 97 "Waiting for Busibox Admin" "Setup wizard requires the admin app..."
+    info "Waiting for Busibox Admin to be healthy..."
+    attempt=0
+    while [[ $attempt -lt $max_attempts ]]; do
+        if curl -sf "http://${portal_host}:3002/admin/api/health" &>/dev/null; then
+            break
+        fi
+        sleep 2
+        ((attempt++))
+        if [[ $((attempt % 15)) -eq 0 ]]; then
+            echo -n "."
+        fi
+    done
+    echo ""
+    
+    if [[ $attempt -ge $max_attempts ]]; then
+        warn "Busibox Admin health check timed out - setup wizard may not be accessible yet"
+    else
+        success "Busibox Admin is ready"
     fi
 }
 
@@ -3005,6 +3112,21 @@ create_admin_user() {
         _run_pg_sql "INSERT INTO authz_user_roles (user_id, role_id) VALUES ('${user_id}'::uuid, '${admin_role_id}'::uuid);" authz >/dev/null
     fi
     
+    # Grant Admin role access to all core apps (RBAC role-to-resource bindings).
+    # Without these, getUserApps() returns empty and the portal shows "No Applications Available".
+    local core_app_ids=("busibox-portal" "busibox-admin" "busibox-agents" "busibox-appbuilder" "busibox-chat" "busibox-media" "busibox-documents")
+    for app_id in "${core_app_ids[@]}"; do
+        _run_pg_sql "INSERT INTO authz_role_bindings (role_id, resource_type, resource_id) VALUES ('${admin_role_id}'::uuid, 'app', '${app_id}') ON CONFLICT DO NOTHING;" authz >/dev/null 2>&1 || true
+    done
+    
+    # Also grant the User role access to portal so non-admin users can log in
+    local user_role_id
+    user_role_id=$(_run_pg_sql "SELECT id::text FROM authz_roles WHERE name = 'User' LIMIT 1;" authz 2>/dev/null)
+    user_role_id=$(echo "$user_role_id" | grep -v "^$" | head -1 | tr -d '[:space:]')
+    if [[ -n "$user_role_id" && "$user_role_id" != *"ERROR"* ]]; then
+        _run_pg_sql "INSERT INTO authz_role_bindings (role_id, resource_type, resource_id) VALUES ('${user_role_id}'::uuid, 'app', 'busibox-portal') ON CONFLICT DO NOTHING;" authz >/dev/null 2>&1 || true
+    fi
+    
     # Create magic link (24 hour expiry for initial setup)
     # First delete any existing magic links for this user
     _run_pg_sql "DELETE FROM authz_magic_links WHERE user_id = '${user_id}'::uuid;" authz >/dev/null
@@ -3098,9 +3220,13 @@ show_completion() {
     box_line "  Core services are running! Open the Busibox Portal in your browser:" "double" "${GREEN}"
     box_line "" "double" "${GREEN}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "  ${CYAN}${magic_link}${NC}"
-    echo ""
+    # Inside the manager container the Makefile re-displays the link after exit
+    # (and after any MLX setup), so only show it here on the host.
+    if [[ ! -f /.dockerenv ]]; then
+        echo ""
+        echo -e "  ${CYAN}${magic_link}${NC}"
+        echo ""
+    fi
     
     # Second box - What's Running (green double-line box)
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
@@ -3108,7 +3234,8 @@ show_completion() {
     box_line "" "double" "${GREEN}"
     box_line "  • PostgreSQL     - Database with row-level security" "double" "${GREEN}"
     box_line "  • AuthZ API      - OAuth 2.0 authentication" "double" "${GREEN}"
-    box_line "  • Busibox Portal      - Web dashboard for managing Busibox" "double" "${GREEN}"
+    box_line "  • Busibox Portal - Web dashboard for managing Busibox" "double" "${GREEN}"
+    box_line "  • Busibox Admin  - Setup wizard and admin panel" "double" "${GREEN}"
     box_line "  • Nginx          - Reverse proxy with SSL" "double" "${GREEN}"
     if [[ "${LLM_BACKEND:-}" == "mlx" ]]; then
         box_line "  • Host Agent     - MLX control service (localhost:8089)" "double" "${GREEN}"
@@ -3281,8 +3408,8 @@ start_embedding_download_background() {
         return 0
     fi
     
-    # Check if Docker daemon is running
-    if ! docker info &>/dev/null 2>&1; then
+    # Check if Docker daemon is reachable (skip inside manager container with socket)
+    if ! [[ -f /.dockerenv && -S /var/run/docker.sock ]] && ! docker info &>/dev/null 2>&1; then
         warn "Docker daemon not running - embedding model will be downloaded later"
         return 0
     fi
@@ -3295,15 +3422,16 @@ start_embedding_download_background() {
     mkdir -p "$fastembed_cache"
     
     # Check if model is already cached
-    local model_size=""
+    local model_cache_pattern=""
     case "$embedding_model" in
-        *small*) model_size="small" ;;
-        *base*) model_size="base" ;;
-        *large*) model_size="large" ;;
+        *nomic*)  model_cache_pattern="nomic" ;;
+        *small*)  model_cache_pattern="bge-small" ;;
+        *base*)   model_cache_pattern="bge-base" ;;
+        *large*)  model_cache_pattern="bge-large" ;;
     esac
     
-    if [[ -n "$model_size" ]]; then
-        if find "${fastembed_cache}" -name "model*.onnx" -path "*bge-${model_size}*" 2>/dev/null | grep -q .; then
+    if [[ -n "$model_cache_pattern" ]]; then
+        if find "${fastembed_cache}" -name "model*.onnx" -path "*${model_cache_pattern}*" 2>/dev/null | grep -q .; then
             info "Embedding model already cached, skipping background download"
             return 0
         fi
@@ -3312,6 +3440,7 @@ start_embedding_download_background() {
     # Show size estimate
     local size_info=""
     case "$embedding_model" in
+        *nomic*) size_info="(~520MB)" ;;
         *small*) size_info="(~134MB)" ;;
         *base*) size_info="(~438MB)" ;;
         *large*) size_info="(~1.3GB)" ;;
@@ -3374,16 +3503,8 @@ get_embedding_model_for_env() {
         return
     fi
     
-    # Choose based on environment
-    case "${ENVIRONMENT:-development}" in
-        staging|production)
-            echo "BAAI/bge-large-en-v1.5"
-            ;;
-        *)
-            # development, demo, or unset - use small model
-            echo "BAAI/bge-small-en-v1.5"
-            ;;
-    esac
+    # nomic-embed for all environments (Matryoshka: dimension set via EMBEDDING_DIMENSION)
+    echo "nomic-ai/nomic-embed-text-v1.5"
 }
 
 # Download FastEmbed embedding model for offline use
@@ -3400,18 +3521,19 @@ download_embedding_model() {
     mkdir -p "$fastembed_cache"
     
     # Check if model is already cached
-    # FastEmbed uses HuggingFace hub cache format: qdrant/bge-small-en-v1.5-onnx-q
-    # Extract model size to match the right cached model
-    local model_size=""
+    # FastEmbed normalizes model names for cache: BAAI/bge-small-en-v1.5 -> BAAI_bge-small-en-v1.5
+    # nomic-ai/nomic-embed-text-v1.5 -> nomic-ai_nomic-embed-text-v1.5
+    local model_cache_pattern=""
     case "$embedding_model" in
-        *small*) model_size="small" ;;
-        *base*) model_size="base" ;;
-        *large*) model_size="large" ;;
+        *nomic*)  model_cache_pattern="nomic" ;;
+        *small*)  model_cache_pattern="bge-small" ;;
+        *base*)   model_cache_pattern="bge-base" ;;
+        *large*)  model_cache_pattern="bge-large" ;;
     esac
     
     local is_cached=false
-    if [[ -n "$model_size" ]]; then
-        if find "${fastembed_cache}" -name "model*.onnx" -path "*bge-${model_size}*" 2>/dev/null | grep -q .; then
+    if [[ -n "$model_cache_pattern" ]]; then
+        if find "${fastembed_cache}" -name "model*.onnx" -path "*${model_cache_pattern}*" 2>/dev/null | grep -q .; then
             is_cached=true
         fi
     fi
@@ -3473,14 +3595,15 @@ print('Download complete!')
     return 0
 }
 
-# Get embedding dimension based on model
+# Get native embedding dimension based on model (before Matryoshka truncation)
 get_embedding_dimension() {
     local model="$1"
     case "$model" in
+        *nomic*) echo "768" ;;
         *small*) echo "384" ;;
-        *base*) echo "768" ;;
+        *base*)  echo "768" ;;
         *large*) echo "1024" ;;
-        *) echo "1024" ;;  # Default to large dimension
+        *)       echo "768" ;;  # Default to nomic-embed native dimension
     esac
 }
 
@@ -3864,7 +3987,12 @@ check_prerequisites() {
         if ! command -v docker &>/dev/null; then
             error "Docker is not installed"
             ((errors++))
-        elif ! docker info &>/dev/null; then
+        elif [[ -f /.dockerenv ]] && [[ -S /var/run/docker.sock ]]; then
+            # Running inside the manager container with Docker socket mounted.
+            # docker info may fail due to socket permissions or cgroup issues
+            # even though docker commands work fine via the socket.
+            success "Docker available (manager container)"
+        elif ! docker info &>/dev/null 2>&1; then
             error "Docker daemon is not running"
             ((errors++))
         else
@@ -4020,8 +4148,10 @@ validate_install_health() {
     FIRST_UNHEALTHY_SERVICE=""
     FIRST_UNHEALTHY_PHASE=""
     
-    # Check if Docker daemon is running
-    if ! docker info &>/dev/null 2>&1; then
+    # Check if Docker daemon is reachable
+    if [[ -f /.dockerenv ]] && [[ -S /var/run/docker.sock ]]; then
+        : # Inside manager container with socket mounted — skip docker info
+    elif ! docker info &>/dev/null 2>&1; then
         FIRST_UNHEALTHY_SERVICE="docker-daemon"
         FIRST_UNHEALTHY_PHASE="infrastructure"
         return 1
@@ -4306,14 +4436,16 @@ check_existing_install() {
                     1)
                         # Ensure MLX is running on Apple Silicon before opening portal
                         LLM_BACKEND=$(get_state "LLM_BACKEND" 2>/dev/null || echo "")
-                        if [[ "$LLM_BACKEND" == "mlx" ]]; then
+                        if [[ "$LLM_BACKEND" == "mlx" && ! -f /.dockerenv ]]; then
                             ensure_mlx_running
                         fi
-                        info "Opening browser..."
-                        if [[ "$(uname -s)" == "Darwin" ]]; then
-                            open "$magic_link" 2>/dev/null || true
-                        else
-                            xdg-open "$magic_link" 2>/dev/null || true
+                        if [[ ! -f /.dockerenv ]]; then
+                            info "Opening browser..."
+                            if [[ "$(uname -s)" == "Darwin" ]]; then
+                                open "$magic_link" 2>/dev/null || true
+                            else
+                                xdg-open "$magic_link" 2>/dev/null || true
+                            fi
                         fi
                         exit 0
                         ;;
@@ -4337,13 +4469,15 @@ check_existing_install() {
             # Non-interactive mode - just open browser and exit
             # Ensure MLX is running on Apple Silicon before opening portal
             LLM_BACKEND=$(get_state "LLM_BACKEND" 2>/dev/null || echo "")
-            if [[ "$LLM_BACKEND" == "mlx" ]]; then
+            if [[ "$LLM_BACKEND" == "mlx" && ! -f /.dockerenv ]]; then
                 ensure_mlx_running
             fi
-            if [[ "$(uname -s)" == "Darwin" ]]; then
-                open "$magic_link" 2>/dev/null || true
-            else
-                xdg-open "$magic_link" 2>/dev/null || true
+            if [[ ! -f /.dockerenv ]]; then
+                if [[ "$(uname -s)" == "Darwin" ]]; then
+                    open "$magic_link" 2>/dev/null || true
+                else
+                    xdg-open "$magic_link" 2>/dev/null || true
+                fi
             fi
             exit 0
         fi
@@ -4445,6 +4579,20 @@ set_install_phase() {
 
 main() {
     parse_args "$@"
+    
+    # MLX host setup mode: bootstrap the host-agent on macOS.
+    # Called by the Makefile after the manager container finishes.
+    # Only creates the venv and installs the host-agent service — the heavy
+    # MLX work (pip install mlx-lm, model download, server start) is deferred
+    # to Phase 2 where the setup wizard drives it via deploy-api -> host-agent.
+    if [[ "${MLX_HOST_SETUP:-false}" == true ]]; then
+        ENVIRONMENT="${BUSIBOX_ENV:-development}"
+        LLM_BACKEND="mlx"
+        PLATFORM="docker"
+        setup_mlx_venv
+        setup_host_agent
+        return $?
+    fi
     
     # Detect system capabilities
     detect_system
@@ -4669,11 +4817,11 @@ main() {
         DEV_APPS_DIR=""
     fi
     
-    # Start model downloads in background early
-    # This allows models to download while Docker containers are being built
-    if [[ "$LLM_BACKEND" == "mlx" ]]; then
-        start_model_download_background
-    fi
+    # MLX model downloads are handled in Phase 2 by the setup wizard via
+    # deploy-api -> host-agent, so no early background download is needed.
+    # Previously start_model_download_background was called here but it would
+    # either run inside the ephemeral manager container (losing downloads on exit)
+    # or create unnecessary work on the host that Phase 2 repeats.
     
     # Start embedding model download in background (needed for data-api/embedding-api)
     # This runs regardless of LLM backend since embeddings are always local
@@ -4730,11 +4878,17 @@ main() {
         # Set vault password for sync operation
         # Use environment-specific vault password file
         # VAULT_ENVIRONMENT is set by set_vault_environment() in vault.sh
+        local _vpd="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}"
+        local vault_pass_file=""
         if [[ -n "${VAULT_ENVIRONMENT:-}" ]]; then
-            local vault_pass_file="${HOME}/.busibox-vault-pass-${VAULT_ENVIRONMENT}"
+            if [[ -f "${_vpd}/.busibox-vault-pass-${VAULT_ENVIRONMENT}" ]]; then
+                vault_pass_file="${_vpd}/.busibox-vault-pass-${VAULT_ENVIRONMENT}"
+            else
+                vault_pass_file="${HOME}/.busibox-vault-pass-${VAULT_ENVIRONMENT}"
+            fi
         else
             # Fallback for legacy installations
-            local vault_pass_file="${HOME}/.vault_pass"
+            vault_pass_file="${HOME}/.vault_pass"
         fi
         
         # Generate vault password if it doesn't exist
@@ -4883,14 +5037,24 @@ main() {
         exit 1
     fi
     
-    # Setup MLX and host-agent if on Apple Silicon
-    if [[ "$LLM_BACKEND" == "mlx" ]]; then
-        setup_mlx
+    # Bootstrap host-agent for MLX on Apple Silicon.
+    # Only creates the venv and starts the host-agent service. The heavy MLX
+    # work (pip install mlx-lm, model download, server start) is deferred to
+    # Phase 2 where the setup wizard drives it via deploy-api -> host-agent.
+    # Inside the manager container, write a marker so the Makefile runs the
+    # lightweight host-agent bootstrap on the macOS host after the container exits.
+    if [[ "$LLM_BACKEND" == "mlx" && ! -f /.dockerenv ]]; then
+        setup_mlx_venv
         setup_host_agent
-        # Wait for background model download if still running
-        wait_for_model_download
-        # Ensure MLX server is running for Busibox Portal setup
-        ensure_mlx_running
+        # Embedding model is needed regardless of LLM backend
+        show_stage 92 "Downloading Embedding Model" "Pre-downloading FastEmbed model for document search."
+        download_embedding_model
+    elif [[ "$LLM_BACKEND" == "mlx" && -f /.dockerenv ]]; then
+        info "MLX host-agent setup will run on the macOS host after container deployment completes..."
+        touch "${REPO_ROOT}/.mlx-setup-needed"
+        # Embedding model download uses Docker, which works inside the manager container
+        show_stage 92 "Downloading Embedding Model" "Pre-downloading FastEmbed model for document search."
+        download_embedding_model
     elif [[ "$PLATFORM" != "proxmox" && "$PLATFORM" != "k8s" ]]; then
         # For Docker non-MLX backends, download the embedding model
         # (embeddings run locally regardless of LLM backend)
@@ -4914,16 +5078,23 @@ main() {
     local magic_link
     magic_link=$(generate_admin_link true)
     
+    # Inside the manager container, persist the link so the Makefile can
+    # display it once after the container (and any MLX setup) finishes.
+    if [[ -f /.dockerenv ]]; then
+        echo "$magic_link" > "${REPO_ROOT}/.busibox-setup-link"
+    fi
+    
     # Show completion message
     show_completion "$magic_link"
     
-    # Open browser (use runtime OS — neither open nor xdg-open work
-    # inside the manager container, but the || true keeps it harmless)
-    info "Opening browser..."
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-        open "$magic_link" 2>/dev/null || true
-    else
-        xdg-open "$magic_link" 2>/dev/null || true
+    # Open browser on the host (skip inside manager container)
+    if [[ ! -f /.dockerenv ]]; then
+        info "Opening browser..."
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            open "$magic_link" 2>/dev/null || true
+        else
+            xdg-open "$magic_link" 2>/dev/null || true
+        fi
     fi
 }
 

@@ -10,7 +10,8 @@
         k8s-gpu-up k8s-gpu-down k8s-gpu-status k8s-gpu-window \
         spot-check spot-swap spot-price \
         connect disconnect k8s-connect-status \
-        build-manager
+        build-manager \
+        busibox-build busibox
 
 # Default target - interactive menu with health check
 .DEFAULT_GOAL := menu
@@ -781,6 +782,22 @@ ifdef SERVICE
 else
 	@USE_ANSIBLE_FOR_DOCKER=$(USE_ANSIBLE) $(MANAGER_RUN_IT) bash scripts/make/install-menu.sh $(if $(VERBOSE),-v)
 endif
+	@if [ -f .mlx-setup-needed ]; then \
+		rm -f .mlx-setup-needed; \
+		echo "[INFO] Running MLX setup on macOS host..."; \
+		bash scripts/make/mlx-host-setup.sh; \
+	fi
+	@if [ -f .busibox-setup-link ]; then \
+		echo ""; \
+		echo "══════════════════════════════════════════════════════════════════════════════"; \
+		echo "  Open the Busibox Portal to complete setup:"; \
+		echo ""; \
+		echo "  $$(cat .busibox-setup-link)"; \
+		echo ""; \
+		echo "══════════════════════════════════════════════════════════════════════════════"; \
+		echo ""; \
+		rm -f .busibox-setup-link; \
+	fi
 else
 ifdef SERVICE
 	@bash scripts/make/service-deploy.sh "$(SERVICE)"
@@ -1466,3 +1483,20 @@ disconnect:
 
 k8s-connect-status:
 	@bash scripts/k8s/connect.sh --status
+
+# ============================================================================
+# BUSIBOX CLI (Rust TUI)
+# ============================================================================
+# Interactive TUI for setup, hardware detection, model config, and service
+# management. Gradually replaces bash scripts with native Rust.
+#
+# Usage:
+#   make busibox-build    # Compile the CLI binary
+#   make busibox          # Build and run the CLI
+
+busibox-build:
+	@. "$$HOME/.cargo/env" 2>/dev/null; cd cli/busibox && CARGO_TARGET_DIR=target cargo build --release
+	@echo "Built: cli/busibox/target/release/busibox"
+
+busibox:
+	@. "$$HOME/.cargo/env" 2>/dev/null; cd cli/busibox && CARGO_TARGET_DIR=target cargo run --release

@@ -7,6 +7,7 @@ conversation insights with vector embeddings for RAG.
 Ported from busibox-app/src/lib/milvus/client.ts
 """
 
+import os
 import structlog
 from typing import List, Dict, Optional, Any
 from datetime import datetime
@@ -16,6 +17,7 @@ import httpx
 logger = structlog.get_logger()
 
 COLLECTION_NAME = "chat_insights"
+DEFAULT_EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIMENSION", "1024"))
 
 
 class ChatInsight:
@@ -150,7 +152,7 @@ class InsightsService:
             FieldSchema(
                 name="embedding",
                 dtype=DataType.FLOAT_VECTOR,
-                dim=1024,  # bge-large-en-v1.5 embedding dimension
+                dim=DEFAULT_EMBEDDING_DIM,
                 description="Vector embedding of the insight",
             ),
             FieldSchema(

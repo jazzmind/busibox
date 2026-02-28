@@ -48,17 +48,18 @@ get_current_env() {
 }
 
 get_backend_type() {
+    local backend=""
     if [[ -n "$_active_profile" ]]; then
-        profile_get "$_active_profile" "backend"
-        return
+        backend=$(profile_get "$_active_profile" "backend")
+    else
+        local env="$1"
+        backend=$(get_backend "$env" 2>/dev/null || echo "")
+        if [[ -z "$backend" ]]; then
+            backend="docker"
+        fi
     fi
-    local env="$1"
-    local backend
-    backend=$(get_backend "$env" 2>/dev/null || echo "")
-    if [[ -z "$backend" ]]; then
-        backend="docker"
-    fi
-    echo "$backend"
+    # Normalize to lowercase (profiles may store mixed case)
+    echo "$backend" | tr '[:upper:]' '[:lower:]'
 }
 
 get_inventory_path() {

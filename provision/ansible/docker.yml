@@ -363,26 +363,14 @@
       ansible.builtin.debug:
         msg: |
           ═══════════════════════════════════════════════════════════════════
-          DEPLOYMENT COMPLETE
+          ANSIBLE PLAYBOOK COMPLETE
           ═══════════════════════════════════════════════════════════════════
           
-          Services deployed:
-            ✓ PostgreSQL      - localhost:5432
-            ✓ Redis           - localhost:6379
-            ✓ MinIO           - localhost:9000 (console: 9001)
-            ✓ Milvus          - localhost:19530
-            ✓ AuthZ API       - localhost:{{ authz_port | default(8010) }}
-            ✓ Data API      - localhost:{{ data_port | default(8002) }}
-            ✓ Search API      - localhost:{{ search_port | default(8003) }}
-            ✓ Agent API       - localhost:{{ agent_port | default(8000) }}
-            ✓ Bridge API      - localhost:{{ bridge_api_port | default(8081) }}
-            ✓ LiteLLM         - localhost:{{ litellm_port | default(4000) }}
-            ✓ Busibox Portal       - localhost:{{ ai_portal_port | default(3000) }}
-            ✓ Agent Manager   - localhost:{{ agent_manager_port | default(3001) }}
-            ✓ Nginx           - localhost:80/443
+          Tags requested: {{ ansible_run_tags | default('all') }}
+          Environment: {{ busibox_env | default('development') }}
+          Container prefix: {{ container_prefix | default('dev') }}
           
-          Access the Busibox Portal at:
-            https://{{ base_domain | default('localhost') }}/portal/
+          Note: Service health is verified separately after Ansible completes.
           
           ═══════════════════════════════════════════════════════════════════
       tags: always

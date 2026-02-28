@@ -8,6 +8,9 @@ uvicorn[standard]>=0.24.0,<0.35.0
 # Embedding Model
 fastembed>=0.4.2,<1.0.0
 
+# Matryoshka truncation (transitive dep of fastembed, explicit for direct import)
+numpy>=1.24.0
+
 # Logging
 structlog>=24.1.0,<25.0.0
 

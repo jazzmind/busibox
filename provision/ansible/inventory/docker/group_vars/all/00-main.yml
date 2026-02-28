@@ -88,6 +88,12 @@ deploy_port: 8011
 # Frontend ports
 ai_portal_port: 3000
 agent_manager_port: 3001
+admin_port: 3002
+
+# Which core apps to build/start (comma-separated, or "all")
+# Computed from applications with auto_deploy: true in apps.yml
+# Override with a static value if needed, e.g. enabled_apps: "portal,admin,agents"
+enabled_apps: "{{ applications | dict2items | selectattr('value.auto_deploy', 'defined') | selectattr('value.auto_deploy') | map(attribute='key') | join(',') }}"
 
 # ============================================================================
 # Domain Configuration - Docker
@@ -201,11 +207,12 @@ docker_services:
   user:
     - user-apps
 
-# Service health check endpoints (use Docker service hostnames since manager runs on Docker network)
+# Service health check endpoints (use localhost since ports are mapped to host)
 docker_health_endpoints:
   postgres: "pg_isready -U postgres"
-  authz-api: "http://authz-api:{{ authz_port }}/health"
-  data-api: "http://data-api:{{ data_port }}/health"
-  search-api: "http://search-api:{{ search_port }}/health"
-  agent-api: "http://agent-api:{{ agent_port }}/health"
-  busibox-portal: "http://core-apps:{{ ai_portal_port }}/portal/api/health"
+  authz-api: "http://localhost:{{ authz_port }}/health/live"
+  data-api: "http://localhost:{{ data_port }}/health"
+  search-api: "http://localhost:{{ search_port }}/health"
+  agent-api: "http://localhost:{{ agent_port }}/health"
+  busibox-portal: "http://localhost:{{ ai_portal_port }}/portal/api/health"
+  busibox-admin: "http://localhost:{{ admin_port }}/admin/api/health"

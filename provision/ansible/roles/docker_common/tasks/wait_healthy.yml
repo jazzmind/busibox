@@ -31,8 +31,7 @@
           exit 0
           ;;
         unhealthy)
-          echo "Service {{ docker_wait_service }} is unhealthy"
-          exit 1
+          echo "Service {{ docker_wait_service }} is unhealthy (elapsed ${elapsed}s/${timeout}s), waiting for restart..."
           ;;
         none|null|"")
           # No healthcheck defined, check if running

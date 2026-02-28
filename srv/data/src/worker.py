@@ -563,6 +563,7 @@ class IngestWorker(PipelineMixin, TriggerMixin):
         # This ensures the worker can access the user's data via RLS
         # Store on instance so helper methods can access it
         self._current_rls_context = WorkerRLSContext(user_id=user_id, role_ids=role_ids)
+        self.postgres_service.set_rls_context(self._current_rls_context)
         
         # Exchange delegation token for a data-api scoped user token
         # This user_token can be used for decryption and other authenticated operations
@@ -1943,6 +1944,7 @@ class IngestWorker(PipelineMixin, TriggerMixin):
             
             # Clear RLS context after processing
             self._current_rls_context = None
+            self.postgres_service.clear_rls_context()
     
     def _check_file_exists(self, file_id: str) -> bool:
         """

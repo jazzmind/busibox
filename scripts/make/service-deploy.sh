@@ -200,16 +200,17 @@ get_current_env() {
 # Get the backend type for the environment (profile-aware)
 get_backend_type() {
     local env="$1"
+    local backend=""
 
     # Prefer active profile
     if [[ -n "$_active_profile" ]]; then
-        profile_get "$_active_profile" "backend"
-        return
+        backend=$(profile_get "$_active_profile" "backend")
     fi
 
     # Fallback to state file
-    local backend
-    backend=$(get_backend "$env" 2>/dev/null || echo "")
+    if [[ -z "$backend" ]]; then
+        backend=$(get_backend "$env" 2>/dev/null || echo "")
+    fi
     
     if [[ -z "$backend" ]]; then
         case "$env" in
@@ -218,7 +219,8 @@ get_backend_type() {
         esac
     fi
     
-    echo "$backend"
+    # Normalize to lowercase (profiles may store mixed case)
+    echo "$backend" | tr '[:upper:]' '[:lower:]'
 }
 
 # Map environment to inventory path

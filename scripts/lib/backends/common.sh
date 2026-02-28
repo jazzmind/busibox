@@ -565,7 +565,8 @@ validate_action() {
 # Source the appropriate backend file based on backend type.
 # Usage: load_backend "docker"  (or "proxmox" or "k8s")
 load_backend() {
-    local backend="$1"
+    local backend
+    backend=$(echo "$1" | tr '[:upper:]' '[:lower:]')
     local backends_dir
     backends_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

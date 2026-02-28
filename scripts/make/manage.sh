@@ -81,23 +81,22 @@ get_current_env() {
 }
 
 get_backend_type() {
+    local backend=""
     # Prefer explicit argument from launcher
     if [[ -n "$_ARG_BACKEND" ]]; then
-        echo "$_ARG_BACKEND"
-        return
+        backend="$_ARG_BACKEND"
+    elif [[ -n "$_active_profile" ]]; then
+        backend=$(profile_get "$_active_profile" "backend")
+    else
+        local env
+        env=$(get_current_env)
+        backend=$(get_backend "$env" 2>/dev/null)
+        if [[ -z "$backend" ]]; then
+            backend="docker"
+        fi
     fi
-    if [[ -n "$_active_profile" ]]; then
-        profile_get "$_active_profile" "backend"
-        return
-    fi
-    local env
-    env=$(get_current_env)
-    local backend
-    backend=$(get_backend "$env" 2>/dev/null)
-    if [[ -z "$backend" ]]; then
-        backend="docker"
-    fi
-    echo "$backend"
+    # Normalize to lowercase (profiles may store mixed case)
+    echo "$backend" | tr '[:upper:]' '[:lower:]'
 }
 
 get_container_prefix() {

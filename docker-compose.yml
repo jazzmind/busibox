@@ -268,6 +268,7 @@ services:
       - ./provision/ansible/roles/milvus/files/hybrid_schema.py:/app/hybrid_schema.py:ro
     environment:
       MILVUS_HOST: milvus
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-256}
     command: ["python", "/app/hybrid_schema.py"]
     depends_on:
       milvus:
@@ -383,8 +384,10 @@ services:
       # General model cache for huggingface, etc.
       - model_cache:/root/.cache/huggingface
     environment:
-      # FastEmbed model - bge-small for dev (384-d, ~134MB), override to bge-large for production (1024-d, ~1.3GB)
-      FASTEMBED_MODEL: ${FASTEMBED_MODEL:-BAAI/bge-small-en-v1.5}
+      # nomic-embed-text-v1.5: Matryoshka model (768-d native, truncatable to 256/512)
+      # ~520MB model, MTEB 61.04 at 256-d (beats bge-small-384d at ~51.7)
+      FASTEMBED_MODEL: ${FASTEMBED_MODEL:-nomic-ai/nomic-embed-text-v1.5}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-256}
       EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-32}
       # Cache directory inside container - matches mounted volume
       FASTEMBED_CACHE_DIR: /root/.cache/fastembed
@@ -456,8 +459,8 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/health/live')"]
       interval: 10s
       timeout: 5s
-      start_period: 10s
-      retries: 3
+      start_period: 30s
+      retries: 6
     restart: unless-stopped
     networks:
       busibox-net:
@@ -538,7 +541,7 @@ services:
       LLM_CLEANUP_ENABLED: ${LLM_CLEANUP_ENABLED:-false}
       # Embedding API - dedicated embedding service (no local model loading)
       EMBEDDING_API_URL: http://embedding-api:8005
-      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-384}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-256}
       # Neo4j (optional graph database)
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: ${NEO4J_USER:-neo4j}
@@ -620,7 +623,7 @@ services:
       TEST_DOC_REPO_PATH: /testdocs
       # Embedding API - dedicated embedding service (no local model loading)
       EMBEDDING_API_URL: http://embedding-api:8005
-      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-384}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-256}
       # AuthZ (for encryption/decryption during processing)
       AUTHZ_BASE_URL: http://authz-api:8010
       AUTHZ_JWKS_URL: http://authz-api:8010/.well-known/jwks.json
@@ -781,6 +784,7 @@ services:
       ENABLE_CACHING: "true"
       # Embedding API - dedicated embedding service (direct call, no token exchange needed)
       EMBEDDING_API_URL: http://embedding-api:8005
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-256}
       # LiteLLM
       LITELLM_BASE_URL: http://litellm:4000
       LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
@@ -863,6 +867,7 @@ services:
       MILVUS_PORT: 19530
       # Embedding API - dedicated embedding service (no auth required, used for insights)
       EMBEDDING_API_URL: http://embedding-api:8005
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-256}
       # LiteLLM
       LITELLM_BASE_URL: http://litellm:4000/v1
       LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}

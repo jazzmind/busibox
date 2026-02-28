@@ -188,7 +188,8 @@ profile_init() {
 # Returns: profile ID (slug)
 profile_create() {
     local environment="$1"
-    local backend="$2"
+    local backend
+    backend=$(echo "$2" | tr '[:upper:]' '[:lower:]')
     local label="$3"
     local vault_prefix="${4:-}"
     local kubeconfig="${5:-}"

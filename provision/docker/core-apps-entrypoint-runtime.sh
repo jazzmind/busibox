@@ -295,15 +295,28 @@ case "${1:-start}" in
         # Wait for supervisor to be ready
         sleep 3
         
-        # Check and deploy apps if needed
+        # Determine which apps to deploy based on ENABLED_APPS env var
+        # Default: portal,admin (bootstrap apps). Set to "all" for everything.
+        ENABLED="${ENABLED_APPS:-portal,admin}"
+        log_info "ENABLED_APPS: ${ENABLED}"
+        
+        is_app_enabled() {
+            local short_name="$1"
+            if [ "${ENABLED}" = "all" ] || [ -z "${ENABLED}" ]; then
+                return 0
+            fi
+            echo ",${ENABLED}," | grep -q ",${short_name},"
+        }
+        
+        # Check and deploy enabled apps
         log_info "Checking app deployments..."
-        deploy_if_needed "busibox-portal" "${BUSIBOX_PORTAL_GITHUB_REF}"
-        deploy_if_needed "busibox-agents" "${BUSIBOX_AGENTS_GITHUB_REF}"
-        deploy_if_needed "busibox-admin" "${BUSIBOX_ADMIN_GITHUB_REF}"
-        deploy_if_needed "busibox-chat" "${BUSIBOX_CHAT_GITHUB_REF}"
-        deploy_if_needed "busibox-appbuilder" "${BUSIBOX_APPBUILDER_GITHUB_REF}"
-        deploy_if_needed "busibox-media" "${BUSIBOX_MEDIA_GITHUB_REF}"
-        deploy_if_needed "busibox-documents" "${BUSIBOX_DOCUMENTS_GITHUB_REF}"
+        is_app_enabled "portal"     && deploy_if_needed "busibox-portal" "${BUSIBOX_PORTAL_GITHUB_REF}"
+        is_app_enabled "agents"     && deploy_if_needed "busibox-agents" "${BUSIBOX_AGENTS_GITHUB_REF}"
+        is_app_enabled "admin"      && deploy_if_needed "busibox-admin" "${BUSIBOX_ADMIN_GITHUB_REF}"
+        is_app_enabled "chat"       && deploy_if_needed "busibox-chat" "${BUSIBOX_CHAT_GITHUB_REF}"
+        is_app_enabled "appbuilder" && deploy_if_needed "busibox-appbuilder" "${BUSIBOX_APPBUILDER_GITHUB_REF}"
+        is_app_enabled "media"      && deploy_if_needed "busibox-media" "${BUSIBOX_MEDIA_GITHUB_REF}"
+        is_app_enabled "documents"  && deploy_if_needed "busibox-documents" "${BUSIBOX_DOCUMENTS_GITHUB_REF}"
         
         log_success "Core apps started"
         

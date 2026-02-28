@@ -246,7 +246,11 @@ backend_service_action() {
 
             local cmd="ansible-playbook -i ${inventory} ${playbook} --tags ${tag}"
 
-            local vault_pass_file="$HOME/.busibox-vault-pass-${prefix}"
+            local _vpd="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}"
+            local vault_pass_file="${_vpd}/.busibox-vault-pass-${prefix}"
+            if [[ ! -f "$vault_pass_file" ]]; then
+                vault_pass_file="$HOME/.busibox-vault-pass-${prefix}"
+            fi
             if [[ -f "$vault_pass_file" ]]; then
                 cmd="${cmd} --vault-password-file ${vault_pass_file}"
             elif [[ -f "$HOME/.vault_pass" ]]; then

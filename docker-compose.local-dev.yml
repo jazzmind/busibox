@@ -51,7 +51,10 @@ services:
       # GitHub token for busibox-app access (REQUIRED)
       # Set via: export GITHUB_AUTH_TOKEN=ghp_your_token_here
       # Or set directly here (not recommended): GITHUB_AUTH_TOKEN: ghp_your_token_here
-      GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:?GITHUB_AUTH_TOKEN must be set - get token from https://github.com/settings/tokens/new with repo and read:packages scopes}
+      GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
+      # Which apps to start (comma-separated). Default: all for local dev.
+      # Set to "portal,admin" to only run portal and admin.
+      ENABLED_APPS: ${ENABLED_APPS:-all}
       # Allow self-signed SSL certificates in local dev
       NODE_TLS_REJECT_UNAUTHORIZED: "0"
       

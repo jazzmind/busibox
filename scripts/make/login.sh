@@ -43,19 +43,22 @@ get_current_env() {
 }
 
 get_backend_type() {
+    local backend=""
     if [[ -n "$_active_profile" ]]; then
-        profile_get "$_active_profile" "backend"
-        return
+        backend=$(profile_get "$_active_profile" "backend")
+    else
+        local env env_upper
+        env="$(get_current_env)"
+        if [[ "$env" == "development" ]]; then
+            backend="docker"
+        else
+            env_upper="$(echo "$env" | tr '[:lower:]' '[:upper:]')"
+            backend="$(get_state "BACKEND_${env_upper}" "")"
+            backend="${backend:-docker}"
+        fi
     fi
-    local env env_upper backend
-    env="$(get_current_env)"
-    if [[ "$env" == "development" ]]; then
-        echo "docker"
-        return
-    fi
-    env_upper="$(echo "$env" | tr '[:lower:]' '[:upper:]')"
-    backend="$(get_state "BACKEND_${env_upper}" "")"
-    echo "${backend:-docker}"
+    # Normalize to lowercase (profiles may store mixed case)
+    echo "$backend" | tr '[:upper:]' '[:lower:]'
 }
 
 confirm_environment() {

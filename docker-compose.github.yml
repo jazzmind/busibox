@@ -52,6 +52,8 @@ services:
       NODE_ENV: production
       # GitHub authentication for cloning repos and npm packages
       GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
+      # Which apps to deploy and start (comma-separated). Default: portal,admin.
+      ENABLED_APPS: ${ENABLED_APPS:-portal,admin}
       # Git refs for app deployment (used on first start)
       BUSIBOX_PORTAL_GITHUB_REF: ${BUSIBOX_PORTAL_GITHUB_REF:-main}
       BUSIBOX_AGENTS_GITHUB_REF: ${BUSIBOX_AGENTS_GITHUB_REF:-main}

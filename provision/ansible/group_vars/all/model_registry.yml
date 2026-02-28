@@ -291,7 +291,7 @@ model_purposes:
   voice: "kokoro-82m-gpu"   # GPU TTS (kokoro-fastapi, port 8007)
 
   # Embeddings (dedicated services)
-  embedding: "bge-large"   # Text embedding generation (1024-d)
+  embedding: "nomic-embed"   # Matryoshka embedding (768-d native, truncatable)
   visual-embedding: "colpali"   # Visual document embedding (dedicated service)
   reranking: "qwen3-reranker"   # Search result reranking
   # Note: ColPali uses dedicated service (port 9006, GPU 0) - vLLM doesn't support LoRA for PaliGemma
@@ -325,8 +325,8 @@ model_purposes_dev:
   transcribe: "whisper-tiny"   # Speech-to-text (Whisper Tiny ~150 MB for dev)
   voice: "kokoro-82m"   # Text-to-speech (Kokoro)
 
-  # Embeddings (use smaller models for dev)
-  embedding: "bge-small"   # Text embedding (384-d, cached by warmup)
+  # Embeddings (Matryoshka: nomic-embed at 256-d for dev, 768-d for prod)
+  embedding: "nomic-embed"   # Matryoshka embedding (768-d native, truncated to 256-d for dev)
   visual-embedding: "colpali"   # Visual document embedding (same as prod)
   reranking: "bge-reranker-v2-m3-cpu"   # CPU reranking for dev (no GPU needed)
 

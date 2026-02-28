@@ -4,6 +4,9 @@ Busibox Embedding API
 Dedicated embedding service that loads the FastEmbed model once at startup
 and provides HTTP API for all embedding consumers (data-api, data-worker, search-api).
 
+Supports Matryoshka models (e.g. nomic-embed-text-v1.5) with automatic
+dimension truncation and L2 renormalization via EMBEDDING_DIMENSION env var.
+
 Endpoints:
 - POST /embed - Generate embeddings for single or batch text
 - GET /health - Health check
@@ -14,6 +17,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import List, Optional, Union
 
+import numpy as np
 import structlog
 from fastapi import FastAPI, HTTPException
 from fastembed import TextEmbedding
@@ -65,6 +69,8 @@ class HealthResponse(BaseModel):
     status: str
     model: str
     dimension: int
+    native_dimension: int
+    matryoshka: bool
     model_loaded: bool
 
 
@@ -72,6 +78,9 @@ class InfoResponse(BaseModel):
     """Response body for /info endpoint."""
     model: str
     dimension: int
+    native_dimension: int
+    matryoshka: bool
+    matryoshka_dimensions: List[int]
     batch_size: int
     available_models: dict
 
@@ -86,6 +95,28 @@ model_loaded: bool = False
 
 
 # =============================================================================
+# Matryoshka Truncation
+# =============================================================================
+
+def truncate_and_renormalize(embeddings: List[np.ndarray], target_dim: int) -> List[np.ndarray]:
+    """
+    Truncate embeddings to target_dim and L2-renormalize.
+    
+    Matryoshka models pack the most important information into the first N
+    dimensions.  After slicing we must renormalize so cosine similarity
+    still works correctly.
+    """
+    result = []
+    for emb in embeddings:
+        truncated = emb[:target_dim]
+        norm = np.linalg.norm(truncated)
+        if norm > 0:
+            truncated = truncated / norm
+        result.append(truncated)
+    return result
+
+
+# =============================================================================
 # Application Lifecycle
 # =============================================================================
 
@@ -97,7 +128,10 @@ async def lifespan(app: FastAPI):
     logger.info(
         "Starting Embedding API",
         model=config.model_name,
-        dimension=config.dimension,
+        native_dimension=config.native_dimension,
+        output_dimension=config.dimension,
+        matryoshka=config.matryoshka,
+        truncate=config.truncate,
         batch_size=config.batch_size,
         cache_dir=config.cache_dir,
     )
@@ -144,7 +178,18 @@ async def lifespan(app: FastAPI):
         
         # Warmup: run a test embedding to fully initialize
         logger.info("Warming up model")
-        list(embedder.embed(["warmup"]))
+        warmup_embs = list(embedder.embed(["warmup"]))
+        
+        # Verify truncation produces correct output dimension
+        if config.truncate:
+            truncated = truncate_and_renormalize(warmup_embs, config.dimension)
+            actual_dim = len(truncated[0])
+            logger.info(
+                "Matryoshka truncation verified",
+                native_dim=len(warmup_embs[0]),
+                truncated_dim=actual_dim,
+                target_dim=config.dimension,
+            )
         
         load_time = time.time() - start_time
         model_loaded = True
@@ -152,7 +197,10 @@ async def lifespan(app: FastAPI):
         logger.info(
             "Model loaded and ready",
             model=config.model_name,
-            dimension=config.dimension,
+            output_dimension=config.dimension,
+            native_dimension=config.native_dimension,
+            matryoshka=config.matryoshka,
+            truncate=config.truncate,
             load_time_seconds=round(load_time, 2),
             from_cache=cached,
         )
@@ -172,8 +220,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Busibox Embedding API",
-    description="Dedicated embedding service for text embedding generation",
-    version="1.0.0",
+    description="Dedicated embedding service with Matryoshka truncation support",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -189,6 +237,9 @@ async def embed(request: EmbedRequest) -> EmbedResponse:
     
     Accepts a single string or list of strings.
     Returns OpenAI-compatible embedding response.
+    
+    If the model supports Matryoshka and EMBEDDING_DIMENSION is set below the
+    native dimension, embeddings are truncated and L2-renormalized automatically.
     """
     global embedder
     
@@ -209,14 +260,23 @@ async def embed(request: EmbedRequest) -> EmbedResponse:
     start_time = time.time()
     
     try:
-        # Generate embeddings
+        # Generate full-dimension embeddings
         embeddings_generator = embedder.embed(texts, batch_size=config.batch_size)
-        embeddings = [emb.tolist() for emb in embeddings_generator]
+        raw_embeddings = list(embeddings_generator)
+        
+        # Apply Matryoshka truncation + renormalization if configured
+        if config.truncate:
+            processed = truncate_and_renormalize(raw_embeddings, config.dimension)
+            embeddings = [emb.tolist() for emb in processed]
+        else:
+            embeddings = [emb.tolist() for emb in raw_embeddings]
         
         duration = time.time() - start_time
         logger.info(
             "Embeddings generated",
             count=len(embeddings),
+            dimension=config.dimension,
+            truncated=config.truncate,
             duration_seconds=round(duration, 3),
         )
         
@@ -244,6 +304,8 @@ async def health() -> HealthResponse:
         status="healthy" if model_loaded else "loading",
         model=config.model_name,
         dimension=config.dimension,
+        native_dimension=config.native_dimension,
+        matryoshka=config.matryoshka,
         model_loaded=model_loaded,
     )
 
@@ -254,6 +316,9 @@ async def info() -> InfoResponse:
     return InfoResponse(
         model=config.model_name,
         dimension=config.dimension,
+        native_dimension=config.native_dimension,
+        matryoshka=config.matryoshka,
+        matryoshka_dimensions=config.matryoshka_dimensions,
         batch_size=config.batch_size,
         available_models=MODEL_DIMENSIONS,
     )
@@ -266,5 +331,7 @@ async def root():
         "service": "Busibox Embedding API",
         "model": config.model_name,
         "dimension": config.dimension,
+        "native_dimension": config.native_dimension,
+        "matryoshka": config.matryoshka,
         "status": "ready" if model_loaded else "loading",
     }

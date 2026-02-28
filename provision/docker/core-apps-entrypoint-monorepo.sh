@@ -24,8 +24,9 @@ run() {
   export ROOT_DIR
 
   # Launch the Node.js process manager as PID 1.
-  # It reads CORE_APPS_MODE (and optional INITIAL_APP_MODES) to decide
-  # per-app dev vs prod mode, and exposes a control API on port 9999.
+  # It reads CORE_APPS_MODE, ENABLED_APPS (comma-separated, e.g. "portal,admin"),
+  # and optional INITIAL_APP_MODES to decide per-app dev vs prod mode.
+  # Control API on port 9999.
   exec node /usr/local/bin/app-manager.js
 }
 

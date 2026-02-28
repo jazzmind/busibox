@@ -71,6 +71,15 @@ provision/ansible/group_vars/all/model_config.yml
 .busibox-state
 .busibox-state-*
 
+# Vault password files (created in repo root when running inside manager container)
+.busibox-vault-pass-*
+
+# Ephemeral setup link file (magic link displayed after install)
+.busibox-setup-link
+
+# MLX setup marker (triggers host-side MLX install after container exits)
+.mlx-setup-needed
+
 # Deployment profiles directory (local workstation state)
 # Contains profiles.json, per-profile state files, env files, kubeconfigs
 .busibox/
@@ -87,6 +96,9 @@ config/nginx-sites/apps/*
 dev-apps/*
 !dev-apps/.gitkeep
 !dev-apps/README.md
+
+# Rust build artifacts
+cli/busibox/target/
 
 # Kubernetes - sensitive files
 k8s/kubeconfig-*.yaml

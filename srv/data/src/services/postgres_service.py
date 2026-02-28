@@ -38,6 +38,7 @@ class PostgresService:
         self.password = config.get("postgres_password", "")
         
         self.pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
+        self._default_rls_context = None
     
     def connect(self):
         """Create connection pool."""
@@ -70,15 +71,24 @@ class PostgresService:
             self.pool = None
             logger.info("PostgreSQL connection pool closed")
     
+    def set_rls_context(self, context):
+        """Set default RLS context for all connections from this service."""
+        self._default_rls_context = context
+
+    def clear_rls_context(self):
+        """Clear the default RLS context."""
+        self._default_rls_context = None
+
     def _get_connection(self, request=None):
         """Get connection from pool and set RLS session variables."""
         if not self.pool:
             self.connect()
         conn = self.pool.getconn()
-        if request:
+        rls_context = request or self._default_rls_context
+        if rls_context:
             try:
                 cursor = conn.cursor()
-                set_rls_session_vars_sync(cursor, request)
+                set_rls_session_vars_sync(cursor, rls_context)
                 cursor.close()
             except Exception as exc:
                 logger.error("Failed to set RLS session vars (sync)", error=str(exc))

@@ -1,0 +1,10 @@
+pub mod hardware_report;
+pub mod install;
+pub mod manage;
+pub mod model_config;
+pub mod model_download;
+pub mod profile_select;
+pub mod setup_mode;
+pub mod ssh_setup;
+pub mod tailscale_setup;
+pub mod welcome;

@@ -1,0 +1,314 @@
+use crate::modules::hardware::HardwareProfile;
+use crate::modules::models::ModelRecommendation;
+use crate::modules::profile::{Profile, ProfilesFile};
+use crate::modules::ssh::SshConnection;
+use crate::modules::tailscale::TailscaleStatus;
+use std::sync::mpsc;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Screen {
+    Welcome,
+    SetupMode,
+    SshSetup,
+    TailscaleSetup,
+    HardwareReport,
+    ModelConfig,
+    ModelDownload,
+    Install,
+    Manage,
+    ProfileSelect,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SetupTarget {
+    Local,
+    Remote,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TailscaleAuthChoice {
+    Cloud,
+    Headscale,
+    Skip,
+}
+
+#[derive(Debug)]
+pub struct App {
+    pub screen: Screen,
+    pub should_quit: bool,
+    pub repo_root: std::path::PathBuf,
+
+    // Setup state
+    pub setup_target: SetupTarget,
+    pub remote_host_input: String,
+    pub remote_user_input: String,
+    pub remote_path_input: String,
+    pub remote_backend_choice: usize,
+    pub remote_env_choice: usize,
+
+    // SSH state
+    pub ssh_status: SshSetupStatus,
+    pub ssh_connection: Option<SshConnection>,
+
+    // Tailscale state
+    pub tailscale_local: Option<TailscaleStatus>,
+    pub tailscale_remote: Option<TailscaleStatus>,
+    pub tailscale_auth_choice: TailscaleAuthChoice,
+    pub tailscale_auth_input: String,
+    pub tailscale_step: TailscaleStep,
+
+    // Hardware state
+    pub local_hardware: Option<HardwareProfile>,
+    pub remote_hardware: Option<HardwareProfile>,
+
+    // Model state
+    pub model_recommendation: Option<ModelRecommendation>,
+    pub model_download_progress: Vec<ModelDownloadState>,
+
+    // Install state
+    pub install_services: Vec<ServiceInstallState>,
+    pub install_log: Vec<String>,
+    pub install_log_visible: bool,
+    pub install_log_scroll: usize,
+    pub install_tick: usize,
+    pub install_complete: bool,
+    pub install_portal_url: Option<String>,
+    pub install_rx: Option<mpsc::Receiver<InstallUpdate>>,
+
+    // Manage state
+    pub manage_services: Vec<ServiceStatus>,
+    pub manage_selected: usize,
+
+    // Profile state
+    pub profiles: Option<ProfilesFile>,
+    pub profile_selected: usize,
+
+    // UI state
+    pub menu_selected: usize,
+    pub input_mode: InputMode,
+    pub status_message: Option<(String, MessageKind)>,
+    pub input_cursor: usize,
+
+    // Interactive command request (for logs, etc.)
+    pub pending_interactive_cmd: Option<String>,
+
+    // Pending SSH key copy (needs TUI suspended for password prompt)
+    pub pending_ssh_copy: Option<(String, String, String)>, // (key_path, host, user)
+
+    // Deferred resume install (so status message renders before blocking SSH)
+    pub pending_resume_install: bool,
+
+    // Run `make login` after successful bootstrap install
+    pub pending_login: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum InputMode {
+    Normal,
+    Editing,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MessageKind {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SshSetupStatus {
+    NotStarted,
+    CheckingKeys,
+    KeyFound(String),
+    NoKeyFound,
+    Generating,
+    KeyGenerated(String),
+    CopyingKey,
+    Testing,
+    Connected,
+    Failed(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TailscaleStep {
+    CheckingLocal,
+    CheckingRemote,
+    InstallingRemote,
+    Authenticating,
+    Verifying,
+    Done,
+    Skipped,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelDownloadState {
+    pub name: String,
+    pub role: String,
+    pub progress: f64,
+    pub status: DownloadStatus,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DownloadStatus {
+    Pending,
+    Downloading,
+    Complete,
+    Failed(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct ServiceInstallState {
+    pub name: String,
+    pub group: String,
+    pub status: InstallStatus,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum InstallStatus {
+    Pending,
+    Deploying,
+    Healthy,
+    Failed(String),
+}
+
+#[derive(Debug)]
+pub enum InstallUpdate {
+    Log(String),
+    ServiceStatus { name: String, status: InstallStatus },
+    Complete { portal_url: Option<String> },
+}
+
+impl std::fmt::Display for InstallStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InstallStatus::Pending => write!(f, "pending"),
+            InstallStatus::Deploying => write!(f, "deploying"),
+            InstallStatus::Healthy => write!(f, "healthy"),
+            InstallStatus::Failed(e) => write!(f, "failed: {e}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ServiceStatus {
+    pub name: String,
+    pub group: String,
+    pub status: String,
+}
+
+impl App {
+    pub fn new(repo_root: std::path::PathBuf) -> Self {
+        Self {
+            screen: Screen::Welcome,
+            should_quit: false,
+            repo_root,
+            setup_target: SetupTarget::Local,
+            remote_host_input: String::new(),
+            remote_user_input: "root".into(),
+            remote_path_input: "~/busibox".into(),
+            remote_backend_choice: 0,
+            remote_env_choice: 0,
+            ssh_status: SshSetupStatus::NotStarted,
+            ssh_connection: None,
+            tailscale_local: None,
+            tailscale_remote: None,
+            tailscale_auth_choice: TailscaleAuthChoice::Cloud,
+            tailscale_auth_input: String::new(),
+            tailscale_step: TailscaleStep::CheckingLocal,
+            local_hardware: None,
+            remote_hardware: None,
+            model_recommendation: None,
+            model_download_progress: Vec::new(),
+            install_services: Vec::new(),
+            install_log: Vec::new(),
+            install_log_visible: false,
+            install_log_scroll: 0,
+            install_tick: 0,
+            install_complete: false,
+            install_portal_url: None,
+            install_rx: None,
+            manage_services: Vec::new(),
+            manage_selected: 0,
+            profiles: None,
+            profile_selected: 0,
+            menu_selected: 0,
+            input_mode: InputMode::Normal,
+            status_message: None,
+            input_cursor: 0,
+            pending_interactive_cmd: None,
+            pending_ssh_copy: None,
+            pending_resume_install: false,
+            pending_login: false,
+        }
+    }
+
+    pub fn active_profile(&self) -> Option<(&str, &Profile)> {
+        self.profiles
+            .as_ref()
+            .and_then(crate::modules::profile::get_active_profile)
+    }
+
+    pub fn has_profiles(&self) -> bool {
+        self.profiles
+            .as_ref()
+            .map(|p| !p.profiles.is_empty())
+            .unwrap_or(false)
+    }
+
+    pub fn is_installed(&self) -> bool {
+        self.active_profile()
+            .and_then(|(_, p)| p.hardware.as_ref())
+            .is_some()
+    }
+
+    pub fn set_message(&mut self, msg: &str, kind: MessageKind) {
+        self.status_message = Some((msg.to_string(), kind));
+    }
+
+    pub fn clear_message(&mut self) {
+        self.status_message = None;
+    }
+
+    pub fn backend_choices(&self) -> &[&str] {
+        &["Docker", "Proxmox"]
+    }
+
+    pub fn env_choices(&self) -> &[&str] {
+        &["staging", "production"]
+    }
+
+    /// Get the LLM service names based on detected hardware.
+    /// Returns ("litellm", "vllm") or ("litellm", "mlx") depending on backend.
+    /// Falls back to ("litellm", "vllm") if no hardware detected.
+    pub fn llm_services(&self) -> Vec<&str> {
+        use crate::modules::hardware::LlmBackend;
+        let hw = if self.setup_target == SetupTarget::Remote {
+            self.remote_hardware.as_ref()
+        } else {
+            self.local_hardware.as_ref()
+        };
+        match hw.map(|h| &h.llm_backend) {
+            Some(LlmBackend::Mlx) => vec!["litellm"],  // MLX runs on the host, not as a docker service
+            Some(LlmBackend::Cloud) => vec!["litellm"], // Cloud only needs litellm gateway
+            _ => vec!["litellm", "vllm"],               // Default: litellm + vllm
+        }
+    }
+
+    pub fn is_target_apple_silicon(&self) -> bool {
+        let hw = if self.setup_target == SetupTarget::Remote {
+            self.remote_hardware.as_ref()
+        } else {
+            self.local_hardware.as_ref()
+        };
+        hw.map(|h| h.apple_silicon).unwrap_or(false)
+    }
+
+    pub fn welcome_menu_items(&self) -> Vec<&str> {
+        if self.has_profiles() {
+            vec!["Setup New", "Resume Install", "Profiles", "Manage", "Quit"]
+        } else {
+            vec!["Setup New", "Quit"]
+        }
+    }
+}

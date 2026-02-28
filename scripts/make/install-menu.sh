@@ -580,8 +580,8 @@ main() {
                 ;;
             b|B)
                 if [[ "$FROM_LAUNCHER" == true ]]; then
-                    # Return to launcher menu
-                    exit 0
+                    # Return to launcher menu (exit 2 signals "back", not "install done")
+                    exit 2
                 else
                     echo "Exiting."
                     exit 0

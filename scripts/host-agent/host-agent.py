@@ -46,6 +46,11 @@ logger = logging.getLogger("host-agent")
 SCRIPT_DIR = Path(__file__).parent.resolve()
 BUSIBOX_ROOT = SCRIPT_DIR.parent.parent.resolve()
 
+# The host-agent runs under the MLX venv Python, so sys.executable
+# points to ~/.busibox/mlx-venv/bin/python3.  Use it for subprocesses
+# that need venv packages (huggingface_hub, pyyaml, etc.).
+VENV_PYTHON = sys.executable
+
 # Configuration
 HOST = os.getenv("HOST_AGENT_HOST", "127.0.0.1")
 PORT = int(os.getenv("HOST_AGENT_PORT", "8089"))
@@ -791,6 +796,14 @@ def _get_model_size(model_name: str) -> Optional[str]:
     return f"{total / 1024**2:.0f}MB"
 
 
+def _venv_env() -> dict:
+    """Return an env dict with the venv bin dir prepended to PATH."""
+    env = os.environ.copy()
+    venv_bin = str(Path(VENV_PYTHON).parent)
+    env["PATH"] = f"{venv_bin}:{env.get('PATH', '')}"
+    return env
+
+
 async def _resolve_llm_model(role: str) -> Optional[str]:
     """Resolve an LLM model name for a role via get-models.sh."""
     if not GET_MODELS_SCRIPT.exists():
@@ -801,6 +814,7 @@ async def _resolve_llm_model(role: str) -> Optional[str]:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(BUSIBOX_ROOT),
+            env=_venv_env(),
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
         if proc.returncode == 0:
@@ -838,6 +852,7 @@ async def list_required_models(_: bool = Depends(verify_token)):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(BUSIBOX_ROOT),
+            env=_venv_env(),
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
         if proc.returncode == 0:
@@ -887,9 +902,9 @@ async def mlx_download_model(
     async def generate():
         yield f"data: {json.dumps({'type': 'info', 'message': f'Downloading model: {request.model}'})}\n\n"
         
-        # Run huggingface_hub download
+        # Run huggingface_hub download (use venv Python which has the package)
         process = await asyncio.create_subprocess_exec(
-            "python3", "-c", f"""
+            VENV_PYTHON, "-c", f"""
 from huggingface_hub import snapshot_download
 import sys
 
@@ -937,6 +952,65 @@ except Exception as e:
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
         }
+    )
+
+
+class SetupMLXRequest(BaseModel):
+    packages: list[str] = ["mlx-lm", "huggingface_hub"]
+
+
+@app.post("/setup/mlx")
+async def setup_mlx_deps(
+    request: SetupMLXRequest,
+    _: bool = Depends(verify_token),
+):
+    """
+    Install MLX Python dependencies into the MLX venv.
+
+    Called by deploy-api during the setup wizard to install mlx-lm and
+    huggingface_hub *after* the host-agent is already running (Phase 2).
+    The venv at ~/.busibox/mlx-venv must already exist (created in Phase 1).
+    """
+    import json
+
+    venv_dir = Path.home() / ".busibox" / "mlx-venv"
+    pip_path = venv_dir / "bin" / "pip3"
+
+    if not pip_path.exists():
+        raise HTTPException(
+            status_code=500,
+            detail=f"MLX venv pip not found at {pip_path}. Run Phase 1 host setup first.",
+        )
+
+    async def generate():
+        yield f"data: {json.dumps({'type': 'info', 'message': f'Installing MLX packages: {request.packages}'})}\n\n"
+
+        process = await asyncio.create_subprocess_exec(
+            str(pip_path), "install", "-q", *request.packages,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        async for line in process.stdout:
+            msg = line.decode("utf-8", errors="replace").rstrip()
+            if msg:
+                yield f"data: {json.dumps({'type': 'log', 'stream': 'stdout', 'message': msg})}\n\n"
+
+        async for line in process.stderr:
+            msg = line.decode("utf-8", errors="replace").rstrip()
+            if msg:
+                yield f"data: {json.dumps({'type': 'log', 'stream': 'stderr', 'message': msg})}\n\n"
+
+        returncode = await process.wait()
+        if returncode == 0:
+            yield f"data: {json.dumps({'type': 'success', 'message': 'MLX dependencies installed', 'done': True})}\n\n"
+        else:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'pip install failed with code {returncode}', 'done': True})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
 
 

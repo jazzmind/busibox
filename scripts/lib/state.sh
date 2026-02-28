@@ -103,8 +103,12 @@ get_env_file_path() {
     echo "${_STATE_REPO_ROOT}/.env.$(_get_env_prefix)"
 }
 
-# Get vault password file path (in home directory)
+# Get vault password file path
+# Uses BUSIBOX_VAULT_PASS_DIR (repo root inside manager container, $HOME on host)
 get_vault_pass_path() {
+    local _vpd="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}"
+    local suffix=""
+    
     # If profiles system is available, use profile's vault prefix
     if [[ -f "${_STATE_REPO_ROOT}/.busibox/profiles.json" ]] && type profile_get_vault_prefix &>/dev/null; then
         local active
@@ -113,13 +117,19 @@ get_vault_pass_path() {
             local vp
             vp=$(profile_get_vault_prefix "$active" 2>/dev/null)
             if [[ -n "$vp" ]]; then
-                echo "${HOME}/.busibox-vault-pass-${vp}"
-                return
+                suffix="$vp"
             fi
         fi
     fi
-    # Fallback
-    echo "${HOME}/.busibox-vault-pass-$(_get_env_prefix)"
+    
+    [[ -z "$suffix" ]] && suffix="$(_get_env_prefix)"
+    
+    # Check BUSIBOX_VAULT_PASS_DIR first, fall back to $HOME
+    local pass_file="${_vpd}/.busibox-vault-pass-${suffix}"
+    if [[ ! -f "$pass_file" && -f "${HOME}/.busibox-vault-pass-${suffix}" ]]; then
+        pass_file="${HOME}/.busibox-vault-pass-${suffix}"
+    fi
+    echo "$pass_file"
 }
 
 # ============================================================================

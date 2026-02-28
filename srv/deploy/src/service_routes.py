@@ -304,7 +304,32 @@ def get_docker_compose_base_cmd(busibox_host_path: str) -> list:
 # Host Agent configuration (for MLX control on Apple Silicon)
 # The host-agent runs on the host machine and is accessible via host.docker.internal
 HOST_AGENT_URL = os.getenv("HOST_AGENT_URL", "http://host.docker.internal:8089")
-HOST_AGENT_TOKEN = os.getenv("HOST_AGENT_TOKEN", "")
+_HOST_AGENT_TOKEN_ENV = os.getenv("HOST_AGENT_TOKEN", "")
+
+def _resolve_host_agent_token() -> str:
+    """Resolve the host-agent token dynamically.
+    
+    During initial install the host-agent token is generated AFTER the
+    deploy-api container starts, so the env-var captured at import time may
+    be empty/stale.  The busibox repo root is volume-mounted at
+    BUSIBOX_HOST_PATH, so we can read the current value from the .env file.
+    """
+    if _HOST_AGENT_TOKEN_ENV:
+        return _HOST_AGENT_TOKEN_ENV
+    busibox_path = os.getenv("BUSIBOX_HOST_PATH", "")
+    prefix = os.getenv("CONTAINER_PREFIX", "dev")
+    if busibox_path:
+        env_file = os.path.join(busibox_path, f".env.{prefix}")
+        try:
+            with open(env_file) as f:
+                for line in f:
+                    if line.startswith("HOST_AGENT_TOKEN="):
+                        token = line.split("=", 1)[1].strip()
+                        if token:
+                            return token
+        except FileNotFoundError:
+            pass
+    return ""
 
 # Lock mechanism to prevent concurrent deployments of the same service
 # Maps service name to asyncio.Lock
@@ -387,8 +412,9 @@ async def start_service(
                 
                 # Call host-agent to start MLX
                 headers = {}
-                if HOST_AGENT_TOKEN:
-                    headers["Authorization"] = f"Bearer {HOST_AGENT_TOKEN}"
+                _token = _resolve_host_agent_token()
+                if _token:
+                    headers["Authorization"] = f"Bearer {_token}"
                 
                 try:
                     async with httpx.AsyncClient() as client:
@@ -1061,8 +1087,9 @@ async def start_service_sse(
                     
                     # Connect to host-agent SSE endpoint
                     headers = {}
-                    if HOST_AGENT_TOKEN:
-                        headers["Authorization"] = f"Bearer {HOST_AGENT_TOKEN}"
+                    _token = _resolve_host_agent_token()
+                    if _token:
+                        headers["Authorization"] = f"Bearer {_token}"
                     
                     try:
                         async with httpx.AsyncClient() as client:
@@ -1882,9 +1909,10 @@ async def ensure_mlx_quick(
         }
     
     # Build headers for host-agent
+    _token = _resolve_host_agent_token()
     host_agent_headers = {'Content-Type': 'application/json'}
-    if HOST_AGENT_TOKEN:
-        host_agent_headers['Authorization'] = f'Bearer {HOST_AGENT_TOKEN}'
+    if _token:
+        host_agent_headers['Authorization'] = f'Bearer {_token}'
     
     async with httpx.AsyncClient(timeout=15.0) as client:
         # Step 1: Check if MLX is already running
@@ -1993,9 +2021,10 @@ async def ensure_mlx_running(
         yield sse_event('info', 'Ensuring MLX server is running...')
         
         # Build headers for host-agent (requires auth)
+        _token = _resolve_host_agent_token()
         host_agent_headers = {'Content-Type': 'application/json'}
-        if HOST_AGENT_TOKEN:
-            host_agent_headers['Authorization'] = f'Bearer {HOST_AGENT_TOKEN}'
+        if _token:
+            host_agent_headers['Authorization'] = f'Bearer {_token}'
         
         async with httpx.AsyncClient(timeout=60.0) as client:
             # Step 1: Check if MLX is already running directly
@@ -2080,6 +2109,224 @@ async def ensure_mlx_running(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         }
+    )
+
+
+@router.get("/mlx/setup")
+async def setup_mlx_full(
+    request: Request,
+    admin: dict = Depends(verify_admin_token)
+):
+    """
+    SSE endpoint that orchestrates first-time MLX setup via the host-agent.
+
+    Steps:
+      1. Install MLX Python deps (mlx-lm, huggingface_hub) into venv
+      2. Download all required models (LLM + STT/TTS/image media models)
+      3. Start MLX server in dual mode
+      4. Verify MLX server is serving models
+
+    If MLX is already running the endpoint short-circuits with success.
+    Called by the setup wizard's mlx-ensure step during Phase 2 deployment.
+    """
+    async def event_generator():
+        def sse_event(event_type: str, message: str, done: bool = False) -> str:
+            return f"data: {json.dumps({'type': event_type, 'message': message, 'done': done})}\n\n"
+
+        llm_backend = LLM_BACKEND or "unknown"
+        if llm_backend != "mlx":
+            yield sse_event("info", f"LLM backend is {llm_backend}, MLX setup not needed")
+            yield sse_event("success", "Skipped (not MLX)", done=True)
+            return
+
+        _token = _resolve_host_agent_token()
+        host_agent_headers: dict[str, str] = {"Content-Type": "application/json"}
+        if _token:
+            host_agent_headers["Authorization"] = f"Bearer {_token}"
+
+        # Quick check: if MLX is already healthy, nothing to do.
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{MLX_SERVER_URL}/v1/models")
+                if resp.status_code == 200:
+                    model_count = len(resp.json().get("data", []))
+                    yield sse_event("success", f"MLX already running ({model_count} model(s))", done=True)
+                    return
+        except Exception:
+            pass
+
+        # Verify host-agent is reachable.
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{HOST_AGENT_URL}/health", headers=host_agent_headers)
+                if resp.status_code != 200:
+                    yield sse_event("error", f"Host-agent health returned {resp.status_code}", done=True)
+                    return
+        except httpx.ConnectError:
+            yield sse_event("error", "Host-agent not reachable. Run Phase 1 host setup first.", done=True)
+            return
+        except Exception as exc:
+            yield sse_event("error", f"Host-agent error: {exc}", done=True)
+            return
+
+        yield sse_event("info", "Host-agent is reachable, starting MLX setup...")
+
+        # Step 1: Install MLX Python dependencies via host-agent
+        yield sse_event("info", "Step 1/4: Installing MLX Python dependencies...")
+        step1_ok = False
+        try:
+            async with httpx.AsyncClient() as client:
+                async with client.stream(
+                    "POST",
+                    f"{HOST_AGENT_URL}/setup/mlx",
+                    headers=host_agent_headers,
+                    json={"packages": ["mlx-lm", "huggingface_hub"]},
+                    timeout=httpx.Timeout(10.0, read=600.0),
+                ) as resp:
+                    if resp.status_code != 200:
+                        yield sse_event("error", f"Host-agent /setup/mlx returned {resp.status_code}", done=True)
+                        return
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: "):
+                            try:
+                                data = json.loads(line[6:])
+                                yield f"{line}\n\n"
+                                if data.get("done"):
+                                    step1_ok = data.get("type") == "success"
+                            except Exception:
+                                yield f"{line}\n\n"
+        except Exception as exc:
+            yield sse_event("error", f"Dependency install failed: {exc}", done=True)
+            return
+
+        if not step1_ok:
+            yield sse_event("error", "MLX dependency installation failed", done=True)
+            return
+        yield sse_event("info", "MLX dependencies installed successfully")
+
+        # Step 2: Download required models (LLM + media) via host-agent
+        yield sse_event("info", "Step 2/4: Checking required models...")
+
+        # Query host-agent for all required models (LLM + STT/TTS/image)
+        models_to_download: list[str] = []
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{HOST_AGENT_URL}/models/required",
+                    headers=host_agent_headers,
+                )
+                if resp.status_code == 200:
+                    required = resp.json()
+                    for m in required.get("models", []):
+                        if not m.get("cached"):
+                            models_to_download.append(m["name"])
+                    if models_to_download:
+                        yield sse_event("info", f"{len(models_to_download)} model(s) to download: {', '.join(models_to_download)}")
+                    else:
+                        yield sse_event("info", "All required models already cached")
+                else:
+                    yield sse_event("warning", f"Could not query required models ({resp.status_code}), falling back to test model only")
+                    models_to_download = ["mlx-community/Qwen3-0.6B-4bit"]
+        except Exception as exc:
+            yield sse_event("warning", f"Could not query required models ({exc}), falling back to test model only")
+            models_to_download = ["mlx-community/Qwen3-0.6B-4bit"]
+
+        # Download each missing model
+        for idx, model_name in enumerate(models_to_download, 1):
+            yield sse_event("info", f"Downloading model {idx}/{len(models_to_download)}: {model_name}...")
+            model_ok = False
+            try:
+                async with httpx.AsyncClient() as client:
+                    async with client.stream(
+                        "POST",
+                        f"{HOST_AGENT_URL}/mlx/models/download",
+                        headers=host_agent_headers,
+                        json={"model": model_name},
+                        timeout=httpx.Timeout(10.0, read=600.0),
+                    ) as resp:
+                        if resp.status_code != 200:
+                            yield sse_event("warning", f"Download of {model_name} returned {resp.status_code}, skipping")
+                            model_ok = True
+                        else:
+                            async for line in resp.aiter_lines():
+                                if line.startswith("data: "):
+                                    try:
+                                        data = json.loads(line[6:])
+                                        yield f"{line}\n\n"
+                                        if data.get("done"):
+                                            model_ok = data.get("type") != "error"
+                                    except Exception:
+                                        yield f"{line}\n\n"
+            except Exception as exc:
+                yield sse_event("warning", f"Download of {model_name} failed: {exc}, skipping")
+                model_ok = True
+
+            if model_ok:
+                yield sse_event("info", f"Model {model_name} ready")
+            else:
+                yield sse_event("warning", f"Model {model_name} download had issues, continuing")
+
+        yield sse_event("info", "Model downloads complete")
+
+        # Step 3: Start MLX server via host-agent
+        yield sse_event("info", "Step 3/4: Starting MLX server...")
+        mlx_start_ok = False
+        try:
+            async with httpx.AsyncClient() as client:
+                async with client.stream(
+                    "POST",
+                    f"{HOST_AGENT_URL}/mlx/start",
+                    headers=host_agent_headers,
+                    json={"model_type": "agent"},
+                    timeout=httpx.Timeout(10.0, read=300.0),
+                ) as resp:
+                    if resp.status_code != 200:
+                        yield sse_event("error", f"MLX start returned {resp.status_code}", done=True)
+                        return
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: "):
+                            try:
+                                data = json.loads(line[6:])
+                                yield f"{line}\n\n"
+                                if data.get("done"):
+                                    mlx_start_ok = data.get("type") in ("success", "warning")
+                            except Exception:
+                                yield f"{line}\n\n"
+        except httpx.ConnectError:
+            yield sse_event("error", "Host-agent lost during MLX start", done=True)
+            return
+        except Exception as exc:
+            yield sse_event("error", f"MLX start error: {exc}", done=True)
+            return
+
+        if not mlx_start_ok:
+            yield sse_event("error", "MLX server failed to start", done=True)
+            return
+
+        # Step 4: Verify MLX is serving models
+        yield sse_event("info", "Step 4/4: Verifying MLX server...")
+        for attempt in range(10):
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    resp = await client.get(f"{MLX_SERVER_URL}/v1/models")
+                    if resp.status_code == 200:
+                        model_count = len(resp.json().get("data", []))
+                        yield sse_event("success", f"MLX server verified — {model_count} model(s) loaded", done=True)
+                        return
+            except Exception:
+                pass
+            await asyncio.sleep(3)
+
+        yield sse_event("warning", "MLX server started but not yet responding — it may need more time to load", done=True)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -2201,9 +2448,10 @@ async def validate_llm_chain(
         llm_url = ''
         
         # Build headers for host-agent (requires auth)
+        _token = _resolve_host_agent_token()
         host_agent_headers = {'Content-Type': 'application/json'}
-        if HOST_AGENT_TOKEN:
-            host_agent_headers['Authorization'] = f'Bearer {HOST_AGENT_TOKEN}'
+        if _token:
+            host_agent_headers['Authorization'] = f'Bearer {_token}'
         
         # Try to detect/start MLX via host-agent
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -2737,8 +2985,9 @@ litellm_settings:
 def _host_agent_headers() -> dict:
     """Build auth headers for host-agent requests."""
     headers = {}
-    if HOST_AGENT_TOKEN:
-        headers["Authorization"] = f"Bearer {HOST_AGENT_TOKEN}"
+    _token = _resolve_host_agent_token()
+    if _token:
+        headers["Authorization"] = f"Bearer {_token}"
     return headers
 
 

@@ -116,6 +116,34 @@ ALL_SERVICES="authz postgres redis milvus minio neo4j proxy nginx litellm vllm m
 # Service Metadata Functions
 # ============================================================================
 
+# Map service name to Docker compose service hostname.
+# These match the 'hostname:' directive in docker-compose.yml.
+_get_docker_hostname() {
+    local service=$1
+    case "$service" in
+        authz|authz_api|authz-api) echo "authz-api" ;;
+        postgres|pg) echo "postgres" ;;
+        redis) echo "redis" ;;
+        milvus) echo "milvus" ;;
+        minio|files) echo "minio" ;;
+        neo4j|graph) echo "neo4j" ;;
+        data|data_api|data-api) echo "data-api" ;;
+        data_worker|data-worker) echo "data-worker" ;;
+        search_api|search-api) echo "search-api" ;;
+        agent_api|agent-api) echo "agent-api" ;;
+        deploy_api|deploy-api) echo "deploy-api" ;;
+        bridge|bridge_api|bridge-api) echo "bridge-api" ;;
+        docs_api|docs-api) echo "docs-api" ;;
+        embedding|embedding_api|embedding-api) echo "embedding-api" ;;
+        litellm) echo "litellm" ;;
+        ai_portal|busibox-portal) echo "core-apps" ;;
+        agent_manager|busibox-agents) echo "core-apps" ;;
+        app_builder|busibox_appbuilder|busibox-appbuilder) echo "core-apps" ;;
+        nginx|proxy) echo "proxy" ;;
+        *) echo "localhost" ;;
+    esac
+}
+
 # Get service definition
 # Usage: _get_service_def "authz"
 _get_service_def() {
@@ -285,8 +313,14 @@ get_service_ip() {
     local backend=${3:-proxmox}
     
     if [[ "$backend" == "docker" ]]; then
-        # Docker uses localhost
-        echo "localhost"
+        # Inside the manager container, localhost is the manager itself.
+        # Use Docker compose service hostnames so health checks reach the
+        # actual service containers via the shared Docker network.
+        if [[ -f /.dockerenv ]]; then
+            _get_docker_hostname "$service"
+        else
+            echo "localhost"
+        fi
         return 0
     fi
     

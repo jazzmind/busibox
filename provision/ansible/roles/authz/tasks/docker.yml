@@ -32,12 +32,12 @@
 
 - name: Verify AuthZ API health endpoint
   ansible.builtin.uri:
-    # Use Docker service hostname (manager runs on Docker network)
-    url: "http://authz-api:{{ authz_port }}/health/live"
+    # Use localhost (port is mapped to host)
+    url: "http://localhost:{{ authz_port }}/health/live"
     method: GET
     status_code: [200]
   register: authz_health
-  retries: 10
+  retries: 20
   delay: 5
   until: authz_health.status == 200
 
@@ -45,5 +45,5 @@
   ansible.builtin.debug:
     msg: |
       AuthZ API is running and ready
-      Health: http://authz-api:{{ authz_port }}/health/live
-      API: http://authz-api:{{ authz_port }}
+      Health: http://localhost:{{ authz_port }}/health/live
+      API: http://localhost:{{ authz_port }}

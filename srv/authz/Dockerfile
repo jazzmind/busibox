@@ -39,7 +39,7 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 8010
 
 # Health check using Python (no curl needed)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=6 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8010/health/live')" || exit 1
 
 # Run the application

@@ -315,7 +315,7 @@ verify_service_health() {
     
     # Check services via HTTP health endpoints (doesn't require SSH)
     check_service "Proxy/Nginx" "$proxy_ip" "curl -sf --connect-timeout 3 -k 'https://$proxy_ip/health' || curl -sf --connect-timeout 3 'http://$proxy_ip:80'" || true
-    check_service "AuthZ API" "$authz_ip" "curl -sf --connect-timeout 3 'http://$authz_ip:8010/health'" || true
+    check_service "AuthZ API" "$authz_ip" "curl -sf --connect-timeout 3 'http://$authz_ip:8010/health/live'" || true
     check_service "Data API" "$data_ip" "curl -sf --connect-timeout 3 'http://$data_ip:8002/health'" || true
     check_service "Search API" "$milvus_ip" "curl -sf --connect-timeout 3 'http://$milvus_ip:8003/health'" || true
     check_service "Agent API" "$agent_ip" "curl -sf --connect-timeout 3 'http://$agent_ip:8000/health'" || true

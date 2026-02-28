@@ -25,13 +25,13 @@ tiers:
     max_ram_gb: 23
     description: "Lightweight models for basic demos"
     mlx:
-      fast: "mlx-community/Qwen2.5-1.5B-Instruct-4bit"      # ~1GB
-      agent: "mlx-community/Qwen2.5-3B-Instruct-4bit"       # ~2GB
-      frontier: "mlx-community/Qwen2.5-7B-Instruct-4bit"    # ~4GB
+      fast: "mlx-community/Qwen3-0.6B-4bit"                 # ~0.3GB
+      agent: "mlx-community/Qwen3-0.6B-4bit"                # ~0.3GB
+      frontier: "mlx-community/Qwen3-0.6B-4bit"             # ~0.3GB
     vllm:
-      fast: "Qwen/Qwen2.5-1.5B-Instruct-AWQ"
-      agent: "Qwen/Qwen2.5-3B-Instruct-AWQ"
-      frontier: "Qwen/Qwen2.5-7B-Instruct-AWQ"
+      fast: "Qwen/Qwen3-0.6B-AWQ"
+      agent: "Qwen/Qwen3-0.6B-AWQ"
+      frontier: "Qwen/Qwen3-0.6B-AWQ"
 
   # 24GB - MacBook Pro 14"
   # ~8GB reserved, ~16GB for models

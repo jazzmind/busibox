@@ -16,6 +16,8 @@
  *
  * Environment:
  *   ROOT_DIR              - Monorepo root (default: /srv/busibox-frontend)
+ *   ENABLED_APPS          - Comma-separated app names to start (default: all)
+ *                           e.g. "portal,admin" to only run portal and admin
  *   CORE_APPS_MODE        - Global default mode: "dev" or "prod"
  *   INITIAL_APP_MODES     - JSON override: {"portal":"prod","admin":"dev",...}
  */
@@ -58,6 +60,20 @@ const APP_DEFS = [
   { name: 'media',     filter: '@busibox/media',      port: 3005, basePath: '/media',     color: 'red',     extraEnv: {} },
   { name: 'documents', filter: '@busibox/documents',   port: 3006, basePath: '/documents', color: 'white',   extraEnv: {} },
 ];
+
+function getEnabledAppDefs() {
+  const envVal = process.env.ENABLED_APPS;
+  if (!envVal || envVal.trim() === '' || envVal.trim().toLowerCase() === 'all') {
+    return APP_DEFS;
+  }
+  const enabled = new Set(envVal.split(',').map(s => s.trim().toLowerCase()));
+  const filtered = APP_DEFS.filter(d => enabled.has(d.name));
+  if (filtered.length === 0) {
+    console.error(`[manager] WARNING: ENABLED_APPS="${envVal}" matched no apps, starting all`);
+    return APP_DEFS;
+  }
+  return filtered;
+}
 
 const apps = new Map();
 let appLibProc = null;
@@ -612,11 +628,15 @@ async function main() {
   managerLog('Starting app-manager...');
   managerLog(`ROOT_DIR: ${ROOT_DIR}`);
 
+  const enabledDefs = getEnabledAppDefs();
+  const enabledNames = new Set(enabledDefs.map(d => d.name));
+  managerLog(`Enabled apps: ${enabledDefs.map(d => d.name).join(', ')}`);
+
   const modes = getInitialModes();
   managerLog(`Initial modes: ${JSON.stringify(modes)}`);
 
-  // Clean stale .next caches from volume mounts on startup
-  for (const def of APP_DEFS) {
+  // Clean stale .next caches from volume mounts on startup (enabled apps only)
+  for (const def of enabledDefs) {
     const mode = modes[def.name];
     const nextDir = path.join(ROOT_DIR, 'apps', def.name, '.next');
     if (fs.existsSync(nextDir)) {
@@ -629,12 +649,12 @@ async function main() {
     }
   }
 
-  // Check if any apps need prod builds
-  const needsBuild = Object.entries(modes).filter(([, mode]) => mode === 'prod');
+  // Check if any enabled apps need prod builds
+  const needsBuild = Object.entries(modes).filter(([name, mode]) => mode === 'prod' && enabledNames.has(name));
   if (needsBuild.length > 0) {
     managerLog(`Building ${needsBuild.length} app(s) for production mode...`);
     for (const [appName] of needsBuild) {
-      const def = APP_DEFS.find(d => d.name === appName);
+      const def = enabledDefs.find(d => d.name === appName);
       if (def) {
         const built = await buildApp(def);
         if (!built) {
@@ -645,16 +665,16 @@ async function main() {
     }
   }
 
-  // Check if any apps are in dev mode — only start app-lib watcher if needed
-  const hasDevApps = Object.values(modes).some(m => m === 'dev');
+  // Check if any enabled apps are in dev mode — only start app-lib watcher if needed
+  const hasDevApps = enabledDefs.some(d => modes[d.name] === 'dev');
   if (hasDevApps) {
     appLibProc = startAppLib();
   } else {
     managerLog('All apps in prod mode, skipping app-lib watcher');
   }
 
-  // Start all apps
-  for (const def of APP_DEFS) {
+  // Start enabled apps only
+  for (const def of enabledDefs) {
     const mode = modes[def.name];
     const proc = startApp(def, mode);
     apps.set(def.name, {
