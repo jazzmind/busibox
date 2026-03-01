@@ -254,6 +254,12 @@ fn main() -> Result<()> {
             terminal = tui::resume()?;
         }
 
+        // Handle admin login credential generation (runs make login --json)
+        if app.pending_admin_login {
+            app.pending_admin_login = false;
+            handle_admin_login(&mut app);
+        }
+
         // Handle interactive commands (like logs) that need TUI suspended
         if let Some(cmd) = app.pending_interactive_cmd.take() {
             tui::suspend()?;
@@ -340,6 +346,7 @@ fn render(app: &App, f: &mut ratatui::Frame) {
         Screen::Manage => screens::manage::render(f, app),
         Screen::ProfileSelect => screens::profile_select::render(f, app),
         Screen::ProfileEdit => screens::profile_edit::render(f, app),
+        Screen::AdminLogin => screens::admin_login::render(f, app),
     }
 }
 
@@ -353,6 +360,7 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
         && !app.manage_log_visible
         && !app.profile_editing
         && !app.profile_edit_tier_selecting
+        && app.screen != Screen::AdminLogin
     {
         app.should_quit = true;
         return;
@@ -372,6 +380,7 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
         Screen::Manage => screens::manage::handle_key(app, key),
         Screen::ProfileSelect => screens::profile_select::handle_key(app, key),
         Screen::ProfileEdit => screens::profile_edit::handle_key(app, key),
+        Screen::AdminLogin => screens::admin_login::handle_key(app, key),
     }
 }
 
@@ -470,6 +479,288 @@ fn perform_resume_install(app: &mut App) {
     app.clear_message();
     app.screen = Screen::Install;
     app.menu_selected = 0;
+}
+
+/// Generate admin login credentials by running `make login --json` and parsing output.
+fn handle_admin_login(app: &mut App) {
+    use crate::app::SetupTarget;
+    use crate::modules::remote;
+    use std::process::Command;
+
+    let mut debug_info = String::new();
+    #[allow(unused_assignments)]
+    let mut debug_output = String::new();
+
+    let is_remote = app.setup_target == SetupTarget::Remote
+        || app
+            .active_profile()
+            .map(|(_, p)| p.remote)
+            .unwrap_or(false);
+
+    // Get admin email from active profile, falling back to the transient input field
+    let admin_email: Option<String> = app
+        .active_profile()
+        .and_then(|(_, p)| p.admin_email.clone())
+        .or_else(|| {
+            if app.admin_email_input.is_empty() {
+                None
+            } else {
+                Some(app.admin_email_input.clone())
+            }
+        });
+
+    let busibox_env: Option<String> = app
+        .active_profile()
+        .map(|(_, p)| p.environment.clone());
+
+    let busibox_backend: Option<String> = app
+        .active_profile()
+        .map(|(_, p)| p.backend.clone());
+
+    debug_info.push_str(&format!("email={:?}", admin_email));
+
+    // Ensure SSH connection is established for remote
+    if is_remote && app.ssh_connection.is_none() {
+        if let Some((_, profile)) = app.active_profile() {
+            if let (Some(host), Some(key)) = (&profile.remote_host, &profile.remote_ssh_key) {
+                let user = profile.remote_user.as_deref().unwrap_or("root");
+                let conn = crate::modules::ssh::SshConnection::new(host, user, key);
+                if conn.test_connection() {
+                    app.ssh_connection = Some(conn);
+                } else {
+                    app.admin_login_loading = false;
+                    app.admin_login_error =
+                        Some("SSH connection failed — cannot reach remote host".into());
+                    return;
+                }
+            } else {
+                app.admin_login_loading = false;
+                app.admin_login_error =
+                    Some("No SSH credentials configured in profile".into());
+                return;
+            }
+        }
+    }
+
+    let result = if is_remote {
+        if let Some(ssh) = &app.ssh_connection {
+            let remote_path = app
+                .active_profile()
+                .map(|(_, p)| p.effective_remote_path().to_string())
+                .unwrap_or_else(|| app.remote_path_input.clone());
+
+            // Build the remote command with ADMIN_EMAIL env var
+            let email_export = if let Some(ref email) = admin_email {
+                let escaped = email.replace('\'', "'\\''");
+                format!("export ADMIN_EMAIL='{escaped}'; ")
+            } else {
+                String::new()
+            };
+
+            let vault_export = if let Some(ref vault_pw) = app.vault_password {
+                let escaped = vault_pw.replace('\'', "'\\''");
+                format!("export ANSIBLE_VAULT_PASSWORD='{escaped}'; ")
+            } else {
+                String::new()
+            };
+
+            let env_export = if let Some(ref env_val) = busibox_env {
+                let escaped = env_val.replace('\'', "'\\''");
+                format!("export BUSIBOX_ENV='{escaped}'; ")
+            } else {
+                String::new()
+            };
+
+            let backend_export = if let Some(ref backend_val) = busibox_backend {
+                let escaped = backend_val.replace('\'', "'\\''");
+                format!("export BUSIBOX_BACKEND='{escaped}'; ")
+            } else {
+                String::new()
+            };
+
+            let cmd = format!(
+                "{preamble}\
+                 [ -f \"$HOME/.profile\" ] && . \"$HOME/.profile\" 2>/dev/null || true; \
+                 [ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\" 2>/dev/null || true; \
+                 {vault_export}{email_export}{env_export}{backend_export}export JSON_OUTPUT=1; \
+                 cd {remote_path} && bash scripts/make/login.sh 2>&1",
+                preamble = remote::SHELL_PATH_PREAMBLE,
+                vault_export = vault_export,
+                email_export = email_export,
+                env_export = env_export,
+                backend_export = backend_export,
+                remote_path = remote_path,
+            );
+            debug_info.push_str(&format!(" | env={:?} backend={:?} remote_cmd_len={}", busibox_env, busibox_backend, cmd.len()));
+
+            let mut args: Vec<String> = vec![
+                "-o".into(),
+                "BatchMode=yes".into(),
+                "-o".into(),
+                "StrictHostKeyChecking=accept-new".into(),
+                "-o".into(),
+                "ConnectTimeout=10".into(),
+            ];
+            let key = crate::modules::ssh::shellexpand_path(&ssh.key_path);
+            if !key.is_empty() && std::path::Path::new(&key).exists() {
+                args.push("-i".into());
+                args.push(key);
+            }
+            args.push(ssh.ssh_target());
+            args.push(cmd);
+
+            match Command::new("ssh").args(&args).output() {
+                Ok(output) => {
+                    let exit_code = output.status.code().unwrap_or(1);
+                    let combined = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    Ok((exit_code, remote::strip_ansi(&combined)))
+                }
+                Err(e) => Err(color_eyre::eyre::eyre!("SSH command failed: {e}")),
+            }
+        } else {
+            Err(color_eyre::eyre::eyre!("No SSH connection"))
+        }
+    } else {
+        // Local execution: run login.sh directly so env vars are inherited (make does not export CLI vars)
+        let mut cmd = Command::new("bash");
+        cmd.args(["scripts/make/login.sh"])
+            .env("JSON_OUTPUT", "1")
+            .current_dir(&app.repo_root);
+
+        if let Some(ref email) = admin_email {
+            cmd.env("ADMIN_EMAIL", email);
+        }
+        if let Some(ref vault_pw) = app.vault_password {
+            cmd.env("ANSIBLE_VAULT_PASSWORD", vault_pw);
+        }
+        if let Some(ref env_val) = busibox_env {
+            cmd.env("BUSIBOX_ENV", env_val);
+        }
+        if let Some(ref backend_val) = busibox_backend {
+            cmd.env("BUSIBOX_BACKEND", backend_val);
+        }
+
+        debug_info.push_str(" | local_cmd=bash scripts/make/login.sh");
+
+        match cmd.output() {
+            Ok(output) => {
+                let exit_code = output.status.code().unwrap_or(1);
+                let combined = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                Ok((exit_code, remote::strip_ansi(&combined)))
+            }
+            Err(e) => Err(color_eyre::eyre::eyre!("login failed: {e}")),
+        }
+    };
+
+    match result {
+        Ok((exit_code, output)) => {
+            debug_info.push_str(&format!(" | exit={} output_len={}", exit_code, output.len()));
+            debug_output = output.chars().take(500).collect::<String>();
+            if let Some(creds) = screens::admin_login::parse_login_json(&output) {
+                let mut magic_link = creds.magic_link;
+                let mut verify_url = creds.verify_url;
+
+                // For bootstrap state, use /portal/setup instead of /portal/verify
+                if app.deployment_state == crate::app::DeploymentState::BootstrapComplete {
+                    magic_link = magic_link.replace("/portal/verify", "/portal/setup");
+                    verify_url = verify_url.replace("/portal/verify", "/portal/setup");
+                }
+
+                // For remote profiles, rewrite URLs to use localhost:4443 (SSH tunnel)
+                if is_remote {
+                    // Replace https://localhost/ or https://DOMAIN/ with https://localhost:4443/
+                    let re_domain = |url: &str| -> String {
+                        if let Some(path_start) = url.find("/portal/") {
+                            format!("https://localhost:4443{}", &url[path_start..])
+                        } else {
+                            url.to_string()
+                        }
+                    };
+                    magic_link = re_domain(&magic_link);
+                    verify_url = re_domain(&verify_url);
+
+                    // Start SSH tunnel if not already running
+                    if app.ssh_tunnel_process.is_none() {
+                        if let Some(ssh) = &app.ssh_connection {
+                            let key = crate::modules::ssh::shellexpand_path(&ssh.key_path);
+                            let mut tunnel_args: Vec<String> = vec![
+                                "-N".into(),
+                                "-L".into(),
+                                "4443:localhost:443".into(),
+                                "-o".into(),
+                                "StrictHostKeyChecking=accept-new".into(),
+                                "-o".into(),
+                                "ExitOnForwardFailure=yes".into(),
+                            ];
+                            if !key.is_empty() && std::path::Path::new(&key).exists() {
+                                tunnel_args.push("-i".into());
+                                tunnel_args.push(key);
+                            }
+                            tunnel_args.push(ssh.ssh_target());
+
+                            match Command::new("ssh").args(&tunnel_args).spawn() {
+                                Ok(child) => {
+                                    app.ssh_tunnel_process = Some(child);
+                                }
+                                Err(_e) => {
+                                    // Non-fatal: tunnel failed but links are still shown
+                                }
+                            }
+                        }
+                    }
+                }
+
+                app.admin_login_magic_link = Some(magic_link);
+                app.admin_login_totp_code = if creds.totp_code.is_empty() {
+                    None
+                } else {
+                    Some(creds.totp_code)
+                };
+                app.admin_login_verify_url = if verify_url.is_empty() {
+                    None
+                } else {
+                    Some(verify_url)
+                };
+                app.admin_login_error = None;
+            } else {
+                // Try to find error in output
+                let error_msg = if output.contains("error") || output.contains("ERROR") {
+                    output
+                        .lines()
+                        .find(|l| {
+                            let lower = l.to_lowercase();
+                            lower.contains("error") || lower.contains("failed")
+                        })
+                        .unwrap_or("Unknown error")
+                        .trim()
+                        .to_string()
+                } else {
+                    format!("Could not parse login output (exit code {exit_code})")
+                };
+                app.admin_login_error = Some(error_msg);
+            }
+        }
+        Err(e) => {
+            debug_info.push_str(&format!(" | err={}", e));
+            debug_output = format!("{}", e);
+            app.admin_login_error = Some(format!("Failed to run login: {e}"));
+        }
+    }
+
+    if let Some(ref mut err) = app.admin_login_error {
+        let truncated_output: String = debug_output.chars().take(800).collect();
+        *err = format!("[DEBUG] {}\n[OUTPUT] {}", debug_info, truncated_output);
+    }
+
+    app.admin_login_loading = false;
 }
 
 /// Handle vault setup with interactive password prompts.

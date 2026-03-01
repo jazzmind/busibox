@@ -1,44 +1,28 @@
 # =============================================================================
-# Busibox GitHub Mode - Next.js Applications (Runtime Installation)
+# Busibox Production/Staging Mode - Core Apps (Monorepo)
 # =============================================================================
 #
-# GitHub overlay for Next.js apps with:
-#   - Apps cloned from GitHub at RUNTIME (not build time)
-#   - Published @jazzmind/busibox-app from npm registry
-#   - Production builds inside running container
-#   - Persistent volumes for app code (survives container restarts)
+# Production overlay for Next.js apps:
+#   - Clones busibox-frontend monorepo at runtime
+#   - Builds enabled apps with pnpm and standalone output
+#   - Supervisord manages per-app Node.js processes
+#   - Persistent volume for monorepo (survives container restarts)
 #
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.github.yml up
-#   Or: make docker-up-github
 #
 # Configuration:
-#   Set these in .env.local to control which version to deploy:
-#     BUSIBOX_PORTAL_GITHUB_REF=main          # Branch name
-#     BUSIBOX_PORTAL_GITHUB_REF=v1.2.3        # Release tag
-#     BUSIBOX_AGENTS_GITHUB_REF=main      # Branch name
-#
-# Core Apps Architecture:
-#   - Lightweight container with supervisord
-#   - Apps deployed at runtime via Deploy API or on first start
-#   - Supervisord manages app processes
-#   - Mirrors Proxmox pattern where apps-lxc hosts multiple Next.js apps
+#   BUSIBOX_FRONTEND_GITHUB_REF=main          # Branch name (default)
+#   BUSIBOX_FRONTEND_GITHUB_REF=v1.2.3        # Release tag
 #
 # First Start:
 #   - Container builds quickly (no app code)
-#   - Apps are cloned and built on first start (~3-5 min)
-#   - Subsequent starts are fast (apps in persistent volumes)
-#
-# Updating Apps:
-#   - Use Deploy API: POST /api/v1/deployment/deploy
-#   - Or: docker compose exec core-apps /usr/local/bin/entrypoint.sh deploy busibox-portal main
-#   - No container rebuild needed!
+#   - Monorepo is cloned and apps are built on first start (~5 min)
+#   - Subsequent starts are fast (apps in persistent volume)
 #
 # =============================================================================
 
 services:
-  # Core Apps - Busibox Portal + Agent Manager + App Builder (Runtime Installation Mode)
-  # Lightweight container with supervisord, apps deployed at runtime
   core-apps:
     build:
       context: ./provision/docker
@@ -47,21 +31,15 @@ services:
     hostname: core-apps
     restart: "no"
     extra_hosts:
-      - "host.docker.internal:host-gateway"  # Access host's localhost from container
+      - "host.docker.internal:host-gateway"
     environment:
       NODE_ENV: production
       # GitHub authentication for cloning repos and npm packages
       GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
+      # Monorepo version to deploy
+      BUSIBOX_FRONTEND_GITHUB_REF: ${BUSIBOX_FRONTEND_GITHUB_REF:-main}
       # Which apps to deploy and start (comma-separated). Default: portal,admin.
       ENABLED_APPS: ${ENABLED_APPS:-portal,admin}
-      # Git refs for app deployment (used on first start)
-      BUSIBOX_PORTAL_GITHUB_REF: ${BUSIBOX_PORTAL_GITHUB_REF:-main}
-      BUSIBOX_AGENTS_GITHUB_REF: ${BUSIBOX_AGENTS_GITHUB_REF:-main}
-      BUSIBOX_APPBUILDER_GITHUB_REF: ${BUSIBOX_APPBUILDER_GITHUB_REF:-main}
-      BUSIBOX_ADMIN_GITHUB_REF: ${BUSIBOX_ADMIN_GITHUB_REF:-main}
-      BUSIBOX_CHAT_GITHUB_REF: ${BUSIBOX_CHAT_GITHUB_REF:-main}
-      BUSIBOX_MEDIA_GITHUB_REF: ${BUSIBOX_MEDIA_GITHUB_REF:-main}
-      BUSIBOX_DOCUMENTS_GITHUB_REF: ${BUSIBOX_DOCUMENTS_GITHUB_REF:-main}
       # =========================================================================
       # Busibox Portal Environment (PORT 3000)
       # =========================================================================
@@ -99,27 +77,24 @@ services:
       DATA_API_URL: http://data-api:8002
       SEARCH_API_URL: http://search-api:8003
       AGENT_API_URL: http://agent-api:8000
-      # Docs API - internal container URL for server-side fetching
+      # Docs API
       DOCS_API_URL: http://docs-api:8004
-      # Deployment Service - internal container URL for server-side deployment
+      # Deployment Service
       DEPLOYMENT_SERVICE_URL: http://deploy-api:8011/api/v1/deployment
-      # Bridge API - email sending and multi-channel communication
+      # Bridge API
       BRIDGE_API_URL: http://bridge-api:8081
       # =========================================================================
       # Agent Manager Environment (PORT 3001)
       # =========================================================================
-      # API URLs - use nginx proxy paths for CORS compliance
       NEXT_PUBLIC_AGENT_API_URL: https://localhost/api/agent
       NEXT_PUBLIC_DATA_API_URL: https://localhost/api/data
       NEXT_PUBLIC_SEARCH_API_URL: https://localhost/api/search
-      # Busibox Portal (SSO) via nginx
       NEXT_PUBLIC_BUSIBOX_PORTAL_URL: https://localhost/portal
       BUILDER_PROJECT_ROOT: /srv/projects
       BUILDER_TEMPLATE_SOURCE: /srv/projects/templates/busibox-template
       BUILDER_LIBRARY_OWNER: ${BUILDER_LIBRARY_OWNER:-jazzmind}
       BUILDER_LIBRARY_REPO: ${BUILDER_LIBRARY_REPO:-busibox-app-library}
     ports:
-      # Direct app ports (optional, for debugging)
       - "3000:3000"
       - "3001:3001"
       - "3002:3002"
@@ -128,17 +103,10 @@ services:
       - "3005:3005"
       - "3006:3006"
     volumes:
-      # Persistent app directories - apps survive container restarts
-      - core-apps-portal:/srv/busibox-portal
-      - core-apps-agent:/srv/busibox-agents
-      - core-apps-admin:/srv/busibox-admin
-      - core-apps-chat:/srv/busibox-chat
-      - core-apps-appbuilder:/srv/busibox-appbuilder
-      - core-apps-media:/srv/busibox-media
-      - core-apps-documents:/srv/busibox-documents
-      # Supervisor logs (optional, for debugging)
+      # Persistent monorepo directory - survives container restarts
+      - core-apps-frontend:/srv/busibox-frontend
+      # Supervisor logs
       - core-apps-logs:/var/log/supervisor
-      # Dynamic app configs are managed by deploy-api in the proxy container.
     depends_on:
       postgres:
         condition: service_healthy
@@ -146,7 +114,6 @@ services:
         condition: service_healthy
       proxy:
         condition: service_healthy
-    # Resource limits - standalone mode keeps each app under 512MB
     deploy:
       resources:
         limits:
@@ -156,49 +123,30 @@ services:
           cpus: '0.5'
           memory: 512M
     healthcheck:
-      # Portal runs with NEXT_PUBLIC_BASE_PATH=/portal, so root (/) returns 404.
-      # Use the basePath-aware health endpoint instead.
       test: ["CMD", "curl", "-f", "http://localhost:3000/portal/api/health"]
       interval: 30s
       timeout: 10s
-      # Longer start_period for first-time app deployment (clone + build)
       start_period: 300s
       retries: 3
     networks:
       busibox-net:
         aliases:
           - core-apps
-          - busibox-portal      # Backward compatibility alias
-          - busibox-agents      # Backward compatibility alias
-          - busibox-admin       # Backward compatibility alias
-          - busibox-chat        # Backward compatibility alias
-          - busibox-appbuilder  # Backward compatibility alias
-          - busibox-media       # Backward compatibility alias
-          - busibox-documents   # Backward compatibility alias
+          - busibox-portal
+          - busibox-agents
+          - busibox-admin
+          - busibox-chat
+          - busibox-appbuilder
+          - busibox-media
+          - busibox-documents
 
-# Use the same network as the base compose
-# Note: Don't use external:true - let docker compose manage the network lifecycle
 networks:
   busibox-net:
     driver: bridge
     name: ${CONTAINER_PREFIX:-local}-busibox-net
 
-# Persistent volumes for app code and logs
-# Apps survive container restarts without needing to re-clone and rebuild
 volumes:
-  core-apps-portal:
-    name: ${CONTAINER_PREFIX:-local}-core-apps-portal
-  core-apps-agent:
-    name: ${CONTAINER_PREFIX:-local}-core-apps-agent
-  core-apps-admin:
-    name: ${CONTAINER_PREFIX:-local}-core-apps-admin
-  core-apps-chat:
-    name: ${CONTAINER_PREFIX:-local}-core-apps-chat
-  core-apps-appbuilder:
-    name: ${CONTAINER_PREFIX:-local}-core-apps-appbuilder
-  core-apps-media:
-    name: ${CONTAINER_PREFIX:-local}-core-apps-media
-  core-apps-documents:
-    name: ${CONTAINER_PREFIX:-local}-core-apps-documents
+  core-apps-frontend:
+    name: ${CONTAINER_PREFIX:-local}-core-apps-frontend
   core-apps-logs:
     name: ${CONTAINER_PREFIX:-local}-core-apps-logs

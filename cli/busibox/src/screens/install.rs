@@ -181,7 +181,17 @@ pub fn render(f: &mut Frame, app: &App) {
         ]));
     } else {
         // Show header
-        let models_done = app.install_models_complete || app.install_complete;
+        let all_models_terminal = !app.install_model_status.is_empty()
+            && app.install_model_status.iter().all(|(_, _, s)| {
+                matches!(
+                    s,
+                    ModelInstallState::Cached
+                        | ModelInstallState::Skipped
+                        | ModelInstallState::Failed
+                )
+            });
+        let models_done =
+            app.install_models_complete || app.install_complete || all_models_terminal;
         let all_cached = app.install_model_status.iter().all(|(_, _, s)| {
             *s == ModelInstallState::Cached || *s == ModelInstallState::Skipped
         });
@@ -416,7 +426,9 @@ fn parse_model_status_line(app: &mut App, line: &str) {
     // Skip empty lines, headers, and generic messages
     if line.is_empty()
         || line.starts_with("Downloading all models")
+        || line.starts_with("[INFO] Downloading all models")
         || line.starts_with("Model download complete")
+        || line.starts_with("[SUCCESS] Model download complete")
     {
         return;
     }
@@ -436,6 +448,12 @@ fn parse_model_status_line(app: &mut App, line: &str) {
     // "Pre-downloading Marker/Surya models..."
     if line.contains("Pre-downloading Marker") {
         update_model_state(app, "marker", "Marker/Surya", ModelInstallState::Downloading);
+        return;
+    }
+
+    // "[INFO] Skipping Marker/Surya models..." - tier too low
+    if line.contains("Skipping Marker") {
+        update_model_state(app, "marker", "Marker/Surya", ModelInstallState::Skipped);
         return;
     }
 
@@ -474,6 +492,16 @@ fn parse_model_status_line(app: &mut App, line: &str) {
             update_model_state(app, &role, "", ModelInstallState::Skipped);
         }
         return;
+    }
+
+    // "[INFO] role: not configured for tier/backend, skipping"
+    if let Some(rest) = line.strip_prefix("[INFO] ") {
+        if let Some((role, msg)) = parse_role_model(rest) {
+            if msg.contains("not configured") || msg.contains("skipping") {
+                update_model_state(app, &role, "", ModelInstallState::Skipped);
+                return;
+            }
+        }
     }
 }
 
@@ -1469,6 +1497,25 @@ echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain
                         exit 1
                     fi
 
+                    # Ensure jq is available (needed by Ansible health checks)
+                    if ! command -v jq &>/dev/null; then
+                        echo "Installing jq..."
+                        if command -v apt-get &>/dev/null; then
+                            sudo apt-get install -y -qq jq 2>&1
+                        elif command -v yum &>/dev/null; then
+                            sudo yum install -y jq 2>&1
+                        elif command -v brew &>/dev/null; then
+                            brew install --quiet jq 2>&1
+                        else
+                            echo "WARNING: jq not found and no package manager available to install it"
+                        fi
+                    fi
+                    if command -v jq &>/dev/null; then
+                        echo "✓ jq: $(jq --version)"
+                    else
+                        echo "WARNING: jq not available — health checks may not work correctly"
+                    fi
+
                     echo "✓ Prerequisites installed"
                 "#;
 
@@ -1900,10 +1947,7 @@ echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain
                 .filter(|r| !r.is_empty() && *r != "latest")
                 .unwrap_or("main");
             let ref_exports = format!(
-                "BUSIBOX_PORTAL_GITHUB_REF={ref_val} BUSIBOX_ADMIN_GITHUB_REF={ref_val} \
-                 BUSIBOX_AGENTS_GITHUB_REF={ref_val} BUSIBOX_APPBUILDER_GITHUB_REF={ref_val} \
-                 BUSIBOX_CHAT_GITHUB_REF={ref_val} BUSIBOX_MEDIA_GITHUB_REF={ref_val} \
-                 BUSIBOX_DOCUMENTS_GITHUB_REF={ref_val} \
+                "BUSIBOX_FRONTEND_GITHUB_REF={ref_val} \
                  MODEL_HOST_CACHE=$HOME/.cache \
                  HF_HOST_CACHE=$HOME/.cache/huggingface \
                  FASTEMBED_HOST_CACHE=$HOME/.cache/fastembed "

@@ -189,30 +189,69 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 
     // Menu panel
-    let menu_items = app.welcome_menu_items();
-    let items: Vec<ListItem> = menu_items
-        .iter()
-        .enumerate()
-        .map(|(i, item)| {
-            let style = if i == app.menu_selected {
+    if app.install_submenu_open {
+        let sub_items = app.install_submenu_items();
+        let selected = app.install_submenu_selected;
+
+        let mut items: Vec<ListItem> = Vec::new();
+
+        // Show deployment state context
+        let state_line = match &app.deployment_state {
+            crate::app::DeploymentState::Checking => "  Checking containers...".to_string(),
+            crate::app::DeploymentState::None => "  No containers found".to_string(),
+            crate::app::DeploymentState::Partial(n) => format!("  {n} container(s) running"),
+            crate::app::DeploymentState::BootstrapComplete => "  Bootstrap services ready — complete setup in browser".to_string(),
+            crate::app::DeploymentState::Complete => "  All services running".to_string(),
+            crate::app::DeploymentState::Unknown => "  Status unknown".to_string(),
+        };
+        items.push(ListItem::new(state_line).style(theme::dim()));
+        items.push(ListItem::new(""));
+
+        for (i, item) in sub_items.iter().enumerate() {
+            let style = if i == selected {
                 theme::selected()
             } else {
                 theme::normal()
             };
-            ListItem::new(format!("  {item}  ")).style(style)
-        })
-        .collect();
+            items.push(ListItem::new(format!("  {item}  ")).style(style));
+        }
 
-    let menu = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(theme::dim())
-                .title(" Menu ")
-                .title_style(theme::heading()),
-        )
-        .highlight_style(theme::selected());
-    f.render_widget(menu, content_chunks[1]);
+        let menu = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(theme::dim())
+                    .title(" Install / Update ")
+                    .title_style(theme::heading()),
+            )
+            .highlight_style(theme::selected());
+        f.render_widget(menu, content_chunks[1]);
+    } else {
+        let menu_items = app.welcome_menu_items();
+        let items: Vec<ListItem> = menu_items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                let style = if i == app.menu_selected {
+                    theme::selected()
+                } else {
+                    theme::normal()
+                };
+                ListItem::new(format!("  {item}  ")).style(style)
+            })
+            .collect();
+
+        let menu = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(theme::dim())
+                    .title(" Menu ")
+                    .title_style(theme::heading()),
+            )
+            .highlight_style(theme::selected());
+        f.render_widget(menu, content_chunks[1]);
+    }
 
     // Status bar
     let status_text = if let Some((msg, kind)) = &app.status_message {
@@ -223,6 +262,11 @@ pub fn render(f: &mut Frame, app: &App) {
             crate::app::MessageKind::Error => theme::error(),
         };
         Span::styled(msg.as_str(), style)
+    } else if app.install_submenu_open {
+        Span::styled(
+            " ↑/↓ Navigate  Enter Select  Esc Back",
+            theme::muted(),
+        )
     } else {
         Span::styled(
             " ↑/↓ Navigate  Enter Select  m Models  x Export  p Password  b Deploy CLI  q Quit",
@@ -234,6 +278,11 @@ pub fn render(f: &mut Frame, app: &App) {
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) {
+    if app.install_submenu_open {
+        handle_submenu_key(app, key);
+        return;
+    }
+
     let menu_items = app.welcome_menu_items();
     match key.code {
         KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
@@ -253,27 +302,14 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         KeyCode::Enter => {
             let item = menu_items[app.menu_selected];
             match item {
-                "Resume Install" | "Update / Re-install" => {
-                    app.set_message(
-                        "⠋ Connecting to remote host...",
-                        crate::app::MessageKind::Info,
-                    );
-                    app.pending_resume_install = true;
-                }
-                "Clean Install" => {
-                    app.clean_install = true;
-                    app.set_message(
-                        "⠋ Preparing clean install...",
-                        crate::app::MessageKind::Info,
-                    );
-                    app.pending_resume_install = true;
+                "Install / Update" => {
+                    app.install_submenu_open = true;
+                    app.install_submenu_selected = 0;
+                    app.deployment_state = crate::app::DeploymentState::Unknown;
+                    detect_deployment_state(app);
                 }
                 "Profiles" => {
                     app.screen = Screen::ProfileSelect;
-                    app.menu_selected = 0;
-                }
-                "Manage" => {
-                    app.screen = Screen::Manage;
                     app.menu_selected = 0;
                 }
                 "Quit" => app.should_quit = true,
@@ -310,6 +346,159 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
             }
         }
         _ => {}
+    }
+}
+
+fn handle_submenu_key(app: &mut App, key: KeyEvent) {
+    let sub_items = app.install_submenu_items();
+    match key.code {
+        KeyCode::Esc => {
+            app.install_submenu_open = false;
+            app.clear_message();
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if app.install_submenu_selected > 0 {
+                app.install_submenu_selected -= 1;
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if app.install_submenu_selected < sub_items.len().saturating_sub(1) {
+                app.install_submenu_selected += 1;
+            }
+        }
+        KeyCode::Enter => {
+            if matches!(app.deployment_state, crate::app::DeploymentState::Checking) {
+                return;
+            }
+            let item = sub_items[app.install_submenu_selected];
+            match item {
+                "Install" | "Continue Install" | "Update" => {
+                    app.install_submenu_open = false;
+                    app.set_message(
+                        "⠋ Connecting to remote host...",
+                        crate::app::MessageKind::Info,
+                    );
+                    app.pending_resume_install = true;
+                }
+                "Clean Install" => {
+                    app.install_submenu_open = false;
+                    app.clean_install = true;
+                    app.set_message(
+                        "⠋ Preparing clean install...",
+                        crate::app::MessageKind::Info,
+                    );
+                    app.pending_resume_install = true;
+                }
+                "Admin Login" => {
+                    app.install_submenu_open = false;
+                    app.admin_login_magic_link = None;
+                    app.admin_login_totp_code = None;
+                    app.admin_login_verify_url = None;
+                    app.admin_login_error = None;
+                    app.admin_login_loading = true;
+                    app.screen = Screen::AdminLogin;
+                    app.pending_admin_login = true;
+                }
+                "Manage" => {
+                    app.install_submenu_open = false;
+                    app.screen = Screen::Manage;
+                    app.menu_selected = 0;
+                }
+                "Checking..." => {}
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Detect deployment state by checking running Docker containers.
+/// Sets app.deployment_state based on container count and core-apps health.
+pub fn detect_deployment_state(app: &mut App) {
+    use crate::app::DeploymentState;
+    use crate::modules::remote;
+    use crate::screens::install::env_to_prefix;
+
+    app.deployment_state = DeploymentState::Checking;
+
+    let profile = match app.active_profile() {
+        Some((_, p)) => p.clone(),
+        None => {
+            app.deployment_state = DeploymentState::None;
+            return;
+        }
+    };
+
+    let prefix = env_to_prefix(&profile.environment);
+    let docker_cmd = format!(
+        "docker ps --format '{{{{.Names}}}} {{{{.Status}}}}' --filter 'name=^{prefix}-' 2>/dev/null"
+    );
+
+    let output = if profile.remote {
+        if let Some(ssh) = &app.ssh_connection {
+            let cmd = format!("{}{docker_cmd}", remote::SHELL_PATH_PREAMBLE);
+            ssh.run(&cmd).unwrap_or_default()
+        } else if let (Some(host), Some(key)) = (&profile.remote_host, &profile.remote_ssh_key) {
+            let user = profile.remote_user.as_deref().unwrap_or("root");
+            let conn = crate::modules::ssh::SshConnection::new(host, user, key);
+            if conn.test_connection() {
+                app.ssh_connection = Some(conn);
+                let cmd = format!("{}{docker_cmd}", remote::SHELL_PATH_PREAMBLE);
+                app.ssh_connection.as_ref().unwrap().run(&cmd).unwrap_or_default()
+            } else {
+                app.deployment_state = DeploymentState::Unknown;
+                return;
+            }
+        } else {
+            app.deployment_state = DeploymentState::Unknown;
+            return;
+        }
+    } else {
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(&docker_cmd)
+            .output();
+        match output {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
+            Err(_) => {
+                app.deployment_state = DeploymentState::Unknown;
+                return;
+            }
+        }
+    };
+
+    let clean = remote::strip_ansi(&output);
+    let lines: Vec<&str> = clean.lines().filter(|l| !l.trim().is_empty()).collect();
+    let container_count = lines.len();
+
+    if container_count == 0 {
+        app.deployment_state = DeploymentState::None;
+        return;
+    }
+
+    // Check which key services are present (running or healthy)
+    let has_container = |name: &str| -> bool {
+        lines.iter().any(|line| line.contains(&format!("{prefix}-{name}")))
+    };
+
+    // Bootstrap services: postgres, authz-api, deploy-api, proxy, core-apps
+    let bootstrap_done = has_container("postgres")
+        && has_container("authz-api")
+        && has_container("deploy-api")
+        && has_container("proxy")
+        && has_container("core-apps");
+
+    // Full platform additionally needs agent-api and litellm
+    let full_platform = bootstrap_done
+        && has_container("agent-api")
+        && has_container("litellm");
+
+    if full_platform {
+        app.deployment_state = DeploymentState::Complete;
+    } else if bootstrap_done {
+        app.deployment_state = DeploymentState::BootstrapComplete;
+    } else {
+        app.deployment_state = DeploymentState::Partial(container_count);
     }
 }
 

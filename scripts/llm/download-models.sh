@@ -35,7 +35,7 @@ BACKEND="${LLM_BACKEND:-$(bash "${SCRIPT_DIR}/detect-backend.sh")}"
 TIER="${LLM_TIER:-$(bash "${SCRIPT_DIR}/get-memory-tier.sh" "$BACKEND")}"
 
 # Download order: most critical first, least needed last
-ALL_ROLES=(embed fast agent whisper kokoro flux colpali)
+ALL_ROLES=(test fast embed agent voice transcribe image visual-embedding)
 
 # Setup or use the MLX virtual environment
 setup_venv() {
@@ -107,10 +107,12 @@ snapshot_download('${model}', local_dir_use_symlinks=True)
 }
 
 # Get model name for a role using get-models.sh
+# USE_TIER_ONLY=1 forces tier-based resolution for ALL roles (not purpose-based)
+# so downloads match the hardware tier, not the dev environment defaults
 get_model_for_role() {
     local role="$1"
     local model
-    model=$(LLM_BACKEND="$BACKEND" LLM_TIER="$TIER" bash "${SCRIPT_DIR}/get-models.sh" "$role" 2>/dev/null) || true
+    model=$(USE_TIER_ONLY=1 LLM_BACKEND="$BACKEND" LLM_TIER="$TIER" PYTHON_CMD="$(get_venv_python)" bash "${SCRIPT_DIR}/get-models.sh" "$role" 2>/dev/null) || true
     echo "$model"
 }
 
@@ -263,6 +265,9 @@ main() {
         info "Cloud backend selected — no local models to download"
         exit 0
     fi
+
+    # Ensure venv with huggingface_hub (and PyYAML) is ready for model resolution
+    ensure_hf_hub
 
     case "$target" in
         --check)

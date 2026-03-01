@@ -1,83 +1,57 @@
 # =============================================================================
-# Core Apps - Runtime Container (Proxmox-style)
+# Core Apps - Runtime Container
 # =============================================================================
 #
-# Lightweight container with Node.js and supervisord.
-# Apps are NOT baked in - they are installed at runtime via Deploy API.
-#
-# This mirrors the Proxmox pattern where:
-#   - Container has runtime dependencies only
-#   - Apps are cloned/built after container starts
-#   - Apps persist in Docker volumes across container restarts
-#
-# Benefits:
-#   - Fast container rebuilds (no app code to clone/build)
-#   - App updates via Deploy API, not container rebuild
-#   - Consistent with Proxmox LXC deployment pattern
+# Lightweight container with Node.js, pnpm, and supervisord.
+# On first start, clones busibox-frontend monorepo and builds enabled apps.
+# Apps persist in Docker volumes across container restarts.
 #
 # Usage (via docker-compose.github.yml):
 #   docker compose -f docker-compose.yml -f docker-compose.github.yml up
 #
-# First start takes longer as apps are deployed into persistent volumes.
-# Subsequent starts are fast as apps are already present.
-#
 # =============================================================================
 
-FROM node:20-alpine
+FROM node:22-bookworm-slim
 
 # Install runtime dependencies
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     bash \
     git \
+    ca-certificates \
     python3 \
     make \
     g++ \
     supervisor \
-    openssh-client
+    openssh-client \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install tsx globally for running TypeScript seed scripts
-RUN npm install -g tsx
+# Install workspace package manager and build tools
+RUN npm install -g pnpm turbo tsx
 
 # Create directory structure
-# Apps will be installed into these directories (persistent volumes)
-RUN mkdir -p \
-    /srv/busibox-portal \
-    /srv/busibox-agents \
-    /srv/busibox-admin \
-    /srv/busibox-chat \
-    /srv/busibox-appbuilder \
-    /srv/busibox-media \
-    /srv/busibox-documents \
-    /var/log/supervisor
+RUN mkdir -p /srv/busibox-frontend /var/log/supervisor
 
 # Copy supervisord configuration for process management
-# Manages busibox-portal and busibox-agents processes
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY supervisord.conf /etc/supervisor/supervisord.conf
 
-# Copy runtime entrypoint script
+# Copy runtime entrypoint script and process manager
 COPY core-apps-entrypoint-runtime.sh /usr/local/bin/entrypoint.sh
+COPY app-manager.js /usr/local/bin/app-manager.js
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 WORKDIR /srv
 
-# Expose ports:
-#   3000 - Busibox Portal (direct access for debugging)
-#   3001 - Agent Manager (direct access for debugging)
-#   3002 - Admin (direct access for debugging)
-#   3003 - Chat (direct access for debugging)
-#   3004 - App Builder (direct access for debugging)
-#   3005 - Media (direct access for debugging)
-#   3006 - Documents (direct access for debugging)
-EXPOSE 3000 3001 3002 3003 3004 3005 3006
+# Expose app ports + control API
+EXPOSE 3000 3001 3002 3003 3004 3005 3006 9999
 
 # Environment variables
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 
-# Health check all core app endpoints
-HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
-    CMD curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents/api/health && curl -f http://localhost:3002/admin/api/health && curl -f http://localhost:3003/chat/api/health && curl -f http://localhost:3004/builder/api/health && curl -f http://localhost:3005/media/api/health && curl -f http://localhost:3006/documents/api/health || exit 1
+# Health check - portal is always enabled
+HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
+    CMD curl -f http://localhost:3000/portal/api/health || exit 1
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["start"]

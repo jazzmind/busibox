@@ -359,10 +359,10 @@ model_purposes_dev:
 #   fast    - Quick dispatch/classification model (always loaded)
 #   agent   - Primary reasoning/chat model
 #   embed   - Text embedding model
-#   whisper - Speech-to-text transcription
-#   kokoro  - Text-to-speech voice generation
-#   flux    - Image generation
-#   colpali - Visual document embedding (standard+ only)
+#   transcribe - Speech-to-text transcription
+#   voice  - Text-to-speech voice generation
+#   image    - Image generation
+#   visual-embedding - Visual document embedding (standard+ only)
 #
 tiers:
   # 16GB - MacBook Air, base MacBook Pro
@@ -372,16 +372,19 @@ tiers:
     max_ram_gb: 23
     description: "Lightweight models for basic use"
     mlx:
+      test: "qwen3-0.6b"
       fast: "qwen3-0.6b"
       agent: "qwen3-0.6b"
       embed: "nomic-embed"
-      whisper: "whisper-tiny"
-      kokoro: "kokoro-82m"
+      transcribe: "whisper-tiny"
+      voice: "kokoro-82m"
     vllm:
+      test: "qwen3-0.6b-vllm"
       fast: "qwen3-0.6b-vllm"
       agent: "qwen3-0.6b-vllm"
       embed: "nomic-embed"
-
+      transcribe: "whisper-tiny"
+      voice: "kokoro-82m"
   # 24GB - MacBook Pro 14"
   # ~8GB reserved, ~16GB for models
   entry:
@@ -389,16 +392,21 @@ tiers:
     max_ram_gb: 47
     description: "Entry-level performance for most workloads"
     mlx:
+      test: "qwen3-0.6b"
       fast: "qwen3-0.6b"
       agent: "qwen3-4b-instruct-2507"
       embed: "nomic-embed"
-      whisper: "whisper-tiny"
-      kokoro: "kokoro-82m"
+      transcribe: "whisper-tiny"
+      voice: "kokoro-82m"
+      image: "flux2-klein-4b"
     vllm:
+      test: "qwen3-0.6b-vllm"
       fast: "qwen3-0.6b-vllm"
       agent: "phi-4"
       embed: "nomic-embed"
-
+      transcribe: "whisper-tiny"
+      voice: "kokoro-82m"
+      image: "flux2-klein-4b"
   # 48GB - MacBook Pro 16", Mac Mini Pro
   # ~10GB reserved, ~38GB for models
   standard:
@@ -406,18 +414,23 @@ tiers:
     max_ram_gb: 95
     description: "Balanced performance for production workloads"
     mlx:
+      test: "qwen3-0.6b"
       fast: "qwen3-4b-instruct-2507"
       agent: "qwen3-30b-mlx"
       embed: "nomic-embed"
-      whisper: "whisper-large-v3"
-      kokoro: "kokoro-82m"
-      flux: "flux2-klein-4b"
-      colpali: "colpali"
+      transcribe: "whisper-large-v3"
+      voice: "kokoro-82m"
+      image: "flux2-klein-4b"
+      visual-embedding: "colpali"
     vllm:
+      test: "qwen3-0.6b-vllm"
       fast: "phi-4"
       agent: "qwen3-30b"
       embed: "nomic-embed"
-      colpali: "colpali"
+      transcribe: "whisper-large-v3"
+      voice: "kokoro-82m"
+      image: "flux2-klein-4b"
+      visual-embedding: "colpali"
 
   # 96GB+ - Mac Studio, Mac Pro, multi-GPU servers
   # ~12GB reserved, ~84GB+ for models
@@ -426,16 +439,18 @@ tiers:
     max_ram_gb: 9999
     description: "High-performance with large reasoning models"
     mlx:
+      test: "qwen3-0.6b"
       fast: "qwen3-4b-instruct-2507"
       agent: "qwen3-80b-mlx"
       embed: "nomic-embed"
-      whisper: "whisper-large-v3"
-      kokoro: "kokoro-82m"
-      flux: "flux2-klein-4b"
-      colpali: "colpali"
+      transcribe: "whisper-large-v3"
+      voice: "kokoro-82m"
+      image: "flux2-klein-4b"
+      visual-embedding: "colpali"
     vllm:
+      test: "qwen3-0.6b-vllm"
       fast: "phi-4"
       agent: "qwen3-30b"
       embed: "nomic-embed"
-      colpali: "colpali"
+      visual-embedding: "colpali"
 

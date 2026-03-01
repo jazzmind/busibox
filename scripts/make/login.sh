@@ -18,9 +18,15 @@ source "${REPO_ROOT}/scripts/lib/profiles.sh"
 source "${REPO_ROOT}/scripts/lib/state.sh"
 source "${REPO_ROOT}/scripts/lib/services.sh"
 
-# Debug mode: set DEBUG=1 or pass --debug
+# Flags: --debug for verbose output, --json for machine-readable output
 DEBUG="${DEBUG:-0}"
-[[ "${1:-}" == "--debug" ]] && DEBUG=1
+JSON_OUTPUT="${JSON_OUTPUT:-0}"
+for arg in "$@"; do
+    case "$arg" in
+        --debug) DEBUG=1 ;;
+        --json) JSON_OUTPUT=1 ;;
+    esac
+done
 
 debug() {
     [[ "$DEBUG" == "1" ]] && echo -e "${DIM}[DEBUG] $*${NC}" >&2 || true
@@ -31,10 +37,18 @@ profile_init
 # ============================================================================
 # Environment Detection & Confirmation
 # ============================================================================
+# Environment can be passed via env var to skip profile/state lookups
 
-_active_profile="$(profile_get_active)"
+_active_profile=""
+if [[ -z "${BUSIBOX_ENV:-}" ]]; then
+    _active_profile="$(profile_get_active)"
+fi
 
 get_current_env() {
+    if [[ -n "${BUSIBOX_ENV:-}" ]]; then
+        echo "$BUSIBOX_ENV"
+        return
+    fi
     if [[ -n "$_active_profile" ]]; then
         profile_get "$_active_profile" "environment"
         return
@@ -43,6 +57,10 @@ get_current_env() {
 }
 
 get_backend_type() {
+    if [[ -n "${BUSIBOX_BACKEND:-}" ]]; then
+        echo "$BUSIBOX_BACKEND" | tr '[:upper:]' '[:lower:]'
+        return
+    fi
     local backend=""
     if [[ -n "$_active_profile" ]]; then
         backend=$(profile_get "$_active_profile" "backend")
@@ -57,7 +75,6 @@ get_backend_type() {
             backend="${backend:-docker}"
         fi
     fi
-    # Normalize to lowercase (profiles may store mixed case)
     echo "$backend" | tr '[:upper:]' '[:lower:]'
 }
 
@@ -65,6 +82,11 @@ confirm_environment() {
     local env="$1"
     local backend="$2"
     local count
+
+    # Skip interactive confirmation in JSON mode
+    if [[ "$JSON_OUTPUT" == "1" ]]; then
+        return 0
+    fi
 
     echo ""
     if [[ -n "$_active_profile" ]]; then
@@ -220,12 +242,16 @@ main() {
         error "Cannot resolve postgres host for env=${env}, backend=${backend}"
         exit 1
     fi
-    info "Database: ${_PG_HOST} (${env})"
+    [[ "$JSON_OUTPUT" != "1" ]] && info "Database: ${_PG_HOST} (${env})"
 
     local admin_email
-    admin_email="$(get_state "ADMIN_EMAIL" "")"
-    debug "admin_email from state: '${admin_email}'"
+    admin_email="${ADMIN_EMAIL:-$(get_state "ADMIN_EMAIL" "")}"
+    debug "admin_email from state/env: '${admin_email}'"
     if [[ -z "$admin_email" ]]; then
+        if [[ "$JSON_OUTPUT" == "1" ]]; then
+            echo '{"error":"No admin email configured. Set ADMIN_EMAIL in state."}' >&2
+            exit 1
+        fi
         read -r -p "Admin email: " admin_email || admin_email=""
     fi
     if [[ -z "$admin_email" ]]; then
@@ -238,7 +264,7 @@ main() {
     local email_sql
     email_sql="$(sql_escape "$email_lower")"
 
-    info "Generating admin login credentials for ${email_lower} (${env}/${backend})..."
+    [[ "$JSON_OUTPUT" != "1" ]] && info "Generating admin login credentials for ${email_lower} (${env}/${backend})..."
 
     # Test DB connectivity
     debug "Testing DB connectivity..."
@@ -316,13 +342,20 @@ main() {
         warn "Failed to insert TOTP code (magic link still available)."
     }
 
-    set_state "ADMIN_EMAIL" "$email_lower"
-    set_state "ADMIN_USER_ID" "$user_id"
-    set_state "MAGIC_LINK_TOKEN" "$token"
+    # Only persist to state if not in headless/JSON mode (state file may not exist)
+    if [[ "$JSON_OUTPUT" != "1" ]]; then
+        set_state "ADMIN_EMAIL" "$email_lower"
+        set_state "ADMIN_USER_ID" "$user_id"
+        set_state "MAGIC_LINK_TOKEN" "$token"
+    fi
 
     local site_domain magic_link verify_url
-    site_domain="$(get_state "SITE_DOMAIN" "")"
-    [[ -z "$site_domain" ]] && site_domain="$(get_state "BASE_DOMAIN" "localhost")"
+    site_domain="${SITE_DOMAIN:-}"
+    if [[ -z "$site_domain" && "$JSON_OUTPUT" != "1" ]]; then
+        site_domain="$(get_state "SITE_DOMAIN" "")"
+        [[ -z "$site_domain" ]] && site_domain="$(get_state "BASE_DOMAIN" "localhost")"
+    fi
+    [[ -z "$site_domain" ]] && site_domain="localhost"
 
     local encoded_email
     encoded_email="$(python3 -c "import urllib.parse; print(urllib.parse.quote('${email_lower}'))" 2>/dev/null || echo "${email_lower}")"
@@ -335,21 +368,28 @@ main() {
         verify_url="https://${site_domain}/portal/verify?email=${encoded_email}"
     fi
 
-    echo ""
-    success "Admin login credentials generated."
-    echo ""
-    echo -e "  ${BOLD}Magic Link${NC} (expires in 24h):"
-    echo -e "  ${CYAN}${magic_link}${NC}"
-    echo ""
-    echo -e "  ${BOLD}Login Code${NC} (expires in 15min):"
-    echo -e "  ${CYAN}${totp_code}${NC}"
-    echo -e "  Enter at: ${CYAN}${verify_url}${NC}"
-    echo ""
-    info "Opening browser..."
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-        open "$magic_link" 2>/dev/null || true
+    if [[ "$JSON_OUTPUT" == "1" ]]; then
+        # Machine-readable JSON output for CLI/TUI consumption
+        cat <<EOF
+{"magic_link":"${magic_link}","totp_code":"${totp_code}","verify_url":"${verify_url}","email":"${email_lower}"}
+EOF
     else
-        xdg-open "$magic_link" 2>/dev/null || true
+        echo ""
+        success "Admin login credentials generated."
+        echo ""
+        echo -e "  ${BOLD}Magic Link${NC} (expires in 24h):"
+        echo -e "  ${CYAN}${magic_link}${NC}"
+        echo ""
+        echo -e "  ${BOLD}Login Code${NC} (expires in 15min):"
+        echo -e "  ${CYAN}${totp_code}${NC}"
+        echo -e "  Enter at: ${CYAN}${verify_url}${NC}"
+        echo ""
+        info "Opening browser..."
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            open "$magic_link" 2>/dev/null || true
+        else
+            xdg-open "$magic_link" 2>/dev/null || true
+        fi
     fi
 }
 

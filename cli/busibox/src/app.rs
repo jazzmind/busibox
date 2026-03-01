@@ -19,6 +19,7 @@ pub enum Screen {
     Manage,
     ProfileSelect,
     ProfileEdit,
+    AdminLogin,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -151,6 +152,23 @@ pub struct App {
 
     // Clean install: tear down all existing containers and volumes before installing
     pub clean_install: bool,
+
+    // Install submenu state
+    pub install_submenu_open: bool,
+    pub install_submenu_selected: usize,
+    pub deployment_state: DeploymentState,
+
+    // Admin login screen state
+    pub admin_login_magic_link: Option<String>,
+    pub admin_login_totp_code: Option<String>,
+    pub admin_login_verify_url: Option<String>,
+    pub admin_login_error: Option<String>,
+    pub admin_login_loading: bool,
+
+    // Pending admin login generation
+    pub pending_admin_login: bool,
+
+    pub ssh_tunnel_process: Option<std::process::Child>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -240,6 +258,16 @@ pub struct ServiceInstallState {
     pub name: String,
     pub group: String,
     pub status: InstallStatus,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeploymentState {
+    Unknown,
+    Checking,
+    None,
+    Partial(usize),       // some containers running, bootstrap not done
+    BootstrapComplete,    // bootstrap services healthy (postgres, authz, deploy, proxy, core-apps)
+    Complete,             // full platform deployed (agent, litellm, data, etc.)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -354,6 +382,16 @@ impl App {
             pending_password_change: false,
             pending_deploy_binary: false,
             clean_install: false,
+            install_submenu_open: false,
+            install_submenu_selected: 0,
+            deployment_state: DeploymentState::Unknown,
+            admin_login_magic_link: None,
+            admin_login_totp_code: None,
+            admin_login_verify_url: None,
+            admin_login_error: None,
+            admin_login_loading: false,
+            pending_admin_login: false,
+            ssh_tunnel_process: None,
         }
     }
 
@@ -370,6 +408,7 @@ impl App {
             .unwrap_or(false)
     }
 
+    #[allow(dead_code)]
     pub fn is_installed(&self) -> bool {
         self.active_profile()
             .and_then(|(_, p)| p.hardware.as_ref())
@@ -421,14 +460,29 @@ impl App {
 
     pub fn welcome_menu_items(&self) -> Vec<&str> {
         if self.has_profiles() {
-            let install_label = if self.is_installed() {
-                "Update / Re-install"
-            } else {
-                "Resume Install"
-            };
-            vec![install_label, "Clean Install", "Profiles", "Manage", "Quit"]
+            vec!["Install / Update", "Profiles", "Quit"]
         } else {
             vec!["Profiles", "Quit"]
+        }
+    }
+
+    pub fn install_submenu_items(&self) -> Vec<&str> {
+        match &self.deployment_state {
+            DeploymentState::Unknown | DeploymentState::Checking => {
+                vec!["Checking..."]
+            }
+            DeploymentState::None => {
+                vec!["Install"]
+            }
+            DeploymentState::Partial(_) => {
+                vec!["Continue Install", "Clean Install"]
+            }
+            DeploymentState::BootstrapComplete => {
+                vec!["Admin Login", "Manage", "Update", "Clean Install"]
+            }
+            DeploymentState::Complete => {
+                vec!["Admin Login", "Manage", "Update", "Clean Install"]
+            }
         }
     }
 }

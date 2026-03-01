@@ -25,9 +25,22 @@
     cmd: |
       timeout=${WAIT_TIMEOUT}
       elapsed=0
+
+      # Detect JSON parser: prefer jq, fall back to python3
+      if command -v jq >/dev/null 2>&1; then
+        parse_health() { echo "$1" | jq -r 'if type == "array" then .[0].Health else .Health end // "none"' 2>/dev/null; }
+        parse_state() { echo "$1" | jq -r 'if type == "array" then .[0].State else .State end // "none"' 2>/dev/null; }
+      elif command -v python3 >/dev/null 2>&1; then
+        parse_health() { echo "$1" | python3 -c "import sys,json; d=json.load(sys.stdin); o=d[0] if isinstance(d,list) else d; print(o.get('Health','none'))" 2>/dev/null || echo "none"; }
+        parse_state() { echo "$1" | python3 -c "import sys,json; d=json.load(sys.stdin); o=d[0] if isinstance(d,list) else d; print(o.get('State','none'))" 2>/dev/null || echo "none"; }
+      else
+        echo "WARNING: Neither jq nor python3 found — cannot parse health status"
+        exit 1
+      fi
+
       while [ $elapsed -lt $timeout ]; do
         json_output=$(${COMPOSE_CMD} ps --format json ${WAIT_SERVICE} 2>/dev/null)
-        health=$(echo "$json_output" | jq -r 'if type == "array" then .[0].Health else .Health end // "none"')
+        health=$(parse_health "$json_output")
 
         case "$health" in
           healthy)
@@ -41,7 +54,7 @@
             # During Docker's start_period, health status is "starting"
             ;;
           none|null|"")
-            state=$(echo "$json_output" | jq -r 'if type == "array" then .[0].State else .State end // "none"')
+            state=$(parse_state "$json_output")
             if [ "$state" = "running" ]; then
               echo "Service ${WAIT_SERVICE} is running (no healthcheck)"
               exit 0

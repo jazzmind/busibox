@@ -27,6 +27,9 @@ TIER="${LLM_TIER:-$(bash "${SCRIPT_DIR}/get-memory-tier.sh" "$BACKEND")}"
 # Model config file
 MODEL_REGISTRY="${REPO_ROOT}/provision/ansible/group_vars/all/model_registry.yml"
 
+# Use PYTHON_CMD if provided (e.g., from venv with PyYAML), else fall back to system python3
+PYTHON="${PYTHON_CMD:-python3}"
+
 # Get model from model_registry.yml tiers section (tier-based)
 get_tier_model() {
     local role="$1"
@@ -36,7 +39,7 @@ get_tier_model() {
         return 1
     fi
 
-    python3 -c "
+    "$PYTHON" -c "
 import yaml
 import sys
 
@@ -85,7 +88,7 @@ get_purpose_model() {
         return 1
     fi
 
-    python3 -c "
+    "$PYTHON" -c "
 import yaml
 import sys
 
@@ -112,10 +115,17 @@ except Exception as e:
 "
 }
 
-# Wrapper that prefers purpose-based models from model_registry.yml.
-# Core text roles use model_purposes_dev; tier-based roles use tiers section.
+# Wrapper that resolves model names.
+# When USE_TIER_ONLY=1, all roles use tier-based lookup (for download/caching).
+# Otherwise, core text roles use model_purposes_dev; hardware roles use tiers section.
 get_model() {
     local role="$1"
+
+    # Tier-only mode: used by download-models.sh to respect LLM_TIER for all roles
+    if [[ "${USE_TIER_ONLY:-0}" == "1" ]]; then
+        get_tier_model "$role"
+        return
+    fi
 
     case "$role" in
         fast|agent|test|default|chat|classify|parsing|cleanup|tool_calling|research|vision|frontier|frontier-fast)
