@@ -729,27 +729,34 @@ async def mlx_list_models(_: bool = Depends(verify_token)):
     """List available/cached models."""
     import yaml
     
-    # Read tier models from config
-    models_config = BUSIBOX_ROOT / "config" / "demo-models.yaml"
+    # Read tier models from model_registry.yml
+    models_config = BUSIBOX_ROOT / "provision" / "ansible" / "group_vars" / "all" / "model_registry.yml"
     if not models_config.exists():
         raise HTTPException(status_code=500, detail="Models config not found")
-    
+
     with open(models_config) as f:
         config = yaml.safe_load(f)
-    
+
+    tiers_config = config.get("tiers", {})
+    available_models = config.get("available_models", {})
+
+    # Resolve model key to HuggingFace model_name
+    def resolve_model_name(key: str) -> str:
+        return available_models.get(key, {}).get("model_name", "")
+
     # Get cached models from HuggingFace cache
     cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
     cached_models = set()
-    
+
     if cache_dir.exists():
         for model_dir in cache_dir.iterdir():
             if model_dir.name.startswith("models--"):
                 model_name = model_dir.name[8:].replace("--", "/")
                 cached_models.add(model_name)
-    
+
     # Build response
     tiers = []
-    for tier_name, tier_config in config.get("tiers", {}).items():
+    for tier_name, tier_config in tiers_config.items():
         mlx_models = tier_config.get("mlx", {})
         tier_info = {
             "name": tier_name,
@@ -757,10 +764,11 @@ async def mlx_list_models(_: bool = Depends(verify_token)):
             "min_ram_gb": tier_config.get("min_ram_gb", 0),
             "models": {}
         }
-        for role, model in mlx_models.items():
+        for role, model_key in mlx_models.items():
+            model_name = resolve_model_name(model_key)
             tier_info["models"][role] = {
-                "name": model,
-                "cached": model in cached_models,
+                "name": model_name,
+                "cached": model_name in cached_models if model_name else False,
             }
         tiers.append(tier_info)
     

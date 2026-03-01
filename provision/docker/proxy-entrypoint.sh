@@ -12,6 +12,11 @@
 
 set -eu
 
+# Ensure openssl is available (not included in nginx:alpine by default)
+if ! command -v openssl >/dev/null 2>&1; then
+  apk add --no-cache openssl >/dev/null 2>&1
+fi
+
 SSL_DIR="/etc/nginx/ssl"
 CERT_FILE="${SSL_DIR}/localhost.crt"
 KEY_FILE="${SSL_DIR}/localhost.key"

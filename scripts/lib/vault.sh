@@ -352,22 +352,16 @@ ensure_vault_access() {
         return 1
     fi
     
-    # If ANSIBLE_VAULT_PASSWORD_FILE is already set and valid, use it as-is
-    if [[ -n "${ANSIBLE_VAULT_PASSWORD_FILE:-}" && -f "${ANSIBLE_VAULT_PASSWORD_FILE}" ]]; then
-        _vault_info "Using pre-configured vault password file: ${ANSIBLE_VAULT_PASSWORD_FILE}"
-        return 0
-    fi
-    
-    # If ANSIBLE_VAULT_PASSWORD is set, use the env-var helper script
+    # Primary mechanism: ANSIBLE_VAULT_PASSWORD env var → vault-pass-from-env.sh
+    # This is how the busibox CLI delivers the password. Takes absolute priority.
     if [[ -n "${ANSIBLE_VAULT_PASSWORD:-}" ]]; then
         local env_script="${_REPO_ROOT}/scripts/lib/vault-pass-from-env.sh"
         if [[ -f "$env_script" ]]; then
             [[ -x "$env_script" ]] || chmod +x "$env_script"
             export ANSIBLE_VAULT_PASSWORD_FILE="$env_script"
-            _vault_info "Using vault password from environment variable"
             return 0
         else
-            _vault_warn "vault-pass-from-env.sh not found at $env_script, falling back to file"
+            _vault_warn "vault-pass-from-env.sh not found at $env_script"
         fi
     fi
     

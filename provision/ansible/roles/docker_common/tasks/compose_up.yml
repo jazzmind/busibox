@@ -49,6 +49,11 @@
     GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default(github_token) | default('') }}"
     ADMIN_EMAIL: "{{ secrets.admin_emails | default(secrets.admin_email, true) | default('', true) }}"
     ALLOWED_EMAIL_DOMAINS: "{{ secrets.allowed_email_domains | default('*') }}"
+    BUSIBOX_PORTAL_GITHUB_REF: "{{ lookup('env', 'BUSIBOX_PORTAL_GITHUB_REF') | default('main', true) }}"
+    BUSIBOX_ADMIN_GITHUB_REF: "{{ lookup('env', 'BUSIBOX_ADMIN_GITHUB_REF') | default('main', true) }}"
+    MODEL_HOST_CACHE: "{{ lookup('env', 'MODEL_HOST_CACHE') | default('model_cache', true) }}"
+    HF_HOST_CACHE: "{{ lookup('env', 'HF_HOST_CACHE') | default('model_cache', true) }}"
+    FASTEMBED_HOST_CACHE: "{{ lookup('env', 'FASTEMBED_HOST_CACHE') | default('fastembed_cache', true) }}"
   when: docker_build_first | default(false)
   register: build_result
   changed_when: "'Building' in build_result.stdout or 'built' in build_result.stdout"

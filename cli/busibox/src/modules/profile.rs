@@ -39,6 +39,8 @@ pub struct Profile {
     pub model_tier: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admin_email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frontend_ref: Option<String>,
 }
 
 impl Profile {

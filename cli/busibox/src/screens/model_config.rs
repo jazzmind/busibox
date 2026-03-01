@@ -144,7 +144,12 @@ fn render_tier_details(f: &mut Frame, app: &App, area: Rect, backend: Option<&cr
     let tiers = MemoryTier::all();
     let selected_tier = tiers.get(app.model_tier_selected).copied().unwrap_or(MemoryTier::Standard);
 
-    let config_path = app.repo_root.join("config").join("demo-models.yaml");
+    let config_path = app.repo_root
+        .join("provision")
+        .join("ansible")
+        .join("group_vars")
+        .join("all")
+        .join("model_registry.yml");
     let recommendation = if config_path.exists() {
         let backend_val = backend.cloned().unwrap_or(crate::modules::hardware::LlmBackend::Mlx);
         ModelRecommendation::from_config(&config_path, selected_tier, &backend_val).ok()
@@ -303,10 +308,15 @@ pub fn load_recommendations(app: &mut App) {
         None => return,
     };
 
-    let config_path = app.repo_root.join("config").join("demo-models.yaml");
+    let config_path = app.repo_root
+        .join("provision")
+        .join("ansible")
+        .join("group_vars")
+        .join("all")
+        .join("model_registry.yml");
     if !config_path.exists() {
         app.set_message(
-            "config/demo-models.yaml not found",
+            "model_registry.yml not found",
             MessageKind::Warning,
         );
         return;
@@ -402,6 +412,7 @@ fn save_profile_and_continue(app: &mut App) {
         } else {
             Some(app.admin_email_input.trim().to_string())
         },
+        frontend_ref: None,
     };
 
     match profile::upsert_profile(&app.repo_root, &profile_id, profile, true) {

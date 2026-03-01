@@ -68,14 +68,19 @@ pub struct App {
     // Model state
     pub model_recommendation: Option<ModelRecommendation>,
     pub model_download_progress: Vec<ModelDownloadState>,
+    pub model_cache_status: Vec<ModelCacheEntry>,
+    pub model_cache_check_state: ModelCacheCheckState,
 
     // Install state
     pub install_services: Vec<ServiceInstallState>,
     pub install_log: Vec<String>,
     pub install_log_visible: bool,
     pub install_log_scroll: usize,
+    pub install_log_autoscroll: bool,
     pub install_tick: usize,
     pub install_complete: bool,
+    pub install_model_status: Vec<(String, String, ModelInstallState)>, // (role, model_name, state)
+    pub install_models_complete: bool,
     pub install_portal_url: Option<String>,
     pub install_rx: Option<mpsc::Receiver<InstallUpdate>>,
 
@@ -135,6 +140,15 @@ pub struct App {
     // Pending vault setup (needs TUI suspended for password prompts)
     pub pending_vault_setup: bool,
 
+    // Pending profile export (needs TUI suspended for password prompts)
+    pub pending_profile_export: bool,
+
+    // Pending master password change (needs TUI suspended)
+    pub pending_password_change: bool,
+
+    // Pending binary deployment to remote host
+    pub pending_deploy_binary: bool,
+
     // Clean install: tear down all existing containers and volumes before installing
     pub clean_install: bool,
 }
@@ -187,12 +201,37 @@ pub struct ModelDownloadState {
     pub status: DownloadStatus,
 }
 
+#[derive(Debug, Clone)]
+pub struct ModelCacheEntry {
+    pub name: String,
+    pub role: String,
+    pub cached: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModelCacheCheckState {
+    NotChecked,
+    Checking,
+    Done,
+    Failed,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DownloadStatus {
     Pending,
     Downloading,
     Complete,
     Failed(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
+pub enum ModelInstallState {
+    Pending,
+    Downloading,
+    Cached,
+    Skipped, // not configured for this tier
+    Failed,
 }
 
 #[derive(Debug, Clone)]
@@ -266,12 +305,17 @@ impl App {
             remote_hardware: None,
             model_recommendation: None,
             model_download_progress: Vec::new(),
+            model_cache_status: Vec::new(),
+            model_cache_check_state: ModelCacheCheckState::NotChecked,
             install_services: Vec::new(),
             install_log: Vec::new(),
             install_log_visible: false,
             install_log_scroll: 0,
+            install_log_autoscroll: true,
             install_tick: 0,
             install_complete: false,
+            install_model_status: Vec::new(),
+            install_models_complete: false,
             install_portal_url: None,
             install_rx: None,
             manage_services: Vec::new(),
@@ -306,6 +350,9 @@ impl App {
             pending_login: false,
             vault_password: None,
             pending_vault_setup: false,
+            pending_profile_export: false,
+            pending_password_change: false,
+            pending_deploy_binary: false,
             clean_install: false,
         }
     }
@@ -379,9 +426,9 @@ impl App {
             } else {
                 "Resume Install"
             };
-            vec!["Setup New", install_label, "Clean Install", "Profiles", "Manage", "Quit"]
+            vec![install_label, "Clean Install", "Profiles", "Manage", "Quit"]
         } else {
-            vec!["Setup New", "Quit"]
+            vec!["Profiles", "Quit"]
         }
     }
 }

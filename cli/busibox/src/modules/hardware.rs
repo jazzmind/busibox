@@ -59,98 +59,74 @@ impl std::fmt::Display for LlmBackend {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryTier {
-    Test,
     Minimal,
+    Entry,
     Standard,
     Enhanced,
-    Professional,
-    Enterprise,
-    Ultra,
 }
 
 impl MemoryTier {
     pub fn from_ram_gb(ram_gb: u64) -> Self {
         match ram_gb {
-            0..=15 => MemoryTier::Test,
-            16..=23 => MemoryTier::Minimal,
-            24..=47 => MemoryTier::Standard,
-            48..=95 => MemoryTier::Enhanced,
-            96..=127 => MemoryTier::Professional,
-            128..=255 => MemoryTier::Enterprise,
-            _ => MemoryTier::Ultra,
+            0..=23 => MemoryTier::Minimal,
+            24..=47 => MemoryTier::Entry,
+            48..=95 => MemoryTier::Standard,
+            _ => MemoryTier::Enhanced,
         }
     }
 
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
-            "test" => Some(MemoryTier::Test),
             "minimal" => Some(MemoryTier::Minimal),
+            "entry" => Some(MemoryTier::Entry),
             "standard" => Some(MemoryTier::Standard),
             "enhanced" => Some(MemoryTier::Enhanced),
-            "professional" => Some(MemoryTier::Professional),
-            "enterprise" => Some(MemoryTier::Enterprise),
-            "ultra" => Some(MemoryTier::Ultra),
             _ => None,
         }
     }
 
     pub fn all() -> &'static [MemoryTier] {
         &[
-            MemoryTier::Test,
             MemoryTier::Minimal,
+            MemoryTier::Entry,
             MemoryTier::Standard,
             MemoryTier::Enhanced,
-            MemoryTier::Professional,
-            MemoryTier::Enterprise,
-            MemoryTier::Ultra,
         ]
     }
 
     pub fn index(&self) -> usize {
         match self {
-            MemoryTier::Test => 0,
-            MemoryTier::Minimal => 1,
+            MemoryTier::Minimal => 0,
+            MemoryTier::Entry => 1,
             MemoryTier::Standard => 2,
             MemoryTier::Enhanced => 3,
-            MemoryTier::Professional => 4,
-            MemoryTier::Enterprise => 5,
-            MemoryTier::Ultra => 6,
         }
     }
 
     pub fn name(&self) -> &'static str {
         match self {
-            MemoryTier::Test => "test",
             MemoryTier::Minimal => "minimal",
+            MemoryTier::Entry => "entry",
             MemoryTier::Standard => "standard",
             MemoryTier::Enhanced => "enhanced",
-            MemoryTier::Professional => "professional",
-            MemoryTier::Enterprise => "enterprise",
-            MemoryTier::Ultra => "ultra",
         }
     }
 
     pub fn ram_range(&self) -> &'static str {
         match self {
-            MemoryTier::Test => "< 16 GB",
-            MemoryTier::Minimal => "16-23 GB",
-            MemoryTier::Standard => "24-47 GB",
-            MemoryTier::Enhanced => "48-95 GB",
-            MemoryTier::Professional => "96-127 GB",
-            MemoryTier::Enterprise => "128-255 GB",
-            MemoryTier::Ultra => "256+ GB",
+            MemoryTier::Minimal => "< 24 GB",
+            MemoryTier::Entry => "24-47 GB",
+            MemoryTier::Standard => "48-95 GB",
+            MemoryTier::Enhanced => "96+ GB",
         }
     }
 
     pub fn description(&self) -> &'static str {
         match self {
-            MemoryTier::Test => "Tiny model for installation testing (~300MB)",
             MemoryTier::Minimal => "Lightweight models for basic use",
-            MemoryTier::Standard => "Balanced performance for most workloads",
-            MemoryTier::Enhanced => "High-quality models",
-            MemoryTier::Professional => "Professional-grade inference",
-            MemoryTier::Enterprise => "Enterprise-scale with largest models",
-            MemoryTier::Ultra => "Maximum capability - run anything",
+            MemoryTier::Entry => "Entry-level performance for most workloads",
+            MemoryTier::Standard => "Balanced performance for production workloads",
+            MemoryTier::Enhanced => "High-performance with large reasoning models",
         }
     }
 }
