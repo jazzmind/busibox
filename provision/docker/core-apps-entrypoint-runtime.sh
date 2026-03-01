@@ -119,6 +119,13 @@ deploy_app() {
         cp /root/.npmrc "${app_dir}/.npmrc"
     fi
     
+    # Temporarily unset NODE_ENV so npm ci installs devDependencies (needed for build)
+    # NODE_ENV=production is set in the Dockerfile but dev deps like typescript,
+    # @tailwindcss/postcss, and @types/* are required at build time.
+    # After build, npm prune --omit=dev removes them.
+    local saved_node_env="${NODE_ENV:-}"
+    unset NODE_ENV
+    
     # Install dependencies
     log_info "Installing dependencies..."
     cd "${app_dir}"
@@ -188,6 +195,11 @@ deploy_app() {
     # Prune dev dependencies to reduce memory footprint
     log_info "Pruning dev dependencies..."
     npm prune --omit=dev 2>&1 || true
+    
+    # Restore NODE_ENV for runtime
+    if [ -n "${saved_node_env}" ]; then
+        export NODE_ENV="${saved_node_env}"
+    fi
     
     # Run database migrations for busibox-portal
     if [ "${app_name}" = "busibox-portal" ] && [ -d "prisma" ]; then

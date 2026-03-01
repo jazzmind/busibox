@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 #
-# Download models for the current tier
+# Download all models for the current tier and backend
+#
+# All HuggingFace models are downloaded to $HOME/.cache/huggingface/hub
+# which is then bind-mounted into Docker containers.
 #
 # Usage:
 #   download-models.sh              # Download all models for detected tier
-#   download-models.sh fast         # Download only fast model
 #   download-models.sh --check      # Check if models are cached
+#   download-models.sh fast         # Download only fast model
+#   download-models.sh marker      # Download Marker/Surya models (in-container)
 #
+# Environment:
+#   LLM_TIER        - Override memory tier (minimal/entry/standard/enhanced)
+#   LLM_BACKEND     - Override backend (mlx/vllm/cloud)
+#   CONTAINER_PREFIX - Docker container prefix (default: dev)
 
 set -euo pipefail
 
@@ -19,136 +27,108 @@ source "${SCRIPT_DIR}/../lib/ui.sh"
 # MLX virtual environment (PEP 668 compliance for modern macOS)
 MLX_VENV_DIR="${HOME}/.busibox/mlx-venv"
 
-# Setup or use the MLX virtual environment
-setup_mlx_venv() {
-    mkdir -p "${HOME}/.busibox"
-    if [[ ! -d "$MLX_VENV_DIR" ]]; then
-        info "Creating MLX virtual environment..."
-        python3 -m venv "$MLX_VENV_DIR"
-    fi
-}
-
-# Get venv python path
-get_mlx_python() {
-    echo "${MLX_VENV_DIR}/bin/python3"
-}
-
-# Get venv pip path
-get_mlx_pip() {
-    echo "${MLX_VENV_DIR}/bin/pip3"
-}
+# Container prefix for marker model downloads
+CONTAINER_PREFIX="${CONTAINER_PREFIX:-dev}"
 
 # Get backend and tier
 BACKEND="${LLM_BACKEND:-$(bash "${SCRIPT_DIR}/detect-backend.sh")}"
 TIER="${LLM_TIER:-$(bash "${SCRIPT_DIR}/get-memory-tier.sh" "$BACKEND")}"
 
-# Get models
-eval "$(bash "${SCRIPT_DIR}/get-models.sh" all)"
+# Download order: most critical first, least needed last
+ALL_ROLES=(embed fast agent whisper kokoro flux colpali)
 
-download_mlx_model() {
-    local model="$1"
-    
-    info "Downloading MLX model: ${model}"
-    
-    # Check if already cached
-    local cache_dir="${HOME}/.cache/huggingface/hub"
-    local model_dir="${cache_dir}/models--${model//\//-}"
-    
-    if [[ -d "$model_dir" ]]; then
-        success "Model already cached: ${model}"
-        return 0
+# Setup or use the MLX virtual environment
+setup_venv() {
+    mkdir -p "${HOME}/.busibox"
+    if [[ ! -d "$MLX_VENV_DIR" ]]; then
+        info "Creating Python virtual environment for model downloads..."
+        python3 -m venv "$MLX_VENV_DIR"
     fi
-    
-    # Setup venv and get paths
-    setup_mlx_venv
-    local mlx_python
-    local mlx_pip
-    mlx_python=$(get_mlx_python)
-    mlx_pip=$(get_mlx_pip)
-    
-    # Install huggingface_hub if needed
-    if ! "$mlx_python" -c "import huggingface_hub" 2>/dev/null; then
-        info "Installing huggingface_hub into virtual environment..."
-        "$mlx_pip" install -q huggingface_hub
-    fi
-    
-    # Download model
-    "$mlx_python" -c "
-from huggingface_hub import snapshot_download
-snapshot_download('${model}', local_dir_use_symlinks=True)
-"
-    
-    success "Downloaded: ${model}"
 }
 
-download_vllm_model() {
-    local model="$1"
-    
-    info "Downloading vLLM model: ${model}"
-    
-    # Check if running in container or on host
-    if [[ -f /.dockerenv ]]; then
-        # Inside container - use vLLM directly
-        python3 -c "
-from vllm import LLM
-LLM('${model}', download_dir='/root/.cache/huggingface')
-"
-    else
-        # On host - use huggingface_hub via venv (PEP 668 compliance)
-        setup_mlx_venv
-        local mlx_python
-        local mlx_pip
-        mlx_python=$(get_mlx_python)
-        mlx_pip=$(get_mlx_pip)
-        
-        if ! "$mlx_python" -c "import huggingface_hub" 2>/dev/null; then
-            info "Installing huggingface_hub into virtual environment..."
-            "$mlx_pip" install -q huggingface_hub
-        fi
-        
-        "$mlx_python" -c "
-from huggingface_hub import snapshot_download
-snapshot_download('${model}')
-"
-    fi
-    
-    success "Downloaded: ${model}"
+get_venv_python() {
+    echo "${MLX_VENV_DIR}/bin/python3"
 }
 
+get_venv_pip() {
+    echo "${MLX_VENV_DIR}/bin/pip3"
+}
+
+# Ensure huggingface_hub is installed in venv
+ensure_hf_hub() {
+    setup_venv
+    local py
+    py=$(get_venv_python)
+    if ! "$py" -c "import huggingface_hub" 2>/dev/null; then
+        info "Installing huggingface_hub..."
+        "$(get_venv_pip)" install -q huggingface_hub
+    fi
+}
+
+# Check if a model is cached in HuggingFace cache
 check_model_cached() {
     local model="$1"
     local cache_dir="${HOME}/.cache/huggingface/hub"
-    local model_dir="${cache_dir}/models--${model//\//-}"
-    
-    if [[ -d "$model_dir" ]]; then
+    # HuggingFace uses double-dash for / separator: org/model -> models--org--model
+    local model_dir="${cache_dir}/models--${model//\//--}"
+    [[ -d "$model_dir" ]]
+}
+
+# Download a single HuggingFace model
+download_hf_model() {
+    local model="$1"
+    local role="$2"
+
+    if [[ -z "$model" ]]; then
         return 0
     fi
-    return 1
-}
 
-download_model() {
-    local model="$1"
-    
-    if [[ "$BACKEND" == "mlx" ]]; then
-        download_mlx_model "$model"
-    elif [[ "$BACKEND" == "vllm" ]]; then
-        download_vllm_model "$model"
+    if check_model_cached "$model"; then
+        success "${role}: ${model} (cached)"
+        return 0
+    fi
+
+    info "Downloading ${role}: ${model}..."
+
+    ensure_hf_hub
+    local py
+    py=$(get_venv_python)
+
+    "$py" -c "
+from huggingface_hub import snapshot_download
+snapshot_download('${model}', local_dir_use_symlinks=True)
+" 2>&1
+
+    if check_model_cached "$model"; then
+        success "${role}: ${model}"
     else
-        error "Cannot download models for cloud backend"
-        return 1
+        warn "${role}: ${model} — download may have failed"
     fi
 }
 
+# Get model name for a role using get-models.sh
+get_model_for_role() {
+    local role="$1"
+    local model
+    model=$(LLM_BACKEND="$BACKEND" LLM_TIER="$TIER" bash "${SCRIPT_DIR}/get-models.sh" "$role" 2>/dev/null) || true
+    echo "$model"
+}
+
+# Check cache status for all models
 check_all_models() {
-    local all_cached=true
-    
     echo "Checking model cache..."
+    echo "Backend: ${BACKEND}, Tier: ${TIER}"
     echo ""
-    
-    for role in fast agent frontier; do
+
+    local all_cached=true
+
+    for role in "${ALL_ROLES[@]}"; do
         local model
-        model=$(bash "${SCRIPT_DIR}/get-models.sh" "$role")
-        
+        model=$(get_model_for_role "$role")
+        if [[ -z "$model" ]]; then
+            echo -e "  ${DIM}○${NC} ${role}: (not configured for this tier)"
+            continue
+        fi
         if check_model_cached "$model"; then
             echo -e "  ${GREEN}✓${NC} ${role}: ${model}"
         else
@@ -156,11 +136,21 @@ check_all_models() {
             all_cached=false
         fi
     done
-    
+
     echo ""
-    
+
+    # Check Marker/Surya models (only on standard+ tiers)
+    if [[ "$TIER" == "standard" || "$TIER" == "enhanced" ]]; then
+        echo "Checking Marker/Surya model cache..."
+        check_marker_models_cached || all_cached=false
+    else
+        echo -e "  ${DIM}·${NC} marker: skipped (requires standard+ tier)"
+    fi
+
+    echo ""
+
     if [[ "$all_cached" == true ]]; then
-        success "All models cached - ready for offline use"
+        success "All models cached — ready for offline use"
         return 0
     else
         warn "Some models need to be downloaded"
@@ -168,12 +158,22 @@ check_all_models() {
     fi
 }
 
-# ── Marker / Surya model pre-download ──────────────────────────────────────────
-# Downloads models into the Docker model_cache volume (mounted at /root/.cache)
-# so the data-worker doesn't need to fetch them on first document processing.
-# Uses the surya S3 download API via a one-shot Python script inside the
-# data-worker container.
+# Download all HuggingFace models for the current tier
+download_all_hf_models() {
+    info "Downloading all models for ${TIER} tier (${BACKEND})..."
+    echo ""
 
+    for role in "${ALL_ROLES[@]}"; do
+        local model
+        model=$(get_model_for_role "$role")
+        if [[ -z "$model" ]]; then
+            continue
+        fi
+        download_hf_model "$model" "$role"
+    done
+}
+
+# ── Marker / Surya model pre-download ──────────────────────────────────────────
 MARKER_MODELS=(
     "text_detection/2025_05_07"
     "text_recognition/2025_09_23"
@@ -183,12 +183,24 @@ MARKER_MODELS=(
 )
 
 check_marker_models_cached() {
-    local cache_dir="${HOME}/.cache/datalab/models"
-    local all_cached=true
+    # Marker models live inside the model_cache volume (mounted at /root/.cache in data-worker)
+    # We check via docker exec if available, otherwise skip
+    local container="${CONTAINER_PREFIX}-data-worker"
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+        echo -e "  ${DIM}○${NC} marker: data-worker not running — cannot check"
+        return 1
+    fi
 
+    local all_cached=true
     for model in "${MARKER_MODELS[@]}"; do
-        local model_dir="${cache_dir}/${model}"
-        if [[ -d "$model_dir" && -f "${model_dir}/manifest.json" ]]; then
+        local cached
+        cached=$(docker exec "$container" python3 -c "
+import os
+from surya.settings import settings
+path = os.path.join(settings.MODEL_CACHE_DIR, '${model}', 'manifest.json')
+print('yes' if os.path.exists(path) else 'no')
+" 2>/dev/null || echo "no")
+        if [[ "$cached" == "yes" ]]; then
             echo -e "  ${GREEN}✓${NC} marker: ${model}"
         else
             echo -e "  ${YELLOW}○${NC} marker: ${model} (not cached)"
@@ -196,16 +208,15 @@ check_marker_models_cached() {
         fi
     done
 
-    $all_cached
+    [[ "$all_cached" == true ]]
 }
 
 download_marker_models() {
-    info "Pre-downloading Marker/Surya models into model_cache volume..."
+    info "Pre-downloading Marker/Surya models..."
 
-    # Run inside the data-worker container so we have surya installed
-    local container="dev-data-worker"
-    if ! docker ps --format '{{.Names}}' | grep -q "^${container}$"; then
-        warn "data-worker container not running -- Marker models will download on first use"
+    local container="${CONTAINER_PREFIX}-data-worker"
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+        warn "data-worker container (${container}) not running — Marker models will download on first use"
         return 0
     fi
 
@@ -240,56 +251,50 @@ print('All Marker/Surya models cached.')
     if [[ $? -eq 0 ]]; then
         success "Marker/Surya models cached"
     else
-        warn "Marker model download had errors -- models will download on first use"
+        warn "Marker model download had errors — models will download on first use"
     fi
 }
 
 # Main
 main() {
     local target="${1:-all}"
-    
-    echo ""
-    echo "LLM Backend: ${BACKEND}"
-    echo "Tier: ${TIER}"
-    echo ""
-    
+
     if [[ "$BACKEND" == "cloud" ]]; then
-        info "Cloud backend selected - no local models to download"
+        info "Cloud backend selected — no local models to download"
         exit 0
     fi
-    
+
     case "$target" in
         --check)
             check_all_models
+            ;;
+        all)
+            download_all_hf_models
             echo ""
-            echo "Checking Marker/Surya model cache..."
-            check_marker_models_cached
-            ;;
-        fast)
-            download_model "$LLM_MODEL_FAST"
-            ;;
-        agent)
-            download_model "$LLM_MODEL_AGENT"
-            ;;
-        frontier)
-            download_model "$LLM_MODEL_FRONTIER"
+            # Marker/Surya models only make sense on standard+ tiers (48GB+)
+            # They require significant RAM and won't run on minimal/entry systems
+            if [[ "$TIER" == "standard" || "$TIER" == "enhanced" ]]; then
+                download_marker_models
+            else
+                info "Skipping Marker/Surya models (${TIER} tier — requires standard or higher)"
+            fi
+            echo ""
+            success "Model download complete"
             ;;
         marker)
             download_marker_models
             ;;
-        all)
-            info "Downloading all models for ${TIER} tier..."
-            echo ""
-            download_model "$LLM_MODEL_FAST"
-            download_model "$LLM_MODEL_AGENT"
-            download_model "$LLM_MODEL_FRONTIER"
-            echo ""
-            download_marker_models
-            echo ""
-            success "All models downloaded"
+        fast|agent|embed|whisper|kokoro|flux|colpali)
+            local model
+            model=$(get_model_for_role "$target")
+            if [[ -z "$model" ]]; then
+                warn "${target}: not configured for ${TIER}/${BACKEND}"
+            else
+                download_hf_model "$model" "$target"
+            fi
             ;;
         *)
-            echo "Usage: $0 [fast|agent|frontier|all|marker|--check]" >&2
+            echo "Usage: $0 [all|fast|agent|embed|whisper|kokoro|flux|colpali|marker|--check]" >&2
             exit 1
             ;;
     esac

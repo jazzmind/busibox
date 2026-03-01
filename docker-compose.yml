@@ -382,7 +382,7 @@ services:
       # Falls back to Docker volume if FASTEMBED_HOST_CACHE is not set
       - ${FASTEMBED_HOST_CACHE:-fastembed_cache}:/root/.cache/fastembed
       # General model cache for huggingface, etc.
-      - model_cache:/root/.cache/huggingface
+      - ${HF_HOST_CACHE:-model_cache}:/root/.cache/huggingface
     environment:
       # nomic-embed-text-v1.5: Matryoshka model (768-d native, truncatable to 256/512)
       # ~520MB model, MTEB 61.04 at 256-d (beats bge-small-384d at ~51.7)
@@ -487,7 +487,7 @@ services:
       - ../busibox-testdocs:/testdocs:ro  # Mount test documents for PDF tests
       - data_temp:/tmp/data
       # Model cache - persists downloaded models across container rebuilds
-      - model_cache:/root/.cache
+      - ${MODEL_HOST_CACHE:-model_cache}:/root/.cache
     command: ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8002", "--reload", "--reload-dir", "/app/src"]
     environment:
       # PostgreSQL - uses dedicated data database
@@ -588,7 +588,7 @@ services:
       - ../busibox-testdocs:/testdocs:ro  # Mount test documents for PDF tests
       - data_temp:/tmp/data
       # Model cache - persists downloaded models across container rebuilds
-      - model_cache:/root/.cache
+      - ${MODEL_HOST_CACHE:-model_cache}:/root/.cache
     # Run the worker process instead of the API
     command: ["python", "src/worker.py"]
     environment:
@@ -762,7 +762,7 @@ services:
       - ./srv/search/src:/app/src:ro
       - ./srv/shared:/app/shared:ro
       # Model cache - persists downloaded models across container rebuilds
-      - model_cache:/root/.cache
+      - ${MODEL_HOST_CACHE:-model_cache}:/root/.cache
     command: ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8003", "--reload", "--reload-dir", "/app/src"]
     environment:
       LOG_LEVEL: INFO
@@ -1254,7 +1254,7 @@ services:
     ports:
       - "8080:8000"
     volumes:
-      - vllm_cache:/root/.cache/huggingface
+      - ${HF_HOST_CACHE:-vllm_cache}:/root/.cache/huggingface
     deploy:
       resources:
         reservations:

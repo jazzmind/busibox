@@ -20,44 +20,46 @@
     _env_file_arg: "{{ '--env-file ' ~ docker_env_file if _env_file_stat.stat.exists else '' }}"
     _compose_cmd: "docker compose {{ docker_compose_files_list | map('regex_replace', '^(.*)$', '-f \\1') | join(' ') }} {{ '--env-file ' ~ docker_env_file if _env_file_stat.stat.exists else '' }}"
 
-- name: Wait for {{ docker_wait_service }} to be healthy
-  ansible.builtin.shell: |
-    cd {{ docker_compose_dir }}
-    timeout={{ docker_wait_timeout | default(60) }}
-    elapsed=0
-    while [ $elapsed -lt $timeout ]; do
-      json_output=$({{ _compose_cmd }} ps --format json {{ docker_wait_service }} 2>/dev/null)
-      health=$(echo "$json_output" | jq -r 'if type == "array" then .[0].Health else .Health end // "none"')
-      
-      case "$health" in
-        healthy)
-          echo "Service {{ docker_wait_service }} is healthy"
-          exit 0
-          ;;
-        unhealthy)
-          echo "Service {{ docker_wait_service }} is unhealthy (elapsed ${elapsed}s/${timeout}s), waiting for restart..."
-          ;;
-        starting)
-          # During Docker's start_period, health status is "starting"
-          ;;
-        none|null|"")
-          state=$(echo "$json_output" | jq -r 'if type == "array" then .[0].State else .State end // "none"')
-          if [ "$state" = "running" ]; then
-            echo "Service {{ docker_wait_service }} is running (no healthcheck)"
+- name: "Wait for {{ docker_wait_service }} to be healthy"
+  ansible.builtin.shell:
+    cmd: |
+      timeout=${WAIT_TIMEOUT}
+      elapsed=0
+      while [ $elapsed -lt $timeout ]; do
+        json_output=$(${COMPOSE_CMD} ps --format json ${WAIT_SERVICE} 2>/dev/null)
+        health=$(echo "$json_output" | jq -r 'if type == "array" then .[0].Health else .Health end // "none"')
+
+        case "$health" in
+          healthy)
+            echo "Service ${WAIT_SERVICE} is healthy"
             exit 0
-          fi
-          ;;
-      esac
-      
-      sleep 2
-      elapsed=$((elapsed + 2))
-    done
-    echo "Timeout waiting for {{ docker_wait_service }}"
-    exit 1
-  args:
+            ;;
+          unhealthy)
+            echo "Service ${WAIT_SERVICE} is unhealthy (elapsed ${elapsed}s/${timeout}s), waiting for restart..."
+            ;;
+          starting)
+            # During Docker's start_period, health status is "starting"
+            ;;
+          none|null|"")
+            state=$(echo "$json_output" | jq -r 'if type == "array" then .[0].State else .State end // "none"')
+            if [ "$state" = "running" ]; then
+              echo "Service ${WAIT_SERVICE} is running (no healthcheck)"
+              exit 0
+            fi
+            ;;
+        esac
+
+        sleep 2
+        elapsed=$((elapsed + 2))
+      done
+      echo "Timeout waiting for ${WAIT_SERVICE}"
+      exit 1
     chdir: "{{ docker_compose_dir }}"
     executable: /bin/bash
   environment:
+    COMPOSE_CMD: "{{ _compose_cmd }}"
+    WAIT_SERVICE: "{{ docker_wait_service }}"
+    WAIT_TIMEOUT: "{{ docker_wait_timeout | default(60) }}"
     CONTAINER_PREFIX: "{{ container_prefix | default('dev') }}"
     POSTGRES_PASSWORD: "{{ secrets.postgresql.password | default('') }}"
     MINIO_ACCESS_KEY: "{{ secrets.minio.root_user | default('minioadmin') }}"

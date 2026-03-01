@@ -2,7 +2,7 @@
 #
 # Get model tier based on available RAM/VRAM
 #
-# Returns: "minimal", "standard", "enhanced", "professional", "enterprise", "ultra"
+# Returns: "minimal", "entry", "standard", "enhanced"
 #
 
 set -euo pipefail
@@ -41,16 +41,12 @@ get_memory_tier() {
     fi
     
     # Determine tier
-    if [[ $ram_gb -ge 256 ]]; then
-        echo "ultra"
-    elif [[ $ram_gb -ge 128 ]]; then
-        echo "enterprise"
-    elif [[ $ram_gb -ge 96 ]]; then
-        echo "professional"
-    elif [[ $ram_gb -ge 48 ]]; then
+    if [[ $ram_gb -ge 96 ]]; then
         echo "enhanced"
-    elif [[ $ram_gb -ge 24 ]]; then
+    elif [[ $ram_gb -ge 48 ]]; then
         echo "standard"
+    elif [[ $ram_gb -ge 24 ]]; then
+        echo "entry"
     else
         echo "minimal"
     fi

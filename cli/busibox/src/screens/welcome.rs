@@ -1,4 +1,5 @@
-use crate::app::{App, Screen};
+use crate::app::{App, ModelCacheCheckState, ModelCacheEntry, Screen};
+use crate::modules::models::ModelRecommendation;
 use crate::theme;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Margin;
@@ -35,13 +36,21 @@ pub fn render(f: &mut Frame, app: &App) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(chunks[2]);
 
-    // System info panel
+    // System info panel — show active profile's machine stats
     let mut info_lines = vec![
         Line::from(Span::styled("System Info", theme::heading())),
         Line::from(""),
     ];
 
-    if let Some(hw) = &app.local_hardware {
+    let is_remote = app.active_profile().map(|(_, p)| p.remote).unwrap_or(false);
+    let profile_hw = if is_remote {
+        app.remote_hardware.as_ref()
+            .or_else(|| app.active_profile().and_then(|(_, p)| p.hardware.as_ref()))
+    } else {
+        app.local_hardware.as_ref()
+    };
+
+    if let Some(hw) = profile_hw {
         info_lines.push(Line::from(vec![
             Span::styled("  OS:    ", theme::muted()),
             Span::styled(hw.os.to_string(), theme::normal()),
@@ -76,6 +85,45 @@ pub fn render(f: &mut Frame, app: &App) {
     } else {
         info_lines.push(Line::from(Span::styled(
             "  Detecting...",
+            theme::muted(),
+        )));
+    }
+
+    // Model cache status
+    if !app.model_cache_status.is_empty() {
+        info_lines.push(Line::from(""));
+        info_lines.push(Line::from(Span::styled("Model Cache", theme::heading())));
+        for entry in &app.model_cache_status {
+            let (icon, style) = if entry.cached {
+                ("✓", theme::success())
+            } else {
+                ("○", theme::warning())
+            };
+            let short_name = entry.name.rsplit('/').next().unwrap_or(&entry.name);
+            info_lines.push(Line::from(vec![
+                Span::styled(format!("  {icon} "), style),
+                Span::styled(format!("{}: ", entry.role), theme::muted()),
+                Span::styled(short_name, theme::normal()),
+            ]));
+        }
+        let cached_count = app.model_cache_status.iter().filter(|e| e.cached).count();
+        let total_count = app.model_cache_status.len();
+        if cached_count == total_count {
+            info_lines.push(Line::from(Span::styled(
+                "  All models ready",
+                theme::success(),
+            )));
+        } else {
+            info_lines.push(Line::from(Span::styled(
+                format!("  {}/{} cached", cached_count, total_count),
+                theme::dim(),
+            )));
+        }
+    } else if app.model_cache_check_state == ModelCacheCheckState::Checking {
+        info_lines.push(Line::from(""));
+        info_lines.push(Line::from(Span::styled("Model Cache", theme::heading())));
+        info_lines.push(Line::from(Span::styled(
+            "  Checking...",
             theme::muted(),
         )));
     }
@@ -177,7 +225,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Span::styled(msg.as_str(), style)
     } else {
         Span::styled(
-            " ↑/↓ Navigate  Enter Select  q Quit",
+            " ↑/↓ Navigate  Enter Select  m Models  x Export  p Password  b Deploy CLI  q Quit",
             theme::muted(),
         )
     };
@@ -199,13 +247,12 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                 app.menu_selected += 1;
             }
         }
+        KeyCode::Char('m') => {
+            check_model_cache(app);
+        }
         KeyCode::Enter => {
             let item = menu_items[app.menu_selected];
             match item {
-                "Setup New" => {
-                    app.screen = Screen::SetupMode;
-                    app.menu_selected = 0;
-                }
                 "Resume Install" | "Update / Re-install" => {
                     app.set_message(
                         "⠋ Connecting to remote host...",
@@ -233,10 +280,127 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                 _ => {}
             }
         }
-        KeyCode::Char('s') => {
-            app.screen = Screen::SetupMode;
-            app.menu_selected = 0;
+        KeyCode::Char('x') => {
+            if let Some((_, profile)) = app.active_profile() {
+                if profile.remote && app.vault_password.is_some() {
+                    app.pending_profile_export = true;
+                } else if !profile.remote {
+                    app.set_message("Export is only for remote profiles", crate::app::MessageKind::Info);
+                } else {
+                    app.set_message("Unlock vault first (select profile)", crate::app::MessageKind::Info);
+                }
+            }
+        }
+        KeyCode::Char('p') => {
+            if let Some((id, _)) = app.active_profile() {
+                if crate::modules::vault::has_vault_key(&id) {
+                    app.pending_password_change = true;
+                } else {
+                    app.set_message("No vault key for this profile", crate::app::MessageKind::Info);
+                }
+            }
+        }
+        KeyCode::Char('b') => {
+            if let Some((_, profile)) = app.active_profile() {
+                if profile.remote {
+                    app.pending_deploy_binary = true;
+                } else {
+                    app.set_message("Deploy CLI is only for remote profiles", crate::app::MessageKind::Info);
+                }
+            }
         }
         _ => {}
     }
+}
+
+/// Check model cache status for the active profile.
+/// For local profiles: checks HuggingFace cache directory directly.
+/// For remote profiles: connects via SSH to check remote cache.
+pub fn check_model_cache(app: &mut App) {
+    use crate::modules::models;
+
+    app.model_cache_check_state = ModelCacheCheckState::Checking;
+    app.model_cache_status.clear();
+
+    let profile = match app.active_profile() {
+        Some((_, p)) => p.clone(),
+        None => {
+            app.model_cache_check_state = ModelCacheCheckState::Failed;
+            return;
+        }
+    };
+
+    let hw = if profile.remote {
+        app.remote_hardware.as_ref()
+            .or(profile.hardware.as_ref())
+    } else {
+        app.local_hardware.as_ref()
+    };
+    let hw = match hw {
+        Some(h) => h,
+        None => {
+            app.model_cache_check_state = ModelCacheCheckState::Failed;
+            return;
+        }
+    };
+
+    let tier = profile.effective_model_tier().unwrap_or(hw.memory_tier);
+    let backend = &hw.llm_backend;
+    let config_path = app.repo_root
+        .join("provision")
+        .join("ansible")
+        .join("group_vars")
+        .join("all")
+        .join("model_registry.yml");
+
+    let rec = match ModelRecommendation::from_config(&config_path, tier, backend) {
+        Ok(r) => r,
+        Err(_) => {
+            app.model_cache_check_state = ModelCacheCheckState::Failed;
+            return;
+        }
+    };
+
+    if profile.remote {
+        // Remote: check via SSH
+        let host = match profile.effective_host() {
+            Some(h) => h.to_string(),
+            None => {
+                app.model_cache_check_state = ModelCacheCheckState::Failed;
+                return;
+            }
+        };
+        let user = profile.effective_user().to_string();
+        let key = profile.effective_ssh_key().to_string();
+        let remote_path = profile.effective_remote_path().to_string();
+
+        let ssh = crate::modules::ssh::SshConnection::new(&host, &user, &key);
+
+        let model_list: Vec<(String, String)> = rec.models()
+            .iter()
+            .filter(|m| !m.name.is_empty())
+            .map(|m| (m.name.clone(), m.role.clone()))
+            .collect();
+
+        let results = models::check_remote_model_cache(&ssh, &remote_path, &model_list);
+        app.model_cache_status = results
+            .into_iter()
+            .map(|(name, role, cached)| ModelCacheEntry { name, role, cached })
+            .collect();
+    } else {
+        // Local: check HuggingFace cache directory
+        let mut seen = std::collections::HashSet::new();
+        for m in rec.models() {
+            if !m.name.is_empty() && seen.insert(m.name.clone()) {
+                let cached = models::is_model_cached_locally(&m.name);
+                app.model_cache_status.push(ModelCacheEntry {
+                    name: m.name.clone(),
+                    role: m.role.clone(),
+                    cached,
+                });
+            }
+        }
+    }
+
+    app.model_cache_check_state = ModelCacheCheckState::Done;
 }

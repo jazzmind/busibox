@@ -181,7 +181,26 @@ available_models:
     tool_calling: false
     multimodal: true
     tier: "standard"
-    
+
+  "qwen3-30b-mlx":
+    provider: "mlx"
+    model: "qwen3-30b-mlx"
+    model_name: "mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit"
+    description: "Large agent/reasoning model for MLX (30B MoE, ~18GB)"
+    tool_calling: true
+    tool_call_parser: "hermes"
+    tier: "standard"
+    memory_estimate_gb: 18.0
+
+  "qwen3-80b-mlx":
+    provider: "mlx"
+    model: "qwen3-80b-mlx"
+    model_name: "mlx-community/Qwen3-Next-80B-A3B-Instruct-4bit"
+    description: "High-performance reasoning model for MLX (80B MoE, ~45GB)"
+    tool_calling: true
+    tier: "enhanced"
+    memory_estimate_gb: 45.0
+
   "whisper-tiny":
     provider: "mlx"
     model: "whisper-tiny"
@@ -329,4 +348,94 @@ model_purposes_dev:
   embedding: "nomic-embed"   # Matryoshka embedding (768-d native, truncated to 256-d for dev)
   visual-embedding: "colpali"   # Visual document embedding (same as prod)
   reranking: "bge-reranker-v2-m3-cpu"   # CPU reranking for dev (no GPU needed)
+
+# =============================================================================
+# Memory Tiers - Hardware-based model selection for install/download
+# =============================================================================
+# Maps RAM/VRAM tiers to model keys from available_models above.
+# The download script resolves these keys to HuggingFace repo IDs via model_name.
+#
+# Roles:
+#   fast    - Quick dispatch/classification model (always loaded)
+#   agent   - Primary reasoning/chat model
+#   embed   - Text embedding model
+#   whisper - Speech-to-text transcription
+#   kokoro  - Text-to-speech voice generation
+#   flux    - Image generation
+#   colpali - Visual document embedding (standard+ only)
+#
+tiers:
+  # 16GB - MacBook Air, base MacBook Pro
+  # ~6GB reserved for system + Docker, ~10GB for models
+  minimal:
+    min_ram_gb: 16
+    max_ram_gb: 23
+    description: "Lightweight models for basic use"
+    mlx:
+      fast: "qwen3-0.6b"
+      agent: "qwen3-0.6b"
+      embed: "nomic-embed"
+      whisper: "whisper-tiny"
+      kokoro: "kokoro-82m"
+    vllm:
+      fast: "qwen3-0.6b-vllm"
+      agent: "qwen3-0.6b-vllm"
+      embed: "nomic-embed"
+
+  # 24GB - MacBook Pro 14"
+  # ~8GB reserved, ~16GB for models
+  entry:
+    min_ram_gb: 24
+    max_ram_gb: 47
+    description: "Entry-level performance for most workloads"
+    mlx:
+      fast: "qwen3-0.6b"
+      agent: "qwen3-4b-instruct-2507"
+      embed: "nomic-embed"
+      whisper: "whisper-tiny"
+      kokoro: "kokoro-82m"
+    vllm:
+      fast: "qwen3-0.6b-vllm"
+      agent: "phi-4"
+      embed: "nomic-embed"
+
+  # 48GB - MacBook Pro 16", Mac Mini Pro
+  # ~10GB reserved, ~38GB for models
+  standard:
+    min_ram_gb: 48
+    max_ram_gb: 95
+    description: "Balanced performance for production workloads"
+    mlx:
+      fast: "qwen3-4b-instruct-2507"
+      agent: "qwen3-30b-mlx"
+      embed: "nomic-embed"
+      whisper: "whisper-large-v3"
+      kokoro: "kokoro-82m"
+      flux: "flux2-klein-4b"
+      colpali: "colpali"
+    vllm:
+      fast: "phi-4"
+      agent: "qwen3-30b"
+      embed: "nomic-embed"
+      colpali: "colpali"
+
+  # 96GB+ - Mac Studio, Mac Pro, multi-GPU servers
+  # ~12GB reserved, ~84GB+ for models
+  enhanced:
+    min_ram_gb: 96
+    max_ram_gb: 9999
+    description: "High-performance with large reasoning models"
+    mlx:
+      fast: "qwen3-4b-instruct-2507"
+      agent: "qwen3-80b-mlx"
+      embed: "nomic-embed"
+      whisper: "whisper-large-v3"
+      kokoro: "kokoro-82m"
+      flux: "flux2-klein-4b"
+      colpali: "colpali"
+    vllm:
+      fast: "phi-4"
+      agent: "qwen3-30b"
+      embed: "nomic-embed"
+      colpali: "colpali"
 

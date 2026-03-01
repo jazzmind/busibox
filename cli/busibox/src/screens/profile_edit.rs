@@ -18,9 +18,10 @@ const FIELD_LABELS: &[&str] = &[
     "Tailscale IP",
     "Model Tier",
     "Admin Email",
+    "Frontend Ref",
 ];
 
-const FIELD_COUNT: usize = 9;
+const FIELD_COUNT: usize = 10;
 
 const FIELD_LABEL: usize = 0;
 const FIELD_ENVIRONMENT: usize = 1;
@@ -31,6 +32,7 @@ const FIELD_REMOTE_PATH: usize = 5;
 const FIELD_TAILSCALE_IP: usize = 6;
 const FIELD_MODEL_TIER: usize = 7;
 const FIELD_ADMIN_EMAIL: usize = 8;
+const FIELD_FRONTEND_REF: usize = 9;
 
 pub fn render(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
@@ -239,7 +241,12 @@ fn render_tier_details_overlay(
         .copied()
         .unwrap_or(MemoryTier::Standard);
 
-    let config_path = app.repo_root.join("config").join("demo-models.yaml");
+    let config_path = app.repo_root
+        .join("provision")
+        .join("ansible")
+        .join("group_vars")
+        .join("all")
+        .join("model_registry.yml");
     let recommendation = config_path
         .exists()
         .then(|| ModelRecommendation::from_config(&config_path, selected_tier, backend).ok())
@@ -531,6 +538,7 @@ fn default_profile() -> profile::Profile {
         kubeconfig: None,
         model_tier: None,
         admin_email: None,
+        frontend_ref: None,
     }
 }
 
@@ -552,6 +560,7 @@ fn field_value(profile: &profile::Profile, field: usize) -> String {
                 .unwrap_or_else(|| "(auto-detect)".into())
         }
         FIELD_ADMIN_EMAIL => profile.admin_email.clone().unwrap_or_default(),
+        FIELD_FRONTEND_REF => profile.frontend_ref.clone().unwrap_or_else(|| "latest".into()),
         _ => String::new(),
     }
 }
@@ -568,6 +577,7 @@ fn field_hint(field: usize, profile: &profile::Profile) -> String {
             hw_tier.unwrap_or_else(|| "←/→ to cycle tiers".into())
         }
         FIELD_ADMIN_EMAIL => "Used for initial login".into(),
+        FIELD_FRONTEND_REF => "Git ref: 'latest' (newest release), 'main' (dev), or tag 'v1.0.0'".into(),
         FIELD_REMOTE_HOST => {
             if profile.remote {
                 "SSH hostname or IP".into()
@@ -663,6 +673,13 @@ fn apply_field(app: &mut App, field: usize, value: &str) {
             } else {
                 Some(value.to_string())
             };
+        }
+        FIELD_FRONTEND_REF => {
+            if value.is_empty() || value == "latest" {
+                profile.frontend_ref = None;
+            } else {
+                profile.frontend_ref = Some(value.to_string());
+            }
         }
         _ => {}
     }

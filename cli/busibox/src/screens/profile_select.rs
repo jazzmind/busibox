@@ -1,5 +1,5 @@
 use crate::app::{App, MessageKind, Screen};
-use crate::modules::profile;
+use crate::modules::{profile, vault};
 use crate::theme;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Margin;
@@ -121,6 +121,8 @@ pub fn render(f: &mut Frame, app: &App) {
     let help = Paragraph::new(Line::from(vec![
         Span::styled(" Enter ", theme::highlight()),
         Span::styled("Activate  ", theme::normal()),
+        Span::styled("n ", theme::highlight()),
+        Span::styled("New  ", theme::normal()),
         Span::styled("e ", theme::highlight()),
         Span::styled("Edit  ", theme::normal()),
         Span::styled("↑/↓ ", theme::highlight()),
@@ -158,6 +160,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                 let profile_ids: Vec<&String> = profiles.profiles.keys().collect();
                 if let Some(id) = profile_ids.get(app.profile_selected) {
                     let id = (*id).clone();
+                    let switched_profile = id.clone();
                     if let Some(profiles) = &mut app.profiles {
                         profiles.active = id.clone();
                         if let Err(e) =
@@ -172,6 +175,12 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                                 &format!("Switched to profile: {id}"),
                                 MessageKind::Success,
                             );
+                            // Clear cached vault password when switching profiles
+                            app.vault_password = None;
+                            // If the new profile has a vault key, prompt for unlock
+                            if vault::has_vault_key(&switched_profile) {
+                                app.pending_vault_setup = true;
+                            }
                             app.screen = Screen::Welcome;
                             app.menu_selected = 0;
                         }
@@ -190,6 +199,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                     app.screen = Screen::ProfileEdit;
                 }
             }
+        }
+        KeyCode::Char('n') => {
+            app.screen = Screen::SetupMode;
+            app.menu_selected = 0;
         }
         _ => {}
     }

@@ -3,6 +3,13 @@ use color_eyre::{eyre::eyre, Result};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+/// Shell preamble that augments PATH for ansible/pip locations.
+/// Uses `find` instead of shell globs to be safe in both bash and zsh
+/// (zsh errors on unmatched globs by default).
+pub const SHELL_PATH_PREAMBLE: &str = "\
+    for d in \"$HOME/.local/bin\" /usr/local/bin /opt/homebrew/bin; do [ -d \"$d\" ] && export PATH=\"$d:$PATH\"; done; \
+    for d in $(find \"$HOME/Library/Python\" -maxdepth 2 -name bin -type d 2>/dev/null); do export PATH=\"$d:$PATH\"; done; ";
+
 const RSYNC_EXCLUDES: &[&str] = &[
     ".git/",
     ".busibox/vault-keys/",
@@ -93,7 +100,7 @@ pub fn exec_make_capture(
     make_args: &str,
 ) -> Result<String> {
     let cmd = format!(
-        "for d in \"$HOME/.local/bin\" \"$HOME/Library/Python\"/*/bin /usr/local/bin; do [ -d \"$d\" ] && export PATH=\"$d:$PATH\"; done; \
+        "{SHELL_PATH_PREAMBLE}\
          cd {remote_path} && USE_MANAGER=0 make {make_args} 2>&1"
     );
     ssh.run(&cmd).map(|s| strip_ansi(&s))
@@ -158,7 +165,7 @@ pub fn exec_make_quiet(
     make_args: &str,
 ) -> Result<(i32, String)> {
     let cmd = format!(
-        "for d in \"$HOME/.local/bin\" \"$HOME/Library/Python\"/*/bin /usr/local/bin; do [ -d \"$d\" ] && export PATH=\"$d:$PATH\"; done; \
+        "{SHELL_PATH_PREAMBLE}\
          [ -f \"$HOME/.profile\" ] && . \"$HOME/.profile\" 2>/dev/null || true; \
          [ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\" 2>/dev/null || true; \
          cd {remote_path} && USE_MANAGER=0 make {make_args} 2>&1"
@@ -212,28 +219,22 @@ pub fn run_local_make_quiet_with_vault(
 }
 
 /// Like `exec_make_quiet` but securely delivers the vault password to the
-/// remote host. Creates a temporary password file, runs make with
-/// ANSIBLE_VAULT_PASSWORD_FILE pointing to it, then removes it.
+/// remote host via ANSIBLE_VAULT_PASSWORD env var. The env var is read by
+/// scripts/lib/vault-pass-from-env.sh which Ansible uses as --vault-password-file.
 pub fn exec_make_quiet_with_vault(
     ssh: &SshConnection,
     remote_path: &str,
     make_args: &str,
     vault_password: &str,
 ) -> Result<(i32, String)> {
-    // Escape single quotes in the password for use inside single-quoted string
     let escaped_pw = vault_password.replace('\'', "'\\''");
 
     let cmd = format!(
-        "for d in \"$HOME/.local/bin\" \"$HOME/Library/Python\"/*/bin /usr/local/bin; do [ -d \"$d\" ] && export PATH=\"$d:$PATH\"; done; \
+        "{SHELL_PATH_PREAMBLE}\
          [ -f \"$HOME/.profile\" ] && . \"$HOME/.profile\" 2>/dev/null || true; \
          [ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\" 2>/dev/null || true; \
-         _VPF=$(mktemp); \
-         printf '%s' '{escaped_pw}' > \"$_VPF\"; \
-         chmod 600 \"$_VPF\"; \
-         export ANSIBLE_VAULT_PASSWORD=\"{escaped_pw}\"; \
-         export ANSIBLE_VAULT_PASSWORD_FILE=\"$_VPF\"; \
-         cd {remote_path} && USE_MANAGER=0 make {make_args} 2>&1; \
-         _RC=$?; rm -f \"$_VPF\"; exit $_RC"
+         export ANSIBLE_VAULT_PASSWORD='{escaped_pw}'; \
+         cd {remote_path} && USE_MANAGER=0 make {make_args} 2>&1"
     );
     let mut args: Vec<String> = vec![
         "-o".into(),
@@ -347,7 +348,7 @@ where
     use std::io::BufRead;
 
     let cmd = format!(
-        "for d in \"$HOME/.local/bin\" \"$HOME/Library/Python\"/*/bin /usr/local/bin; do [ -d \"$d\" ] && export PATH=\"$d:$PATH\"; done; \
+        "{SHELL_PATH_PREAMBLE}\
          [ -f \"$HOME/.profile\" ] && . \"$HOME/.profile\" 2>/dev/null || true; \
          [ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\" 2>/dev/null || true; \
          cd {remote_path} && USE_MANAGER=0 make {make_args} 2>&1"
@@ -406,16 +407,11 @@ where
     let escaped_pw = vault_password.replace('\'', "'\\''");
 
     let cmd = format!(
-        "for d in \"$HOME/.local/bin\" \"$HOME/Library/Python\"/*/bin /usr/local/bin; do [ -d \"$d\" ] && export PATH=\"$d:$PATH\"; done; \
+        "{SHELL_PATH_PREAMBLE}\
          [ -f \"$HOME/.profile\" ] && . \"$HOME/.profile\" 2>/dev/null || true; \
          [ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\" 2>/dev/null || true; \
-         _VPF=$(mktemp); \
-         printf '%s' '{escaped_pw}' > \"$_VPF\"; \
-         chmod 600 \"$_VPF\"; \
-         export ANSIBLE_VAULT_PASSWORD=\"{escaped_pw}\"; \
-         export ANSIBLE_VAULT_PASSWORD_FILE=\"$_VPF\"; \
-         cd {remote_path} && USE_MANAGER=0 make {make_args} 2>&1; \
-         _RC=$?; rm -f \"$_VPF\"; exit $_RC"
+         export ANSIBLE_VAULT_PASSWORD='{escaped_pw}'; \
+         cd {remote_path} && USE_MANAGER=0 make {make_args} 2>&1"
     );
     let mut args: Vec<String> = vec![
         "-o".into(),
@@ -453,6 +449,107 @@ where
 
     let status = child.wait()?;
     Ok(status.code().unwrap_or(1))
+}
+
+/// Run an arbitrary command on the remote host and stream output line-by-line.
+/// The command is run as: cd {remote_path} && {cmd} 2>&1
+pub fn exec_remote_streaming<F>(
+    ssh: &SshConnection,
+    remote_path: &str,
+    cmd: &str,
+    mut on_line: F,
+) -> Result<i32>
+where
+    F: FnMut(&str),
+{
+    use std::io::BufRead;
+
+    let full_cmd = format!(
+        "{SHELL_PATH_PREAMBLE}\
+         [ -f \"$HOME/.profile\" ] && . \"$HOME/.profile\" 2>/dev/null || true; \
+         [ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\" 2>/dev/null || true; \
+         cd {remote_path} && {cmd} 2>&1"
+    );
+    let mut args: Vec<String> = vec![
+        "-o".into(),
+        "BatchMode=yes".into(),
+        "-o".into(),
+        "StrictHostKeyChecking=accept-new".into(),
+        "-o".into(),
+        "ConnectTimeout=10".into(),
+    ];
+    let key = crate::modules::ssh::shellexpand_path(&ssh.key_path);
+    if !key.is_empty() && Path::new(&key).exists() {
+        args.push("-i".into());
+        args.push(key);
+    }
+    args.push(ssh.ssh_target());
+    args.push(full_cmd);
+
+    let mut child = Command::new("ssh")
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let stdout = child.stdout.take().ok_or_else(|| eyre!("no stdout"))?;
+    let reader = std::io::BufReader::new(stdout);
+    for line in reader.lines() {
+        if let Ok(l) = line {
+            let cleaned = strip_ansi(&l);
+            let trimmed = cleaned.trim();
+            if !trimmed.is_empty() {
+                on_line(trimmed);
+            }
+        }
+    }
+
+    let status = child.wait()?;
+    Ok(status.code().unwrap_or(1))
+}
+
+/// Run an arbitrary command on the remote host with the vault password
+/// injected as ANSIBLE_VAULT_PASSWORD env var and ANSIBLE_VAULT_PASSWORD_FILE
+/// pointing to vault-pass-from-env.sh. Returns (exit_code, combined_output).
+pub fn exec_remote_with_vault(
+    ssh: &SshConnection,
+    remote_path: &str,
+    script: &str,
+    vault_password: &str,
+) -> Result<(i32, String)> {
+    let escaped_pw = vault_password.replace('\'', "'\\''");
+
+    let cmd = format!(
+        "{SHELL_PATH_PREAMBLE}\
+         export ANSIBLE_VAULT_PASSWORD='{escaped_pw}'; \
+         ANSIBLE_VAULT_PASSWORD_FILE=\"{remote_path}/scripts/lib/vault-pass-from-env.sh\"; \
+         chmod +x \"$ANSIBLE_VAULT_PASSWORD_FILE\" 2>/dev/null; \
+         cd {remote_path} && {script} 2>&1"
+    );
+    let mut args: Vec<String> = vec![
+        "-o".into(),
+        "BatchMode=yes".into(),
+        "-o".into(),
+        "StrictHostKeyChecking=accept-new".into(),
+        "-o".into(),
+        "ConnectTimeout=10".into(),
+    ];
+    let key = crate::modules::ssh::shellexpand_path(&ssh.key_path);
+    if !key.is_empty() && Path::new(&key).exists() {
+        args.push("-i".into());
+        args.push(key);
+    }
+    args.push(ssh.ssh_target());
+    args.push(cmd);
+
+    let output = Command::new("ssh").args(&args).output()?;
+    let exit_code = output.status.code().unwrap_or(1);
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok((exit_code, strip_ansi(&combined)))
 }
 
 /// Ensure the remote busibox directory exists.

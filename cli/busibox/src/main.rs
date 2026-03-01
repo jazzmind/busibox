@@ -43,6 +43,22 @@ fn main() -> Result<()> {
         Err(_) => {}
     }
 
+    // Check model cache status for the active profile (local only, fast)
+    if app.has_profiles() {
+        if let Some((_, profile)) = app.active_profile() {
+            if !profile.remote {
+                screens::welcome::check_model_cache(&mut app);
+            }
+        }
+    }
+
+    // If the active profile has an encrypted vault key, prompt for unlock on startup
+    if let Some((id, _)) = app.active_profile() {
+        if modules::vault::has_vault_key(&id) {
+            app.pending_vault_setup = true;
+        }
+    }
+
     let mut terminal = tui::init()?;
 
     while !app.should_quit {
@@ -63,6 +79,9 @@ fn main() -> Result<()> {
             loop {
                 match rx.try_recv() {
                     Ok(app::InstallUpdate::Log(msg)) => {
+                        if screens::install::process_install_log(&msg, &mut app) {
+                            continue; // Internal signal, don't add to log
+                        }
                         let was_at_bottom =
                             app.install_log_scroll >= app.install_log.len().saturating_sub(1);
                         app.install_log.push(msg);
@@ -177,6 +196,36 @@ fn main() -> Result<()> {
             if app.vault_password.is_some() && app.screen == Screen::Install {
                 screens::install::spawn_install_worker_pub(&mut app);
             }
+        }
+
+        // Handle profile export (needs TUI suspended for password prompts)
+        if app.pending_profile_export {
+            app.pending_profile_export = false;
+            tui::suspend()?;
+            handle_profile_export(&app);
+            eprintln!("\nPress Enter to continue...");
+            let _ = std::io::stdin().read_line(&mut String::new());
+            terminal = tui::resume()?;
+        }
+
+        // Handle master password change (needs TUI suspended)
+        if app.pending_password_change {
+            app.pending_password_change = false;
+            tui::suspend()?;
+            handle_password_change(&app);
+            eprintln!("\nPress Enter to continue...");
+            let _ = std::io::stdin().read_line(&mut String::new());
+            terminal = tui::resume()?;
+        }
+
+        // Handle binary deployment to remote host (needs TUI suspended)
+        if app.pending_deploy_binary {
+            app.pending_deploy_binary = false;
+            tui::suspend()?;
+            handle_deploy_binary(&app);
+            eprintln!("\nPress Enter to continue...");
+            let _ = std::io::stdin().read_line(&mut String::new());
+            terminal = tui::resume()?;
         }
 
         // Handle post-install login (make login) with TUI suspended
@@ -415,6 +464,8 @@ fn perform_resume_install(app: &mut App) {
     app.install_services.clear();
     app.install_log.clear();
     app.install_complete = false;
+    app.install_model_status.clear();
+    app.install_models_complete = false;
     app.install_portal_url = None;
     app.clear_message();
     app.screen = Screen::Install;
@@ -687,8 +738,8 @@ fn create_ansible_vault(app: &App, vault_pw: &str, vault_prefix: &str) {
     let is_remote = app.setup_target == app::SetupTarget::Remote;
 
     let vault_dir = "provision/ansible/roles/secrets/vars";
-    let example_file = format!("{vault_dir}/vault.example.yml");
     let target_file = format!("{vault_dir}/vault.{vault_prefix}.yml");
+    let example_file = format!("{vault_dir}/vault.example.yml");
 
     eprintln!("Creating Ansible vault: {target_file}...");
 
@@ -700,7 +751,6 @@ fn create_ansible_vault(app: &App, vault_pw: &str, vault_prefix: &str) {
                 .map(|p| p.effective_remote_path().to_string())
                 .unwrap_or_else(|| app.remote_path_input.clone());
 
-            // Check if vault already exists
             let check_cmd = format!(
                 "[ -f {remote_path}/{target_file} ] && echo EXISTS || echo MISSING"
             );
@@ -714,38 +764,24 @@ fn create_ansible_vault(app: &App, vault_pw: &str, vault_prefix: &str) {
                 return;
             }
 
-            // Copy example to target
-            let copy_cmd = format!(
-                "cp {remote_path}/{example_file} {remote_path}/{target_file}"
+            let create_script = format!(
+                "cp {example_file} {target_file} && \
+                 ansible-vault encrypt {target_file} --vault-password-file=\"$ANSIBLE_VAULT_PASSWORD_FILE\" && \
+                 echo ENCRYPT_OK || echo ENCRYPT_FAIL"
             );
-            if let Err(e) = ssh.run(&copy_cmd) {
-                eprintln!("  Warning: could not copy vault example: {e}");
-                return;
-            }
-
-            // Encrypt using ansible-vault via stdin for the password
-            // We use a temp pass file approach since ansible-vault encrypt needs it
-            let encrypt_cmd = format!(
-                "cd {remote_path} && \
-                 TMPF=$(mktemp) && \
-                 printf '%s' '{}' > \"$TMPF\" && \
-                 chmod 600 \"$TMPF\" && \
-                 ansible-vault encrypt {target_file} --vault-password-file=\"$TMPF\" && \
-                 rm -f \"$TMPF\"",
-                vault_pw.replace('\'', "'\\''")
-            );
-
-            // Need ansible to be available on the remote
-            let path_setup = "for d in \"$HOME/.local/bin\" \"$HOME/Library/Python\"/*/bin /usr/local/bin; do [ -d \"$d\" ] && export PATH=\"$d:$PATH\"; done";
-            let full_cmd = format!("{path_setup}; {encrypt_cmd}");
-
-            match ssh.run(&full_cmd) {
-                Ok(_) => {
-                    eprintln!("  ✓ Ansible vault created and encrypted on remote");
+            match modules::remote::exec_remote_with_vault(ssh, &remote_path, &create_script, vault_pw) {
+                Ok((rc, output)) => {
+                    if rc == 0 && output.contains("ENCRYPT_OK") {
+                        eprintln!("  ✓ Ansible vault created and encrypted on remote");
+                    } else {
+                        for line in output.lines() {
+                            eprintln!("  {}", line);
+                        }
+                        eprintln!("  Warning: vault encryption may have failed");
+                    }
                 }
                 Err(e) => {
                     eprintln!("  Warning: could not encrypt vault on remote: {e}");
-                    eprintln!("  You may need to run 'ansible-vault encrypt {target_file}' manually.");
                 }
             }
         }
@@ -769,44 +805,343 @@ fn create_ansible_vault(app: &App, vault_pw: &str, vault_prefix: &str) {
             return;
         }
 
-        // Encrypt locally
-        let mut tmpfile = std::env::temp_dir();
-        tmpfile.push(format!("busibox-vault-{}", std::process::id()));
-        if std::fs::write(&tmpfile, vault_pw).is_ok() {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(
-                    &tmpfile,
-                    std::fs::Permissions::from_mode(0o600),
+        let env_script = app.repo_root.join("scripts/lib/vault-pass-from-env.sh");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&env_script, std::fs::Permissions::from_mode(0o755));
+        }
+
+        let result = std::process::Command::new("ansible-vault")
+            .args(["encrypt", &target_path.to_string_lossy(), "--vault-password-file", &env_script.to_string_lossy()])
+            .env("ANSIBLE_VAULT_PASSWORD", vault_pw)
+            .output();
+
+        match result {
+            Ok(ref o) if o.status.success() => {
+                if let Ok(content) = std::fs::read_to_string(&target_path) {
+                    if content.starts_with("$ANSIBLE_VAULT") {
+                        eprintln!("  ✓ Ansible vault created and encrypted locally");
+                    } else {
+                        eprintln!("  Warning: ansible-vault reported success but file is not encrypted");
+                    }
+                }
+            }
+            Ok(ref o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                eprintln!(
+                    "  Warning: ansible-vault encrypt failed (exit {}): {}",
+                    o.status.code().unwrap_or(-1),
+                    stderr.trim()
                 );
             }
+            Err(e) => {
+                eprintln!("  Warning: could not run ansible-vault: {e}");
+            }
+        }
+    }
+}
 
-            let status = std::process::Command::new("ansible-vault")
-                .args([
-                    "encrypt",
-                    &target_path.to_string_lossy(),
-                    "--vault-password-file",
-                    &tmpfile.to_string_lossy(),
-                ])
-                .status();
+/// Export the active profile's vault key to a remote host with a new master password.
+fn handle_profile_export(app: &App) {
+    use modules::vault;
 
-            let _ = std::fs::remove_file(&tmpfile);
+    let (profile_id, profile) = match app.active_profile() {
+        Some((id, p)) => (id.to_string(), p.clone()),
+        None => {
+            eprintln!("No active profile.");
+            return;
+        }
+    };
 
-            match status {
-                Ok(s) if s.success() => {
-                    eprintln!("  ✓ Ansible vault created and encrypted locally");
-                }
-                Ok(s) => {
-                    eprintln!(
-                        "  Warning: ansible-vault encrypt failed (exit {})",
-                        s.code().unwrap_or(-1)
-                    );
-                }
-                Err(e) => {
-                    eprintln!("  Warning: could not run ansible-vault: {e}");
+    if !profile.remote {
+        eprintln!("Profile export is only for remote profiles.");
+        return;
+    }
+
+    let vault_pw = match &app.vault_password {
+        Some(pw) => pw.clone(),
+        None => {
+            eprintln!("Vault is not unlocked. Select the profile first to unlock.");
+            return;
+        }
+    };
+
+    let ssh = match &app.ssh_connection {
+        Some(s) => s,
+        None => {
+            eprintln!("No SSH connection. Cannot export to remote.");
+            return;
+        }
+    };
+
+    eprintln!("\n╔══════════════════════════════════════════════════════╗");
+    eprintln!("║             Export Profile to Host                    ║");
+    eprintln!("╚══════════════════════════════════════════════════════╝\n");
+    eprintln!("This will deploy an encrypted vault key to the remote host.");
+    eprintln!("The remote user will use their own master password to unlock.\n");
+
+    let remote_pw = match vault::prompt_new_password("Remote user's master password: ") {
+        Ok(pw) => pw,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return;
+        }
+    };
+
+    let enc = match vault::encrypt_vault_password(&vault_pw, &remote_pw) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Error encrypting vault key: {e}");
+            return;
+        }
+    };
+
+    let json = match serde_json::to_string_pretty(&enc) {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("Error serializing vault key: {e}");
+            return;
+        }
+    };
+
+    let escaped_json = json.replace('\'', "'\\''");
+    let cmd = format!(
+        "mkdir -p ~/.busibox/vault-keys && \
+         printf '%s\\n' '{escaped_json}' > ~/.busibox/vault-keys/{profile_id}.enc && \
+         chmod 600 ~/.busibox/vault-keys/{profile_id}.enc && \
+         echo EXPORT_OK"
+    );
+    match ssh.run(&cmd) {
+        Ok(output) => {
+            if output.contains("EXPORT_OK") {
+                eprintln!("✓ Vault key exported to remote host");
+                eprintln!("  Location: ~/.busibox/vault-keys/{profile_id}.enc");
+            } else {
+                eprintln!("Warning: export may have failed");
+                for line in output.lines() {
+                    eprintln!("  {}", line);
                 }
             }
+        }
+        Err(e) => {
+            eprintln!("Error deploying vault key: {e}");
+        }
+    }
+
+    // Also export the profile config
+    let profile_json = match serde_json::to_string_pretty(&profile) {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("Warning: could not serialize profile: {e}");
+            return;
+        }
+    };
+
+    let escaped_profile = profile_json.replace('\'', "'\\''");
+    let profile_cmd = format!(
+        "mkdir -p ~/.busibox && \
+         printf '%s\\n' '{escaped_profile}' > ~/.busibox/profile-{profile_id}.json && \
+         echo PROFILE_OK"
+    );
+    match ssh.run(&profile_cmd) {
+        Ok(output) => {
+            if output.contains("PROFILE_OK") {
+                eprintln!("✓ Profile config exported to remote host");
+            }
+        }
+        Err(e) => {
+            eprintln!("Warning: could not export profile config: {e}");
+        }
+    }
+}
+
+/// Change the master password for the active profile's vault key.
+fn handle_password_change(app: &App) {
+    use modules::vault;
+
+    let (profile_id, _) = match app.active_profile() {
+        Some((id, p)) => (id.to_string(), p.clone()),
+        None => {
+            eprintln!("No active profile.");
+            return;
+        }
+    };
+
+    if !vault::has_vault_key(&profile_id) {
+        eprintln!("No vault key for profile '{profile_id}'.");
+        return;
+    }
+
+    eprintln!("\n╔══════════════════════════════════════════════════════╗");
+    eprintln!("║           Change Master Password                     ║");
+    eprintln!("╚══════════════════════════════════════════════════════╝\n");
+
+    // Verify current master password
+    let current_pw = match vault::prompt_password("Current master password: ") {
+        Ok(pw) => pw,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return;
+        }
+    };
+
+    let key_path = match vault::vault_key_path(&profile_id) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return;
+        }
+    };
+
+    let enc = match vault::load_encrypted_vault(&key_path) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Error loading vault key: {e}");
+            return;
+        }
+    };
+
+    let vault_pw = match vault::decrypt_vault_password(&enc, &current_pw) {
+        Ok(pw) => pw,
+        Err(_) => {
+            eprintln!("Incorrect master password.");
+            return;
+        }
+    };
+
+    eprintln!("✓ Current password verified\n");
+
+    // Prompt for new password
+    let new_pw = match vault::prompt_new_password("New master password: ") {
+        Ok(pw) => pw,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return;
+        }
+    };
+
+    // Re-encrypt with new master password
+    let new_enc = match vault::encrypt_vault_password(&vault_pw, &new_pw) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Error re-encrypting: {e}");
+            return;
+        }
+    };
+
+    if let Err(e) = vault::save_encrypted_vault(&key_path, &new_enc) {
+        eprintln!("Error saving vault key: {e}");
+        return;
+    }
+
+    eprintln!("✓ Master password changed for profile '{profile_id}'");
+}
+
+/// Deploy the busibox CLI binary to the remote host.
+fn handle_deploy_binary(app: &App) {
+    let (_, profile) = match app.active_profile() {
+        Some((id, p)) => (id.to_string(), p.clone()),
+        None => {
+            eprintln!("No active profile.");
+            return;
+        }
+    };
+
+    if !profile.remote {
+        eprintln!("Deploy CLI is only for remote profiles.");
+        return;
+    }
+
+    let ssh = match &app.ssh_connection {
+        Some(s) => s,
+        None => {
+            eprintln!("No SSH connection. Connect to the remote host first.");
+            return;
+        }
+    };
+
+    eprintln!("\n╔══════════════════════════════════════════════════════╗");
+    eprintln!("║            Deploy CLI to Remote Host                  ║");
+    eprintln!("╚══════════════════════════════════════════════════════╝\n");
+
+    // Find the currently running binary
+    let current_binary = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: could not determine current binary path: {e}");
+            return;
+        }
+    };
+
+    if !current_binary.exists() {
+        eprintln!("Error: current binary not found at {}", current_binary.display());
+        return;
+    }
+
+    let remote_path = profile.effective_remote_path();
+
+    // Detect remote architecture to see if we need cross-compilation
+    let remote_arch = ssh.run("uname -m").unwrap_or_default().trim().to_string();
+    let remote_os = ssh.run("uname -s").unwrap_or_default().trim().to_lowercase();
+    let local_arch = std::env::consts::ARCH;
+    let local_os = std::env::consts::OS;
+
+    eprintln!("  Local:  {local_os}/{local_arch}");
+    eprintln!("  Remote: {remote_os}/{remote_arch}");
+
+    let arch_match = (local_os == remote_os || (local_os == "macos" && remote_os == "darwin"))
+        && (local_arch == remote_arch
+            || (local_arch == "aarch64" && remote_arch == "arm64")
+            || (local_arch == "arm64" && remote_arch == "aarch64"));
+
+    if !arch_match {
+        eprintln!("\n  Architecture mismatch. Cross-compilation needed.");
+        eprintln!("  Build the binary for {remote_os}/{remote_arch} first, then re-run.");
+        eprintln!("  Example: cargo build --release --target <target-triple>");
+        return;
+    }
+
+    eprintln!("  Architecture compatible. Deploying binary...\n");
+
+    // Ensure remote directory exists
+    if let Err(e) = ssh.run(&format!("mkdir -p {remote_path}")) {
+        eprintln!("Error creating remote directory: {e}");
+        return;
+    }
+
+    // Use rsync to copy the binary
+    let key_expanded = modules::ssh::shellexpand_path(&ssh.key_path);
+    let remote_dest = format!("{}@{}:{}/busibox", ssh.user, ssh.host, remote_path);
+
+    let mut rsync_args = vec!["-az".to_string(), "--progress".to_string()];
+    if !key_expanded.is_empty() && std::path::Path::new(&key_expanded).exists() {
+        rsync_args.push("-e".to_string());
+        rsync_args.push(format!("ssh -i {key_expanded} -o StrictHostKeyChecking=accept-new"));
+    }
+    rsync_args.push(current_binary.to_string_lossy().to_string());
+    rsync_args.push(remote_dest);
+
+    eprintln!("  Copying binary...");
+    let output = std::process::Command::new("rsync")
+        .args(&rsync_args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status();
+
+    match output {
+        Ok(status) if status.success() => {
+            // Make executable
+            let chmod_cmd = format!("chmod +x {remote_path}/busibox");
+            let _ = ssh.run(&chmod_cmd);
+            eprintln!("\n✓ CLI binary deployed to {remote_path}/busibox");
+        }
+        Ok(status) => {
+            eprintln!("Error: rsync failed (exit {})", status.code().unwrap_or(-1));
+        }
+        Err(e) => {
+            eprintln!("Error: could not run rsync: {e}");
         }
     }
 }

@@ -205,7 +205,7 @@ fn start_downloads(app: &mut App) {
         dl.status = DownloadStatus::Downloading;
         dl.progress = 0.5;
 
-        let is_embedding = dl.role == "embedding";
+        let is_embedding = dl.role == "embed";
 
         let download_result = if app.setup_target == SetupTarget::Remote {
             if let Some(ssh) = &app.ssh_connection {
@@ -361,6 +361,7 @@ fn save_profile_and_continue(app: &mut App) {
         kubeconfig: None,
         model_tier: None,
         admin_email: None,
+        frontend_ref: None,
     };
 
     match profile::upsert_profile(&app.repo_root, &profile_id, profile, true) {
