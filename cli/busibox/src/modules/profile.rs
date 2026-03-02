@@ -7,7 +7,21 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfilesFile {
     pub active: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defaults: Option<ProfileDefaults>,
     pub profiles: HashMap<String, Profile>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProfileDefaults {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub huggingface_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frontend_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_user: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +99,7 @@ pub fn load_profiles(repo_root: &Path) -> Result<ProfilesFile> {
     if !path.exists() {
         return Ok(ProfilesFile {
             active: String::new(),
+            defaults: None,
             profiles: HashMap::new(),
         });
     }

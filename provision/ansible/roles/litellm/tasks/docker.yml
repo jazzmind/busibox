@@ -4,6 +4,26 @@
 # Deploys LiteLLM gateway via Docker Compose
 # Used when deploy_target == 'docker'
 
+- name: Force-sync database user password before LiteLLM startup
+  include_role:
+    name: docker_common
+    tasks_from: compose_exec
+  vars:
+    docker_exec_service: postgres
+    docker_exec_command: >
+      psql -U postgres -c
+      "ALTER USER {{ postgres_user }} WITH PASSWORD '{{ postgres_password | replace(\"'\", \"''\") }}';"
+
+- name: Verify LiteLLM database credentials before startup
+  include_role:
+    name: docker_common
+    tasks_from: compose_exec
+  vars:
+    docker_exec_service: postgres
+    docker_exec_command: >
+      sh -c "PGPASSWORD='{{ postgres_password | replace(\"'\", \"'\\''\") }}'
+      psql -h localhost -U {{ postgres_user }} -d litellm -c 'SELECT 1;'"
+
 - name: Start LiteLLM container
   include_role:
     name: docker_common

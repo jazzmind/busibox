@@ -172,7 +172,7 @@
         githubRepoOwner: "{{ app.github_repo.split('/')[0] }}"
         githubRepoName: "{{ app.github_repo.split('/')[1] }}"
         githubBranch: "{{ deploy_branch | default(app.github_branch | default('main')) }}"
-        githubToken: "{{ (secrets.github.personal_access_token | default('')) if secrets.github is defined else '' }}"
+        githubToken: "{{ secrets.github.personal_access_token if (secrets.github is defined and secrets.github.personal_access_token | default('') | length > 0 and not (secrets.github.personal_access_token | default('') is match('CHANGE_ME.*'))) else (github_token | default(lookup('env', 'GITHUB_AUTH_TOKEN')) | default('')) }}"
         monorepoAppDir: "{{ app.monorepo_app_dir | default(omit) }}"
         devMode: false
         envVars: "{{ app_env_vars }}"

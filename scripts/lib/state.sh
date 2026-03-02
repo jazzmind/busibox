@@ -157,6 +157,7 @@ get_vault_pass_path() {
 # Initialize state file if it doesn't exist
 init_state() {
     if [[ ! -f "$BUSIBOX_STATE_FILE" ]]; then
+        mkdir -p "$(dirname "$BUSIBOX_STATE_FILE")"
         cat > "$BUSIBOX_STATE_FILE" << 'EOF'
 # Busibox State File
 # This file is auto-generated. Do not edit manually unless you know what you're doing.

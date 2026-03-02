@@ -77,6 +77,6 @@
     POSTGRES_PASSWORD: "{{ secrets.postgresql.password | default('') }}"
     MINIO_ACCESS_KEY: "{{ secrets.minio.root_user | default('minioadmin') }}"
     MINIO_SECRET_KEY: "{{ secrets.minio.root_password | default('') }}"
-    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default(github_token) | default('') }}"
+    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token if (secrets.github.personal_access_token | default('') | length > 0) and not (secrets.github.personal_access_token | default('') is match('CHANGE_ME.*')) else (github_token | default(lookup('env', 'GITHUB_AUTH_TOKEN')) | default('')) }}"
   register: wait_result
   changed_when: false

@@ -46,7 +46,7 @@
     LITELLM_API_KEY: "{{ secrets.litellm_master_key if (secrets.litellm_master_key | default('') | length > 0) else (secrets.litellm_api_key | default('')) }}"
     LITELLM_MASTER_KEY: "{{ secrets.litellm_master_key if (secrets.litellm_master_key | default('') | length > 0) else (secrets.litellm_api_key | default('')) }}"
     LITELLM_SALT_KEY: "{{ secrets.litellm_salt_key | default(secrets.litellm_master_key | default(secrets.litellm_api_key | default(''))) }}"
-    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default(github_token) | default('') }}"
+    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token if (secrets.github.personal_access_token | default('') | length > 0) and not (secrets.github.personal_access_token | default('') is match('CHANGE_ME.*')) else (github_token | default(lookup('env', 'GITHUB_AUTH_TOKEN')) | default('')) }}"
     ADMIN_EMAIL: "{{ secrets.admin_emails | default(secrets.admin_email, true) | default('', true) }}"
     ALLOWED_EMAIL_DOMAINS: "{{ secrets.allowed_email_domains | default('*') }}"
     BUSIBOX_PORTAL_GITHUB_REF: "{{ lookup('env', 'BUSIBOX_PORTAL_GITHUB_REF') | default('main', true) }}"
@@ -54,6 +54,10 @@
     MODEL_HOST_CACHE: "{{ lookup('env', 'MODEL_HOST_CACHE') | default('model_cache', true) }}"
     HF_HOST_CACHE: "{{ lookup('env', 'HF_HOST_CACHE') | default('model_cache', true) }}"
     FASTEMBED_HOST_CACHE: "{{ lookup('env', 'FASTEMBED_HOST_CACHE') | default('fastembed_cache', true) }}"
+    # LLM Backend (mlx/vllm/cloud) - needed for deploy-api platform detection inside Docker
+    LLM_BACKEND: "{{ lookup('env', 'LLM_BACKEND') | default('', true) }}"
+    # Host Agent token (for MLX control on Apple Silicon via host-agent)
+    HOST_AGENT_TOKEN: "{{ lookup('env', 'HOST_AGENT_TOKEN') | default('', true) }}"
   when: docker_build_first | default(false)
   register: build_result
   changed_when: "'Building' in build_result.stdout or 'built' in build_result.stdout"

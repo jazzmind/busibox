@@ -27,12 +27,66 @@ source "${SCRIPT_DIR}/../lib/ui.sh"
 # MLX virtual environment (PEP 668 compliance for modern macOS)
 MLX_VENV_DIR="${HOME}/.busibox/mlx-venv"
 
+# Find Python 3.10+ (required by outlines library)
+find_python310() {
+    for candidate in python3.13 python3.12 python3.11 python3.10; do
+        local p
+        p=$(command -v "$candidate" 2>/dev/null) && {
+            echo "$p"
+            return 0
+        }
+    done
+    # Check common Homebrew paths
+    for prefix in /opt/homebrew/bin /usr/local/bin; do
+        for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+            [[ -x "${prefix}/${candidate}" ]] && {
+                local ver
+                ver=$("${prefix}/${candidate}" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null)
+                if [[ -n "$ver" && "$ver" -ge 10 ]]; then
+                    echo "${prefix}/${candidate}"
+                    return 0
+                fi
+            }
+        done
+    done
+    # Fallback: check if default python3 is 3.10+
+    if command -v python3 &>/dev/null; then
+        local ver
+        ver=$(python3 -c 'import sys; print(sys.version_info.minor)' 2>/dev/null)
+        if [[ -n "$ver" && "$ver" -ge 10 ]]; then
+            echo "python3"
+            return 0
+        fi
+    fi
+    return 1
+}
+
 # Setup or use the MLX virtual environment
 setup_mlx_venv() {
     mkdir -p "${HOME}/.busibox"
     if [[ ! -d "$MLX_VENV_DIR" ]]; then
-        info "Creating MLX virtual environment..."
-        python3 -m venv "$MLX_VENV_DIR"
+        local py
+        py=$(find_python310) || {
+            error "Python 3.10+ is required for MLX. Install via: brew install python3"
+            return 1
+        }
+        info "Creating MLX virtual environment ($(${py} --version))..."
+        "$py" -m venv "$MLX_VENV_DIR"
+    else
+        # Verify existing venv has Python 3.10+
+        local venv_ver
+        venv_ver=$("${MLX_VENV_DIR}/bin/python3" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)
+        if [[ "$venv_ver" -lt 10 ]]; then
+            warn "Existing MLX venv uses Python 3.${venv_ver} (need 3.10+). Recreating..."
+            rm -rf "$MLX_VENV_DIR"
+            local py
+            py=$(find_python310) || {
+                error "Python 3.10+ is required for MLX. Install via: brew install python3"
+                return 1
+            }
+            info "Creating MLX virtual environment ($(${py} --version))..."
+            "$py" -m venv "$MLX_VENV_DIR"
+        fi
     fi
 }
 

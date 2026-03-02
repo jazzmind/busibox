@@ -125,6 +125,10 @@ pub fn render(f: &mut Frame, app: &App) {
         Span::styled("New  ", theme::normal()),
         Span::styled("e ", theme::highlight()),
         Span::styled("Edit  ", theme::normal()),
+        Span::styled("d ", theme::highlight()),
+        Span::styled("Defaults  ", theme::normal()),
+        Span::styled("p ", theme::highlight()),
+        Span::styled("Password  ", theme::normal()),
         Span::styled("↑/↓ ", theme::highlight()),
         Span::styled("Navigate  ", theme::normal()),
         Span::styled("Esc ", theme::muted()),
@@ -175,14 +179,17 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                                 &format!("Switched to profile: {id}"),
                                 MessageKind::Success,
                             );
-                            // Clear cached vault password when switching profiles
                             app.vault_password = None;
-                            // If the new profile has a vault key, prompt for unlock
                             if vault::has_vault_key(&switched_profile) {
                                 app.pending_vault_setup = true;
                             }
+                            // Reset health state and trigger fresh checks
+                            app.health_results.clear();
+                            app.health_groups.clear();
+                            app.action_menu_selected = 0;
                             app.screen = Screen::Welcome;
                             app.menu_selected = 0;
+                            crate::screens::welcome::trigger_health_checks(app);
                         }
                     }
                 }
@@ -203,6 +210,32 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('n') => {
             app.screen = Screen::SetupMode;
             app.menu_selected = 0;
+        }
+        KeyCode::Char('d') => {
+            // Edit default settings
+            app.profile_edit_id = Some("__defaults__".to_string());
+            app.profile_edit_field = 0;
+            app.profile_editing = false;
+            app.profile_edit_tier_selecting = false;
+            app.screen = Screen::ProfileEdit;
+        }
+        KeyCode::Char('p') => {
+            // Change master password for the selected profile
+            if let Some(profiles) = &app.profiles {
+                let profile_ids: Vec<&String> = profiles.profiles.keys().collect();
+                if let Some(id) = profile_ids.get(app.profile_selected) {
+                    let id_str = (*id).clone();
+                    if vault::has_vault_key(&id_str) {
+                        app.pending_password_change = true;
+                        app.pending_password_change_profile = Some(id_str);
+                    } else {
+                        app.set_message(
+                            "No vault key for this profile",
+                            MessageKind::Info,
+                        );
+                    }
+                }
+            }
         }
         _ => {}
     }

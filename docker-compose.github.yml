@@ -34,6 +34,7 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       NODE_ENV: production
+      NODE_OPTIONS: "--max-old-space-size=4096"
       # GitHub authentication for cloning repos and npm packages
       GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
       # Monorepo version to deploy
@@ -116,12 +117,8 @@ services:
         condition: service_healthy
     deploy:
       resources:
-        limits:
-          cpus: '2.0'
-          memory: 2G
         reservations:
-          cpus: '0.5'
-          memory: 512M
+          memory: 1G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/portal/api/health"]
       interval: 30s

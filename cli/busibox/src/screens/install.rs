@@ -29,6 +29,59 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// Check if a GitHub repo is accessible without auth; returns true if private/inaccessible.
+fn is_repo_private(owner_repo: &str) -> bool {
+    let url = format!("https://api.github.com/repos/{owner_repo}");
+    let output = std::process::Command::new("curl")
+        .args(["-s", "-o", "/dev/null", "-w", "%{http_code}",
+               "-H", "Accept: application/vnd.github.v3+json",
+               &url])
+        .output();
+    match output {
+        Ok(o) => {
+            let code = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            code != "200"
+        }
+        Err(_) => true,
+    }
+}
+
+/// Validate a GitHub token: check auth and repo access. Blocking.
+fn validate_github_token_blocking(token: &str, repos: &[String]) -> Result<(), String> {
+    // 1) Check token is valid (GET /user)
+    let output = std::process::Command::new("curl")
+        .args(["-s", "-w", "\n%{http_code}",
+               "-H", &format!("Authorization: token {token}"),
+               "-H", "Accept: application/vnd.github.v3+json",
+               "https://api.github.com/user"])
+        .output()
+        .map_err(|e| format!("Failed to run curl: {e}"))?;
+    let full = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = full.trim().lines().collect();
+    let http_code = lines.last().copied().unwrap_or("");
+    if http_code != "200" {
+        return Err(format!("Invalid token (HTTP {http_code}). Check that you pasted a valid GitHub Personal Access Token."));
+    }
+
+    // 2) Check repo access
+    for repo in repos {
+        let url = format!("https://api.github.com/repos/{repo}");
+        let output = std::process::Command::new("curl")
+            .args(["-s", "-o", "/dev/null", "-w", "%{http_code}",
+                   "-H", &format!("Authorization: token {token}"),
+                   "-H", "Accept: application/vnd.github.v3+json",
+                   &url])
+            .output()
+            .map_err(|e| format!("Failed to check repo access: {e}"))?;
+        let code = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if code != "200" {
+            return Err(format!("Token cannot access {repo} (HTTP {code}). Ensure the token has 'repo' scope."));
+        }
+    }
+
+    Ok(())
+}
+
 /// Verify a locally encrypted vault file starts with $ANSIBLE_VAULT.
 fn verify_local_vault_encrypted(vault_path: &std::path::Path) -> bool {
     if let Ok(content) = std::fs::read_to_string(vault_path) {
@@ -66,19 +119,34 @@ fn encrypt_vault_local(vault_path: &std::path::Path, vault_password: &str) -> co
     Ok(verify_local_vault_encrypted(vault_path))
 }
 
-fn get_bootstrap_stages(_app: &App) -> Vec<(&'static str, &'static str, Vec<String>)> {
-    vec![
+fn get_bootstrap_stages(app: &App) -> Vec<(&'static str, &'static str, Vec<String>)> {
+    use crate::modules::hardware::LlmBackend;
+
+    let is_mlx = app
+        .active_profile()
+        .and_then(|(_, p)| p.hardware.as_ref())
+        .map(|h| matches!(h.llm_backend, LlmBackend::Mlx))
+        .unwrap_or(false);
+
+    let mut stages = vec![
         ("Prerequisites", "Ansible & Dependencies", vec!["_prerequisites".into()]),
         ("Docker Cleanup", "Stop conflicting containers", vec!["_docker_cleanup".into()]),
         ("Database", "PostgreSQL", vec!["postgres".into()]),
         ("Authentication", "AuthZ API", vec!["authz".into()]),
         ("Deployment", "Deploy API", vec!["deploy".into()]),
-        (
-            "Portal",
-            "Portal & Admin",
-            vec!["core-apps".into()],
-        ),
-    ]
+    ];
+
+    if is_mlx {
+        stages.push(("MLX Host Agent", "Host agent for MLX control", vec!["_mlx_host_agent".into()]));
+    }
+
+    stages.push((
+        "Portal",
+        "Portal & Admin",
+        vec!["core-apps".into()],
+    ));
+
+    stages
 }
 
 pub fn render(f: &mut Frame, app: &App) {
@@ -258,14 +326,86 @@ pub fn render(f: &mut Frame, app: &App) {
         }
     }
 
+    if app.install_waiting_retry.is_some() && !app.install_prereq_hint.is_empty() {
+        lines.push(Line::from(""));
+        for hint_line in &app.install_prereq_hint {
+            let style = if hint_line.starts_with("  ") && !hint_line.trim().is_empty()
+                && !hint_line.contains("ERROR") && !hint_line.contains("Please")
+                && !hint_line.contains("Then") {
+                theme::highlight()
+            } else if hint_line.contains("ERROR") {
+                theme::error()
+            } else {
+                theme::normal()
+            };
+            lines.push(Line::from(Span::styled(format!("  {hint_line}"), style)));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Press Enter to retry after installing, or Esc to go back",
+            theme::warning(),
+        )));
+    }
+
+    if app.install_waiting_token.is_some() {
+        lines.push(Line::from(""));
+        for msg_line in app.install_token_message.lines() {
+            let style = if msg_line.starts_with("  •") {
+                theme::highlight()
+            } else if msg_line.contains("https://") {
+                theme::info()
+            } else {
+                theme::normal()
+            };
+            lines.push(Line::from(Span::styled(format!("  {msg_line}"), style)));
+        }
+        lines.push(Line::from(""));
+        let masked = if app.install_token_input.is_empty() {
+            "▎".to_string()
+        } else {
+            let len = app.install_token_input.len();
+            if len <= 4 {
+                format!("{}▎", "*".repeat(len))
+            } else {
+                format!("{}{}▎", &app.install_token_input[..4], "*".repeat(len - 4))
+            }
+        };
+        lines.push(Line::from(vec![
+            Span::styled("  Token: ", theme::normal()),
+            Span::styled(masked, theme::highlight()),
+        ]));
+        if !app.install_token_error.is_empty() {
+            let style = if app.install_token_error.contains("Validating") {
+                theme::info()
+            } else {
+                theme::error()
+            };
+            lines.push(Line::from(Span::styled(format!("  {}", app.install_token_error), style)));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Paste token and press Enter to validate, or Esc to abort",
+            theme::warning(),
+        )));
+    }
+
     if app.install_complete {
         lines.push(Line::from(""));
-        if let Some(url) = &app.install_portal_url {
+        if any_failed {
+            lines.push(Line::from(Span::styled(
+                "  Press r to retry or c to copy error details",
+                theme::muted(),
+            )));
+        } else if let Some(url) = &app.install_portal_url {
             lines.push(Line::from(vec![
                 Span::styled("  → ", theme::info()),
-                Span::styled("Opening ", theme::normal()),
+                Span::styled("Setup: ", theme::normal()),
                 Span::styled(url.as_str(), theme::highlight()),
             ]));
+            lines.push(Line::from(Span::styled(
+                "  Press Enter to generate admin login credentials",
+                theme::muted(),
+            )));
         }
     }
 
@@ -292,14 +432,16 @@ pub fn render(f: &mut Frame, app: &App) {
     let log_line = Paragraph::new(Line::from(Span::styled(last_log, log_style)));
     f.render_widget(log_line, chunks[3]);
 
-    let help_text = if app.install_complete && any_failed {
-        " r Retry  l View error logs  Enter Continue  Esc Back"
+    let help_text = if app.install_waiting_retry.is_some() {
+        " Enter Retry  c Copy Log  l View logs  Esc Back"
+    } else if app.install_complete && any_failed {
+        " r Retry  c Copy Error  l View logs  Esc Back"
     } else if app.install_complete {
-        " Enter Manage Services  l View logs  Esc Back"
+        " Enter Continue Setup  c Copy Log  l View logs  Esc Back"
     } else {
         " l View logs  Esc Cancel"
     };
-    let help_style = if app.install_complete && any_failed {
+    let help_style = if app.install_waiting_retry.is_some() || (app.install_complete && any_failed) {
         theme::warning()
     } else {
         theme::muted()
@@ -571,6 +713,92 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         return;
     }
 
+    // Handle waiting-for-token state (worker needs a GitHub token)
+    if app.install_waiting_token.is_some() {
+        match key.code {
+            KeyCode::Enter => {
+                let token = app.install_token_input.trim().to_string();
+                if token.is_empty() {
+                    app.install_token_error = "Token cannot be empty".to_string();
+                    return;
+                }
+                app.install_token_error = "Validating token...".to_string();
+                let repos_to_check = vec![
+                    "jazzmind/busibox-frontend".to_string(),
+                ];
+                let token_clone = token.clone();
+                let valid = std::thread::spawn(move || {
+                    validate_github_token_blocking(&token_clone, &repos_to_check)
+                }).join().unwrap_or(Err("Thread panicked".to_string()));
+
+                match valid {
+                    Ok(()) => {
+                        if let Some(home) = dirs::home_dir() {
+                            let path = home.join(".gittoken");
+                            let _ = std::fs::write(&path, &token);
+                        }
+                        app.install_token_error.clear();
+                        app.install_token_message.clear();
+                        if let Some(resp) = app.install_waiting_token.take() {
+                            let _ = resp.send(token);
+                        }
+                    }
+                    Err(e) => {
+                        app.install_token_error = e;
+                    }
+                }
+            }
+            KeyCode::Esc => {
+                app.install_token_input.clear();
+                app.install_token_error.clear();
+                app.install_token_message.clear();
+                if let Some(resp) = app.install_waiting_token.take() {
+                    let _ = resp.send(String::new()); // empty = abort
+                }
+            }
+            KeyCode::Backspace => {
+                app.install_token_input.pop();
+                app.install_token_error.clear();
+            }
+            KeyCode::Char(c) => {
+                app.install_token_input.push(c);
+                app.install_token_error.clear();
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    // Handle waiting-for-retry state (worker is blocked waiting for user)
+    if app.install_waiting_retry.is_some() {
+        match key.code {
+            KeyCode::Enter => {
+                if let Some(resp) = app.install_waiting_retry.take() {
+                    app.install_prereq_hint.clear();
+                    let _ = resp.send(true);
+                }
+            }
+            KeyCode::Esc => {
+                if let Some(resp) = app.install_waiting_retry.take() {
+                    app.install_prereq_hint.clear();
+                    let _ = resp.send(false);
+                }
+            }
+            KeyCode::Char('l') => {
+                app.install_log_visible = true;
+                app.install_log_scroll = app.install_log.len().saturating_sub(1);
+                app.install_log_autoscroll = true;
+            }
+            KeyCode::Char('c') => {
+                let log_text = app.install_log.join("\n");
+                let _ = copy_to_clipboard(&log_text);
+                app.set_message("Log copied to clipboard", MessageKind::Info);
+            }
+            _ => {}
+        }
+        return;
+    }
+
     match key.code {
         KeyCode::Esc => {
             app.screen = Screen::Welcome;
@@ -580,6 +808,31 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
             app.install_log_visible = true;
             app.install_log_scroll = app.install_log.len().saturating_sub(1);
             app.install_log_autoscroll = true;
+        }
+        KeyCode::Char('c') => {
+            if app.install_complete {
+                let any_failed = app.install_services.iter().any(|s| matches!(s.status, InstallStatus::Failed(_)));
+                if any_failed {
+                    let mut error_text = String::from("=== Busibox Install Error ===\n\n");
+                    for svc in &app.install_services {
+                        if let InstallStatus::Failed(ref e) = svc.status {
+                            error_text.push_str(&format!("{}: {}\n", svc.name, e));
+                        }
+                    }
+                    error_text.push_str("\n=== Install Log (last 50 lines) ===\n\n");
+                    let start = app.install_log.len().saturating_sub(50);
+                    for line in &app.install_log[start..] {
+                        error_text.push_str(line);
+                        error_text.push('\n');
+                    }
+                    let _ = copy_to_clipboard(&error_text);
+                    app.set_message("Error details copied to clipboard", MessageKind::Info);
+                } else {
+                    let log_text = app.install_log.join("\n");
+                    let _ = copy_to_clipboard(&log_text);
+                    app.set_message("Log copied to clipboard", MessageKind::Info);
+                }
+            }
         }
         KeyCode::Char('r') => {
             if app.install_complete {
@@ -607,7 +860,16 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Enter => {
             if app.install_complete {
-                app.screen = Screen::Manage;
+                let any_failed = app.install_services.iter().any(|s| matches!(s.status, InstallStatus::Failed(_)));
+                if !any_failed {
+                    app.admin_login_loading = true;
+                    app.admin_login_magic_link = None;
+                    app.admin_login_totp_code = None;
+                    app.admin_login_verify_url = None;
+                    app.admin_login_error = None;
+                    app.pending_admin_login = true;
+                    app.screen = Screen::AdminLogin;
+                }
             }
         }
         _ => {}
@@ -735,6 +997,10 @@ fn spawn_install_worker(app: &mut App) {
         .active_profile()
         .map(|(_, p)| env_to_prefix(&p.environment))
         .unwrap_or_else(|| "dev".into());
+    let profile_environment: String = app
+        .active_profile()
+        .map(|(_, p)| p.environment.clone())
+        .unwrap_or_else(|| "development".into());
 
     let ssh_details: Option<(String, String, String)> = app.ssh_connection.as_ref().map(|ssh| {
         (ssh.host.clone(), ssh.user.clone(), ssh.key_path.clone())
@@ -763,6 +1029,23 @@ fn spawn_install_worker(app: &mut App) {
             crate::modules::hardware::LlmBackend::Vllm => "vllm".to_string(),
             crate::modules::hardware::LlmBackend::Cloud => "cloud".to_string(),
         }));
+
+    // Read GitHub token from ~/.gittoken (on the machine running the CLI)
+    let github_token: Option<String> = dirs::home_dir()
+        .map(|h| h.join(".gittoken"))
+        .and_then(|p| std::fs::read_to_string(&p).ok())
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+
+    // Check which repos are private and will need a token
+    let private_repos: Vec<String> = vec![
+        "jazzmind/busibox-frontend",
+    ].into_iter()
+        .filter(|r| is_repo_private(r))
+        .map(|r| r.to_string())
+        .collect();
+
+    let needs_token = !private_repos.is_empty() && github_token.is_none();
 
     let stages: Vec<(String, String, Vec<String>)> = get_bootstrap_stages(app)
         .into_iter()
@@ -825,6 +1108,36 @@ fn spawn_install_worker(app: &mut App) {
             }
         }
 
+        // If private repos were detected and we have no token, prompt for one
+        let mut github_token = github_token;
+        if needs_token {
+            let _ = tx.send(InstallUpdate::Log(
+                "Private GitHub repos detected — a Personal Access Token is required.".into()
+            ));
+            let repos_list = private_repos.iter()
+                .map(|r| format!("  • {r}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let message = format!(
+                "The following repos are private:\n{repos_list}\n\n\
+                Create a token at https://github.com/settings/tokens\n\
+                with 'repo' scope, then paste it below."
+            );
+            let (resp_tx, resp_rx) = std::sync::mpsc::channel::<String>();
+            let _ = tx.send(InstallUpdate::NeedGitHubToken { message, response: resp_tx });
+            match resp_rx.recv() {
+                Ok(token) if !token.is_empty() => {
+                    let _ = tx.send(InstallUpdate::Log("✓ GitHub token validated and saved".into()));
+                    github_token = Some(token);
+                }
+                _ => {
+                    let _ = tx.send(InstallUpdate::Log("ERROR: GitHub token is required for private repos".into()));
+                    let _ = tx.send(InstallUpdate::Complete { portal_url: None });
+                    return;
+                }
+            }
+        }
+
         // For clean installs, delete existing vault so it gets recreated fresh from example
         if clean_install {
             if let Some(ref _vp) = vault_password {
@@ -863,7 +1176,40 @@ fn spawn_install_worker(app: &mut App) {
             }
         }
 
+        // Check if ansible-vault is available on the target before vault operations.
+        // On a fresh machine, prerequisites haven't installed Ansible yet.
+        let ansible_vault_available = if is_remote {
+            if let Some((ref host, ref user, ref key)) = ssh_details {
+                let ssh = crate::modules::ssh::SshConnection::new(
+                    profile_host.as_deref().unwrap_or(host),
+                    user,
+                    key,
+                );
+                let check = format!("cd {} && command -v ansible-vault >/dev/null 2>&1 && echo FOUND || echo MISSING", remote_path);
+                ssh.run(&check).map(|o| o.trim().contains("FOUND")).unwrap_or(false)
+            } else {
+                false
+            }
+        } else {
+            std::process::Command::new("which")
+                .arg("ansible-vault")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+
+        let mut vault_setup_done = false;
+
+        if !ansible_vault_available && vault_password.is_some() {
+            let _ = tx.send(InstallUpdate::Log(
+                "Deferring vault setup — ansible-vault not yet installed (will be installed by prerequisites)".into(),
+            ));
+        }
+
         // Verify vault password matches the vault file on the remote (or local)
+        if ansible_vault_available {
         if let Some(ref vp) = vault_password {
             let _ = tx.send(InstallUpdate::Log("Verifying vault password...".into()));
 
@@ -1063,16 +1409,20 @@ fn spawn_install_worker(app: &mut App) {
                 .map(|email| format!("sed -i.bak \"s/CHANGE_ME_ADMIN_EMAILS/{email}/g\" \"$VAULT_FILE\" && rm -f \"${{VAULT_FILE}}.bak\"\n"))
                 .unwrap_or_default();
 
-            // Read GitHub token from ~/.gittoken if it exists
-            let github_token_sed = {
-                let token = dirs::home_dir()
-                    .map(|h| h.join(".gittoken"))
-                    .and_then(|p| std::fs::read_to_string(&p).ok())
-                    .map(|t| t.trim().to_string())
-                    .filter(|t| !t.is_empty());
-                token
-                    .map(|t| format!("sed -i.bak \"s/CHANGE_ME_GITHUB_PERSONAL_ACCESS_TOKEN/{t}/g\" \"$VAULT_FILE\" && rm -f \"${{VAULT_FILE}}.bak\"\n"))
-                    .unwrap_or_default()
+            // Replace GitHub token placeholder in vault
+            // Try: token from local ~/.gittoken (baked in), then remote ~/.gittoken
+            let github_token_sed = match github_token.as_deref() {
+                Some(t) => format!(
+                    "sed -i.bak \"s/CHANGE_ME_GITHUB_PERSONAL_ACCESS_TOKEN/{t}/g\" \"$VAULT_FILE\" && rm -f \"${{VAULT_FILE}}.bak\"\n"
+                ),
+                None => concat!(
+                    "if [ -f \"$HOME/.gittoken\" ]; then\n",
+                    "    _GITTOKEN=$(cat \"$HOME/.gittoken\" | tr -d '[:space:]')\n",
+                    "    if [ -n \"$_GITTOKEN\" ]; then\n",
+                    "        sed -i.bak \"s/CHANGE_ME_GITHUB_PERSONAL_ACCESS_TOKEN/$_GITTOKEN/g\" \"$VAULT_FILE\" && rm -f \"${VAULT_FILE}.bak\"\n",
+                    "    fi\n",
+                    "fi\n",
+                ).to_string(),
             };
 
             let secrets_script = format!(
@@ -1214,109 +1564,77 @@ echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain
                     )));
                 }
             }
-        }
 
-        let _ = tx.send(InstallUpdate::Log(
-            "Starting model download in background...".into(),
-        ));
-        let dl_tx = tx.clone();
-        let dl_tier = profile_model_tier.clone();
-        let dl_backend = profile_llm_backend.clone();
-        let dl_prefix = vault_prefix.clone();
-        let model_download_handle: Option<std::thread::JoinHandle<i32>> = if is_remote {
-            if let Some((ref host, ref user, ref key)) = ssh_details {
-                let host = host.clone();
-                let user = user.clone();
-                let key = key.clone();
-                let rp = remote_path.clone();
-                Some(std::thread::spawn(move || -> i32 {
-                    let ssh_conn =
-                        crate::modules::ssh::SshConnection::new(&host, &user, &key);
-                    let mut env_prefix = String::new();
-                    if let Some(ref tier) = dl_tier {
-                        env_prefix.push_str(&format!("LLM_TIER={tier} "));
-                    }
-                    if let Some(ref backend) = dl_backend {
-                        env_prefix.push_str(&format!("LLM_BACKEND={backend} "));
-                    }
-                    let cmd = format!(
-                        "{env_prefix}CONTAINER_PREFIX={dl_prefix} bash scripts/llm/download-models.sh"
+            // Debug: dump vault contents to install log so we can verify secrets
+            let dump_script = format!(
+                r#"set -euo pipefail
+VAULT_FILE="{vault_rel}"
+VPF="$ANSIBLE_VAULT_PASSWORD_FILE"
+if [ -f "$VAULT_FILE" ]; then
+    FIRST_LINE=$(head -1 "$VAULT_FILE")
+    if [[ "$FIRST_LINE" == *'$ANSIBLE_VAULT'* ]]; then
+        echo "=== VAULT CONTENTS (decrypted) ==="
+        ansible-vault view "$VAULT_FILE" --vault-password-file="$VPF" 2>&1 | grep -E '(password|token|key|secret|email|domain)' | sed 's/^\s*/  /'
+        echo "=== END VAULT ==="
+    else
+        echo "=== VAULT CONTENTS (plaintext) ==="
+        grep -E '(password|token|key|secret|email|domain)' "$VAULT_FILE" | sed 's/^\s*/  /'
+        echo "=== END VAULT ==="
+    fi
+else
+    echo "WARNING: Vault file not found at $VAULT_FILE"
+fi
+"#,
+                vault_rel = vault_rel,
+            );
+            let dump_result: color_eyre::Result<(i32, String)> = if is_remote {
+                if let Some((ref host, ref user, ref key)) = ssh_details {
+                    let ssh = crate::modules::ssh::SshConnection::new(
+                        profile_host.as_deref().unwrap_or(host),
+                        user,
+                        key,
                     );
-                    let on_line = |line: &str| {
-                        let _ = dl_tx.send(InstallUpdate::Log(format!("  [model] {line}")));
-                    };
-                    match remote::exec_remote_streaming(&ssh_conn, &rp, &cmd, on_line) {
-                        Ok(0) => 0,
-                        Ok(code) => {
-                            let _ = dl_tx.send(InstallUpdate::Log(format!(
-                                "  [model] Error: exit code {code}"
-                            )));
-                            code
-                        }
-                        Err(e) => {
-                            let _ = dl_tx.send(InstallUpdate::Log(format!(
-                                "  [model] Error: {e}"
-                            )));
-                            1
-                        }
-                    }
-                }))
+                    remote::exec_remote_with_vault(&ssh, &remote_path, &dump_script, vp)
+                } else {
+                    Err(color_eyre::eyre::eyre!("No SSH connection"))
+                }
             } else {
-                None
+                let env_script = repo_root.join("scripts/lib/vault-pass-from-env.sh");
+                match std::process::Command::new("bash")
+                    .arg("-c")
+                    .arg(&dump_script)
+                    .env("ANSIBLE_VAULT_PASSWORD", vp.as_str())
+                    .env("ANSIBLE_VAULT_PASSWORD_FILE", env_script.to_string_lossy().as_ref())
+                    .current_dir(&repo_root)
+                    .output()
+                {
+                    Ok(output) => {
+                        let exit_code = output.status.code().unwrap_or(1);
+                        let combined = format!(
+                            "{}{}",
+                            String::from_utf8_lossy(&output.stdout),
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                        Ok((exit_code, remote::strip_ansi(&combined)))
+                    }
+                    Err(e) => Err(color_eyre::eyre::eyre!("{e}")),
+                }
+            };
+            match dump_result {
+                Ok((_, output)) => {
+                    for line in output.lines() {
+                        let _ = tx.send(InstallUpdate::Log(format!("  {}", line)));
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(InstallUpdate::Log(format!("  Vault dump failed: {e}")));
+                }
             }
-        } else {
-            let repo = repo_root.clone();
-            Some(std::thread::spawn(move || -> i32 {
-                use std::io::BufRead;
+        }
+        vault_setup_done = true;
+        } // end if ansible_vault_available
 
-                let script = repo.join("scripts/llm/download-models.sh");
-                if !script.exists() {
-                    let _ = dl_tx.send(InstallUpdate::Log(format!(
-                        "  [model] Error: script not found: {}",
-                        script.display()
-                    )));
-                    return 1;
-                }
-                let script_path = script.to_string_lossy();
-                let cmd_str = format!(
-                    "bash '{}' 2>&1",
-                    script_path.replace("'", "'\\''")
-                );
-                let mut cmd = std::process::Command::new("bash");
-                cmd.arg("-c")
-                    .arg(&cmd_str)
-                    .current_dir(&repo)
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .env("CONTAINER_PREFIX", &dl_prefix);
-                if let Some(ref tier) = dl_tier {
-                    cmd.env("LLM_TIER", tier);
-                }
-                if let Some(ref backend) = dl_backend {
-                    cmd.env("LLM_BACKEND", backend);
-                }
-                let mut child = match cmd.spawn() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        let _ = dl_tx.send(InstallUpdate::Log(format!(
-                            "  [model] Error: {e}"
-                        )));
-                        return 1;
-                    }
-                };
-                if let Some(stdout) = child.stdout.take() {
-                    let reader = std::io::BufReader::new(stdout);
-                    for line in reader.lines().flatten() {
-                        let _ = dl_tx.send(InstallUpdate::Log(format!("  [model] {line}")));
-                    }
-                }
-                child
-                    .wait()
-                    .map(|s| if s.success() { 0 } else { 1 })
-                    .unwrap_or(1)
-            }))
-        };
-
+        let mut model_download_handle: Option<std::thread::JoinHandle<i32>> = None;
         let mut any_failed = false;
         for (stage_name, _description, services) in &stages {
             // Skip stages where all services are already healthy
@@ -1355,6 +1673,88 @@ echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain
                     for pydir in $(find "$HOME/Library/Python" -maxdepth 2 -name bin -type d 2>/dev/null); do
                         [ -d "$pydir" ] && export PATH="$pydir:$PATH"
                     done
+
+                    # On macOS, ensure Xcode Command Line Tools are installed (python3, git, clang)
+                    if [ "$(uname)" = "Darwin" ] && ! xcode-select -p &>/dev/null; then
+                        echo "Installing Xcode Command Line Tools..."
+                        touch /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress
+                        CLT_LABEL=$(softwareupdate -l 2>/dev/null | grep -o '.*Command Line Tools.*' | grep '^\*' | head -1 | sed 's/^\* Label: //')
+                        if [ -z "$CLT_LABEL" ]; then
+                            CLT_LABEL=$(softwareupdate -l 2>/dev/null | grep '.*Command Line.*' | head -1 | sed 's/^[ *]*//' | sed 's/^ *Label: //')
+                        fi
+                        if [ -n "$CLT_LABEL" ]; then
+                            softwareupdate -i "$CLT_LABEL" --verbose 2>&1
+                        else
+                            echo "WARNING: Could not find Command Line Tools in software updates"
+                            echo "You may need to run: xcode-select --install"
+                        fi
+                        rm -f /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress
+                        if xcode-select -p &>/dev/null; then
+                            echo "✓ Xcode Command Line Tools installed"
+                        else
+                            echo "WARNING: Xcode Command Line Tools may not be fully installed"
+                        fi
+                    fi
+
+                    # On macOS, ensure Homebrew is available
+                    if [ "$(uname)" = "Darwin" ]; then
+                        if [ -f /opt/homebrew/bin/brew ]; then
+                            eval "$(/opt/homebrew/bin/brew shellenv)"
+                        elif [ -f /usr/local/bin/brew ]; then
+                            eval "$(/usr/local/bin/brew shellenv)"
+                        fi
+                        if ! command -v brew &>/dev/null; then
+                            echo ""
+                            echo "ERROR: Homebrew is not installed."
+                            echo ""
+                            echo "Homebrew requires sudo to install. Please run this command on the target machine:"
+                            echo ""
+                            echo "  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+                            echo ""
+                            echo "Then retry the install."
+                            exit 1
+                        fi
+                    fi
+
+                    # Ensure Python 3.10+ is available (required by outlines/mlx-lm)
+                    PYTHON3_MIN_MINOR=10
+                    HAVE_MODERN_PYTHON=false
+                    for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+                        PY_PATH=$(command -v "$candidate" 2>/dev/null) || continue
+                        PY_MINOR=$("$PY_PATH" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null) || continue
+                        if [ "$PY_MINOR" -ge "$PYTHON3_MIN_MINOR" ]; then
+                            HAVE_MODERN_PYTHON=true
+                            break
+                        fi
+                    done
+                    if [ "$HAVE_MODERN_PYTHON" = false ]; then
+                        echo "Python 3.10+ not found — installing via Homebrew..."
+                        if command -v brew &>/dev/null; then
+                            brew install --quiet python@3.12 2>&1 || true
+                            eval "$(brew shellenv 2>/dev/null)" || true
+                        elif command -v apt-get &>/dev/null; then
+                            apt-get update -qq && apt-get install -y -qq python3.12 python3.12-venv 2>&1 || true
+                        fi
+                        # Verify
+                        for candidate in python3.12 python3.13 python3.11 python3.10 python3; do
+                            PY_PATH=$(command -v "$candidate" 2>/dev/null) || continue
+                            PY_MINOR=$("$PY_PATH" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null) || continue
+                            if [ "$PY_MINOR" -ge "$PYTHON3_MIN_MINOR" ]; then
+                                HAVE_MODERN_PYTHON=true
+                                break
+                            fi
+                        done
+                        if [ "$HAVE_MODERN_PYTHON" = true ]; then
+                            echo "✓ Python: $($PY_PATH --version)"
+                        else
+                            echo "ERROR: Could not install Python 3.10+"
+                            echo "Please install manually: brew install python@3.12"
+                            exit 1
+                        fi
+                    else
+                        echo "✓ Python: $($PY_PATH --version)"
+                    fi
+
                     # Ensure pip is available
                     if ! command -v pip3 &>/dev/null && ! command -v pip &>/dev/null; then
                         echo "Installing pip..."
@@ -1399,64 +1799,117 @@ echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain
                     fi
 
                     # === Docker checks ===
-                    # On macOS with Docker Desktop, install Homebrew docker CLI
-                    # to avoid credential helper issues in non-interactive SSH sessions.
-                    # The Homebrew CLI is clean and talks to Docker Desktop's daemon via socket.
                     if [ "$(uname)" = "Darwin" ] && command -v brew &>/dev/null; then
-                        # Check if Docker Desktop is installed
-                        if [ -d "/Applications/Docker.app" ] || [ -d "$HOME/Applications/Docker.app" ]; then
-                            # Install Homebrew docker CLI if not already from Homebrew
-                            DOCKER_PATH=$(command -v docker 2>/dev/null || echo "")
-                            if [ -z "$DOCKER_PATH" ] || [[ "$DOCKER_PATH" == *"Docker.app"* ]] || [[ "$DOCKER_PATH" == "/usr/local/bin/docker" ]]; then
-                                echo "  Installing Homebrew docker CLI (avoids Desktop credential issues)..."
-                                brew install --quiet docker 2>&1 || true
-                                brew install --quiet docker-compose 2>&1 || true
-                                # Ensure Homebrew docker is first in PATH
-                                BREW_PREFIX=$(brew --prefix 2>/dev/null || echo "/opt/homebrew")
-                                export PATH="$BREW_PREFIX/bin:$PATH"
-                            fi
-                            # Ensure Docker Desktop daemon is running
-                            if ! docker info &>/dev/null; then
+                        # Install docker CLI + compose via Homebrew if not present
+                        if ! command -v docker &>/dev/null; then
+                            echo "Installing docker CLI via Homebrew..."
+                            brew install --quiet docker docker-compose 2>&1 || true
+                            BREW_PREFIX=$(brew --prefix 2>/dev/null || echo "/opt/homebrew")
+                            export PATH="$BREW_PREFIX/bin:$PATH"
+                        fi
+                        # Symlink Homebrew docker CLI plugins so `docker compose` etc. work
+                        BREW_PREFIX=$(brew --prefix 2>/dev/null || echo "/opt/homebrew")
+                        BREW_PLUGINS="$BREW_PREFIX/lib/docker/cli-plugins"
+                        if [ -d "$BREW_PLUGINS" ]; then
+                            mkdir -p "$HOME/.docker/cli-plugins"
+                            for p in "$BREW_PLUGINS"/docker-*; do
+                                [ -f "$p" ] && ln -sf "$p" "$HOME/.docker/cli-plugins/$(basename "$p")" 2>/dev/null || true
+                            done
+                        fi
+                        if ! command -v docker &>/dev/null; then
+                            echo "ERROR: docker CLI could not be installed"
+                            exit 1
+                        fi
+                        if ! docker info &>/dev/null; then
+                            # Try Docker Desktop first if installed
+                            if [ -d "/Applications/Docker.app" ] || [ -d "$HOME/Applications/Docker.app" ]; then
                                 echo "Docker daemon not running — starting Docker Desktop..."
-                                if [ -d "/Applications/Docker.app" ]; then
-                                    open -a Docker 2>/dev/null || true
-                                elif [ -d "$HOME/Applications/Docker.app" ]; then
-                                    open -a "$HOME/Applications/Docker.app" 2>/dev/null || true
-                                fi
+                                open -a Docker 2>/dev/null || open -a "$HOME/Applications/Docker.app" 2>/dev/null || true
                                 WAITED=0
                                 while ! docker info &>/dev/null; do
                                     sleep 2
                                     WAITED=$((WAITED + 2))
                                     if [ $WAITED -ge 60 ]; then
-                                        echo "ERROR: Docker daemon did not start within 60 seconds"
-                                        echo "Please start Docker Desktop manually and retry."
-                                        exit 1
+                                        echo "WARNING: Docker Desktop did not start within 60s, falling back to Colima..."
+                                        break
                                     fi
                                     if [ $((WAITED % 10)) -eq 0 ]; then
                                         echo "  Still waiting... (${WAITED}s)"
                                     fi
                                 done
-                                echo "✓ Docker daemon started (took ${WAITED}s)"
+                                if docker info &>/dev/null; then
+                                    echo "✓ Docker daemon started via Docker Desktop"
+                                fi
+                            fi
+                        fi
+                        # If no daemon, install and start Colima
+                        if ! docker info &>/dev/null; then
+                            if ! command -v colima &>/dev/null; then
+                                echo "Installing Colima (lightweight Docker runtime)..."
+                                brew install --quiet colima 2>&1 || true
+                            fi
+                            if command -v colima &>/dev/null; then
+                                TOTAL_CPUS=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+                                TOTAL_MEM_BYTES=$(sysctl -n hw.memsize 2>/dev/null || echo 8589934592)
+                                COLIMA_CPUS=$(( TOTAL_CPUS / 4 ))
+                                [ "$COLIMA_CPUS" -lt 2 ] && COLIMA_CPUS=2
+                                [ "$COLIMA_CPUS" -gt 8 ] && COLIMA_CPUS=8
+                                COLIMA_MEM=$(( TOTAL_MEM_BYTES / 1073741824 / 2 ))
+                                [ "$COLIMA_MEM" -lt 8 ] && COLIMA_MEM=8
+                                [ "$COLIMA_MEM" -gt 16 ] && COLIMA_MEM=16
+                                echo "Starting Colima with ${COLIMA_CPUS} CPUs, ${COLIMA_MEM}GB RAM..."
+                                colima start --cpu "$COLIMA_CPUS" --memory "$COLIMA_MEM" 2>&1
+                                if docker info &>/dev/null; then
+                                    echo "✓ Docker daemon started via Colima"
+                                else
+                                    echo "ERROR: Colima started but Docker daemon is not reachable"
+                                    exit 1
+                                fi
                             else
-                                echo "✓ Docker daemon running"
+                                echo "ERROR: Could not install Colima"
+                                echo ""
+                                echo "Please install a Docker runtime (Docker Desktop, Colima, or OrbStack) and retry."
+                                exit 1
                             fi
                         else
-                            # No Docker Desktop — check for other docker installations
-                            if ! command -v docker &>/dev/null; then
-                                echo "ERROR: Docker is not installed."
-                                echo "Please install Docker Desktop: https://docs.docker.com/desktop/install/mac-install/"
-                                exit 1
-                            fi
-                            if ! docker info &>/dev/null; then
-                                echo "ERROR: Docker daemon is not running."
-                                exit 1
-                            fi
                             echo "✓ Docker daemon running"
                         fi
+                        # If Colima is the runtime, ensure it has enough resources
+                        if command -v colima &>/dev/null && colima status &>/dev/null; then
+                            TOTAL_CPUS=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+                            TOTAL_MEM_BYTES=$(sysctl -n hw.memsize 2>/dev/null || echo 8589934592)
+                            COLIMA_CPUS=$(( TOTAL_CPUS / 4 ))
+                            [ "$COLIMA_CPUS" -lt 2 ] && COLIMA_CPUS=2
+                            [ "$COLIMA_CPUS" -gt 8 ] && COLIMA_CPUS=8
+                            COLIMA_MEM=$(( TOTAL_MEM_BYTES / 1073741824 / 2 ))
+                            [ "$COLIMA_MEM" -lt 8 ] && COLIMA_MEM=8
+                            [ "$COLIMA_MEM" -gt 16 ] && COLIMA_MEM=16
+                            CURRENT_CPUS=$(colima list -j 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)[0].get('cpu',2))" 2>/dev/null || echo 2)
+                            CURRENT_MEM=$(colima list -j 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)[0].get('memory',2))" 2>/dev/null || echo 2)
+                            if [ "$CURRENT_CPUS" -lt "$COLIMA_CPUS" ] || [ "$CURRENT_MEM" -lt "$COLIMA_MEM" ]; then
+                                echo "⚠ Colima has ${CURRENT_CPUS} CPUs, ${CURRENT_MEM}GB RAM — need ${COLIMA_CPUS} CPUs, ${COLIMA_MEM}GB RAM"
+                                echo "  Restarting Colima with more resources (containers will restart)..."
+                                colima stop 2>&1
+                                colima start --cpu "$COLIMA_CPUS" --memory "$COLIMA_MEM" 2>&1
+                                echo "✓ Colima restarted with ${COLIMA_CPUS} CPUs, ${COLIMA_MEM}GB RAM"
+                            else
+                                echo "✓ Colima: ${CURRENT_CPUS} CPUs, ${CURRENT_MEM}GB RAM"
+                            fi
+                        fi
+                        # Display Docker runtime resources
+                        DOCKER_CPUS=$(docker info --format '{{.NCPU}}' 2>/dev/null || echo '?')
+                        DOCKER_MEM_BYTES=$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo '0')
+                        if [ "$DOCKER_MEM_BYTES" != "0" ] && [ "$DOCKER_MEM_BYTES" != "?" ]; then
+                            DOCKER_MEM_GB=$(python3 -c "print(f'{int(${DOCKER_MEM_BYTES}) / 1073741824:.1f}')" 2>/dev/null || echo '?')
+                        else
+                            DOCKER_MEM_GB="?"
+                        fi
+                        echo "✓ Docker runtime: ${DOCKER_CPUS} CPUs, ${DOCKER_MEM_GB}GB RAM available"
                     else
-                        # Linux or no Homebrew
+                        # Linux
                         if ! command -v docker &>/dev/null; then
                             echo "ERROR: Docker is not installed."
+                            echo ""
                             echo "Please install Docker Engine: https://docs.docker.com/engine/install/"
                             exit 1
                         fi
@@ -1492,7 +1945,8 @@ echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain
                     elif command -v docker-compose &>/dev/null; then
                         echo "✓ docker-compose: $(docker-compose --version)"
                     else
-                        echo "ERROR: docker compose is not available"
+                        echo "ERROR: docker compose is not available."
+                        echo ""
                         echo "Please install Docker Compose v2."
                         exit 1
                     fi
@@ -1519,37 +1973,58 @@ echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain
                     echo "✓ Prerequisites installed"
                 "#;
 
-                let result: color_eyre::Result<(i32, String)> = if is_remote {
-                    if let Some((ref host, ref user, ref key)) = ssh_details {
-                        let ssh = crate::modules::ssh::SshConnection::new(
-                            profile_host.as_deref().unwrap_or(host),
-                            user,
-                            key,
-                        );
-                        let full_cmd = format!(
-                            "{} bash -c {}",
-                            crate::modules::remote::SHELL_PATH_PREAMBLE,
-                            shell_escape(prereq_script)
-                        );
-                        let mut args: Vec<String> = vec![
-                            "-o".into(),
-                            "BatchMode=yes".into(),
-                            "-o".into(),
-                            "StrictHostKeyChecking=accept-new".into(),
-                            "-o".into(),
-                            "ConnectTimeout=10".into(),
-                        ];
-                        let key_expanded =
-                            crate::modules::ssh::shellexpand_path(key);
-                        if !key_expanded.is_empty()
-                            && std::path::Path::new(&key_expanded).exists()
-                        {
-                            args.push("-i".into());
-                            args.push(key_expanded);
+                let prereq_ok = loop {
+                    let result: color_eyre::Result<(i32, String)> = if is_remote {
+                        if let Some((ref host, ref user, ref key)) = ssh_details {
+                            let ssh = crate::modules::ssh::SshConnection::new(
+                                profile_host.as_deref().unwrap_or(host),
+                                user,
+                                key,
+                            );
+                            let full_cmd = format!(
+                                "{} bash -c {}",
+                                crate::modules::remote::SHELL_PATH_PREAMBLE,
+                                shell_escape(prereq_script)
+                            );
+                            let mut args: Vec<String> = vec![
+                                "-o".into(),
+                                "BatchMode=yes".into(),
+                                "-o".into(),
+                                "StrictHostKeyChecking=accept-new".into(),
+                                "-o".into(),
+                                "ConnectTimeout=10".into(),
+                            ];
+                            let key_expanded =
+                                crate::modules::ssh::shellexpand_path(key);
+                            if !key_expanded.is_empty()
+                                && std::path::Path::new(&key_expanded).exists()
+                            {
+                                args.push("-i".into());
+                                args.push(key_expanded);
+                            }
+                            args.push(ssh.ssh_target());
+                            args.push(full_cmd);
+                            match std::process::Command::new("ssh").args(&args).output() {
+                                Ok(output) => {
+                                    let exit_code = output.status.code().unwrap_or(1);
+                                    let combined = format!(
+                                        "{}{}",
+                                        String::from_utf8_lossy(&output.stdout),
+                                        String::from_utf8_lossy(&output.stderr)
+                                    );
+                                    Ok((exit_code, remote::strip_ansi(&combined)))
+                                }
+                                Err(e) => Err(color_eyre::eyre::eyre!("{e}")),
+                            }
+                        } else {
+                            Err(color_eyre::eyre::eyre!("No SSH connection"))
                         }
-                        args.push(ssh.ssh_target());
-                        args.push(full_cmd);
-                        match std::process::Command::new("ssh").args(&args).output() {
+                    } else {
+                        match std::process::Command::new("bash")
+                            .arg("-c")
+                            .arg(prereq_script)
+                            .output()
+                        {
                             Ok(output) => {
                                 let exit_code = output.status.code().unwrap_or(1);
                                 let combined = format!(
@@ -1561,79 +2036,520 @@ echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain
                             }
                             Err(e) => Err(color_eyre::eyre::eyre!("{e}")),
                         }
-                    } else {
-                        Err(color_eyre::eyre::eyre!("No SSH connection"))
-                    }
-                } else {
-                    match std::process::Command::new("bash")
-                        .arg("-c")
-                        .arg(prereq_script)
-                        .output()
-                    {
-                        Ok(output) => {
-                            let exit_code = output.status.code().unwrap_or(1);
-                            let combined = format!(
-                                "{}{}",
-                                String::from_utf8_lossy(&output.stdout),
-                                String::from_utf8_lossy(&output.stderr)
-                            );
-                            Ok((exit_code, remote::strip_ansi(&combined)))
+                    };
+
+                    match result {
+                        Ok((0, output)) => {
+                            for line in output.lines() {
+                                let trimmed = line.trim();
+                                if !trimmed.is_empty() {
+                                    let _ = tx.send(InstallUpdate::Log(format!("  {trimmed}")));
+                                }
+                            }
+                            for svc in services {
+                                let _ = tx.send(InstallUpdate::ServiceStatus {
+                                    name: svc.clone(),
+                                    status: InstallStatus::Healthy,
+                                });
+                            }
+                            let _ = tx.send(InstallUpdate::Log("✓ Prerequisites ready".into()));
+                            break true;
                         }
-                        Err(e) => Err(color_eyre::eyre::eyre!("{e}")),
+                        Ok((_code, output)) => {
+                            // Extract user-facing hint lines (from ERROR: onward)
+                            let mut hint: Vec<String> = Vec::new();
+                            let mut capturing = false;
+                            for line in output.lines() {
+                                let trimmed = line.trim();
+                                if !trimmed.is_empty() {
+                                    let _ = tx.send(InstallUpdate::Log(format!("  {trimmed}")));
+                                }
+                                if trimmed.starts_with("ERROR:") {
+                                    capturing = true;
+                                }
+                                if capturing {
+                                    hint.push(trimmed.to_string());
+                                }
+                            }
+                            if hint.is_empty() {
+                                hint.push("Prerequisite check failed.".into());
+                                hint.push("Check logs for details.".into());
+                            }
+                            for svc in services {
+                                let _ = tx.send(InstallUpdate::ServiceStatus {
+                                    name: svc.clone(),
+                                    status: InstallStatus::Failed("missing prerequisites".into()),
+                                });
+                            }
+                            let (resp_tx, resp_rx) = std::sync::mpsc::channel::<bool>();
+                            let _ = tx.send(InstallUpdate::WaitForRetry { hint, response: resp_tx });
+                            match resp_rx.recv() {
+                                Ok(true) => {
+                                    let _ = tx.send(InstallUpdate::Log(
+                                        "Retrying prerequisites...".into(),
+                                    ));
+                                    for svc in services {
+                                        let _ = tx.send(InstallUpdate::ServiceStatus {
+                                            name: svc.clone(),
+                                            status: InstallStatus::Deploying,
+                                        });
+                                    }
+                                    continue;
+                                }
+                                _ => break false,
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(InstallUpdate::Log(format!(
+                                "ERROR: Prerequisites: {e}"
+                            )));
+                            let hint = vec![format!("ERROR: {e}")];
+                            for svc in services {
+                                let _ = tx.send(InstallUpdate::ServiceStatus {
+                                    name: svc.clone(),
+                                    status: InstallStatus::Failed(e.to_string()),
+                                });
+                            }
+                            let (resp_tx, resp_rx) = std::sync::mpsc::channel::<bool>();
+                            let _ = tx.send(InstallUpdate::WaitForRetry { hint, response: resp_tx });
+                            match resp_rx.recv() {
+                                Ok(true) => {
+                                    let _ = tx.send(InstallUpdate::Log(
+                                        "Retrying prerequisites...".into(),
+                                    ));
+                                    for svc in services {
+                                        let _ = tx.send(InstallUpdate::ServiceStatus {
+                                            name: svc.clone(),
+                                            status: InstallStatus::Deploying,
+                                        });
+                                    }
+                                    continue;
+                                }
+                                _ => break false,
+                            }
+                        }
                     }
                 };
-
-                match result {
-                    Ok((0, output)) => {
-                        for line in output.lines() {
-                            let trimmed = line.trim();
-                            if !trimmed.is_empty() {
-                                let _ = tx.send(InstallUpdate::Log(format!("  {trimmed}")));
-                            }
-                        }
-                        for svc in services {
-                            let _ = tx.send(InstallUpdate::ServiceStatus {
-                                name: svc.clone(),
-                                status: InstallStatus::Healthy,
-                            });
-                        }
-                        let _ = tx.send(InstallUpdate::Log("✓ Prerequisites ready".into()));
-                    }
-                    Ok((code, output)) => {
-                        any_failed = true;
-                        for line in output.lines() {
-                            let trimmed = line.trim();
-                            if !trimmed.is_empty() {
-                                let _ = tx.send(InstallUpdate::Log(format!("  {trimmed}")));
-                            }
-                        }
-                        for svc in services {
-                            let _ = tx.send(InstallUpdate::ServiceStatus {
-                                name: svc.clone(),
-                                status: InstallStatus::Failed(format!("exit code {code}")),
-                            });
-                        }
-                        let _ = tx.send(InstallUpdate::Log(format!(
-                            "FAILED: Prerequisites (exit code {code})"
-                        )));
-                    }
-                    Err(e) => {
-                        any_failed = true;
-                        for svc in services {
-                            let _ = tx.send(InstallUpdate::ServiceStatus {
-                                name: svc.clone(),
-                                status: InstallStatus::Failed(e.to_string()),
-                            });
-                        }
-                        let _ = tx.send(InstallUpdate::Log(format!(
-                            "ERROR: Prerequisites: {e}"
-                        )));
-                    }
+                if !prereq_ok {
+                    any_failed = true;
                 }
 
                 if any_failed {
                     break;
                 }
+
+                // Run deferred vault setup now that ansible-vault is available
+                if !vault_setup_done {
+                    if let Some(ref vp) = vault_password {
+                        let _ = tx.send(InstallUpdate::Log(
+                            "Running deferred vault setup (ansible-vault now available)...".into(),
+                        ));
+
+                        let vault_rel = format!(
+                            "provision/ansible/roles/secrets/vars/vault.{vault_prefix}.yml"
+                        );
+                        let example_rel = format!(
+                            "provision/ansible/roles/secrets/vars/vault.example.yml"
+                        );
+
+                        // Step 1: Create vault from example if it doesn't exist
+                        let create_ok = if is_remote {
+                            if let Some((ref host, ref user, ref key)) = ssh_details {
+                                let ssh = crate::modules::ssh::SshConnection::new(
+                                    profile_host.as_deref().unwrap_or(host), user, key,
+                                );
+                                let create_script = format!(
+                                    "if [ ! -f {vault_rel} ]; then \
+                                       cp {example_rel} {vault_rel} && \
+                                       ansible-vault encrypt {vault_rel} --vault-password-file=\"$ANSIBLE_VAULT_PASSWORD_FILE\" && \
+                                       echo CREATED; \
+                                     else echo EXISTS; fi"
+                                );
+                                match remote::exec_remote_with_vault(&ssh, &remote_path, &create_script, vp) {
+                                    Ok((0, output)) => {
+                                        if output.contains("CREATED") {
+                                            let _ = tx.send(InstallUpdate::Log("  ✓ Vault file created and encrypted".into()));
+                                        } else {
+                                            let _ = tx.send(InstallUpdate::Log("  ✓ Vault file already exists".into()));
+                                        }
+                                        true
+                                    }
+                                    Ok((_, output)) => {
+                                        for line in output.lines() {
+                                            let _ = tx.send(InstallUpdate::Log(format!("  {line}")));
+                                        }
+                                        let _ = tx.send(InstallUpdate::Log("ERROR: Failed to create vault file".into()));
+                                        false
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(InstallUpdate::Log(format!("ERROR: {e}")));
+                                        false
+                                    }
+                                }
+                            } else { false }
+                        } else {
+                            let vault_path = repo_root.join(&vault_rel);
+                            let example_path = repo_root.join(&example_rel);
+                            if !vault_path.exists() && example_path.exists() {
+                                let _ = tx.send(InstallUpdate::Log("  Creating vault file from example...".into()));
+                                if let Err(e) = std::fs::copy(&example_path, &vault_path) {
+                                    let _ = tx.send(InstallUpdate::Log(format!("ERROR: {e}")));
+                                    false
+                                } else {
+                                    match encrypt_vault_local(&vault_path, vp) {
+                                        Ok(true) => {
+                                            let _ = tx.send(InstallUpdate::Log("  ✓ Vault file created and encrypted".into()));
+                                            true
+                                        }
+                                        _ => {
+                                            let _ = tx.send(InstallUpdate::Log("ERROR: Failed to encrypt vault".into()));
+                                            false
+                                        }
+                                    }
+                                }
+                            } else {
+                                true
+                            }
+                        };
+
+                        if !create_ok {
+                            any_failed = true;
+                            break;
+                        }
+
+                        // Step 2: Generate secrets (same script as the main vault setup)
+                        let _ = tx.send(InstallUpdate::Log("Generating vault secrets...".into()));
+
+                        let admin_email_sed = admin_email
+                            .as_deref()
+                            .filter(|e| !e.is_empty())
+                            .map(|email| format!("sed -i.bak \"s/CHANGE_ME_ADMIN_EMAILS/{email}/g\" \"$VAULT_FILE\" && rm -f \"${{VAULT_FILE}}.bak\"\n"))
+                            .unwrap_or_default();
+
+                        let github_token_sed = match github_token.as_deref() {
+                            Some(t) => format!(
+                                "sed -i.bak \"s/CHANGE_ME_GITHUB_PERSONAL_ACCESS_TOKEN/{t}/g\" \"$VAULT_FILE\" && rm -f \"${{VAULT_FILE}}.bak\"\n"
+                            ),
+                            None => concat!(
+                                "if [ -f \"$HOME/.gittoken\" ]; then\n",
+                                "    _GITTOKEN=$(cat \"$HOME/.gittoken\" | tr -d '[:space:]')\n",
+                                "    if [ -n \"$_GITTOKEN\" ]; then\n",
+                                "        sed -i.bak \"s/CHANGE_ME_GITHUB_PERSONAL_ACCESS_TOKEN/$_GITTOKEN/g\" \"$VAULT_FILE\" && rm -f \"${VAULT_FILE}.bak\"\n",
+                                "    fi\n",
+                                "fi\n",
+                            ).to_string(),
+                        };
+
+                        let secrets_script = format!(
+                            r#"set -euo pipefail
+VAULT_FILE="{vault_rel}"
+VPF="$ANSIBLE_VAULT_PASSWORD_FILE"
+
+if [ ! -f "$VAULT_FILE" ]; then
+    echo "ERROR: Vault file not found: $VAULT_FILE"
+    exit 1
+fi
+
+FIRST_LINE=$(head -1 "$VAULT_FILE")
+IS_ENCRYPTED=false
+if [[ "$FIRST_LINE" == *'$ANSIBLE_VAULT'* ]]; then
+    IS_ENCRYPTED=true
+fi
+
+if [ "$IS_ENCRYPTED" = true ]; then
+    CONTENT=$(ansible-vault view "$VAULT_FILE" --vault-password-file="$VPF" 2>&1) || {{
+        echo "ERROR: Cannot decrypt vault file"
+        echo "$CONTENT"
+        exit 1
+    }}
+else
+    CONTENT=$(cat "$VAULT_FILE")
+fi
+
+if ! echo "$CONTENT" | grep -q 'CHANGE_ME'; then
+    echo "✓ All secrets already configured"
+    exit 0
+fi
+
+if [ "$IS_ENCRYPTED" = true ]; then
+    ansible-vault decrypt "$VAULT_FILE" --vault-password-file="$VPF"
+fi
+
+gen() {{ openssl rand -base64 "$1" | tr -d '/+=' | head -c "$1"; }}
+
+PG_PASS=$(gen 24)
+MINIO_PASS=$(gen 24)
+JWT=$(gen 32)
+AUTHZ_KEY=$(gen 32)
+LITELLM_API=$(gen 16)
+LITELLM_MASTER=$(openssl rand -hex 16)
+LITELLM_SALT=$(gen 32)
+
+sed -i.bak \
+  -e "s/CHANGE_ME_POSTGRES_PASSWORD/$PG_PASS/g" \
+  -e "s/CHANGE_ME_MINIO_ROOT_USER/minioadmin/g" \
+  -e "s/CHANGE_ME_MINIO_ROOT_PASSWORD/$MINIO_PASS/g" \
+  -e "s/CHANGE_ME_JWT_SECRET_32_BYTES/$JWT/g" \
+  -e "s/CHANGE_ME_SESSION_SECRET_32_BYTES/$JWT/g" \
+  -e "s/CHANGE_ME_AUTHZ_MASTER_KEY_32_BYTES/$AUTHZ_KEY/g" \
+  -e "s/CHANGE_ME_LITELLM_API_KEY/$LITELLM_API/g" \
+  -e "s/CHANGE_ME_LITELLM_MASTER_KEY/$LITELLM_MASTER/g" \
+  -e "s/CHANGE_ME_LITELLM_SALT_KEY/$LITELLM_SALT/g" \
+  "$VAULT_FILE"
+rm -f "${{VAULT_FILE}}.bak"
+{admin_email_sed}
+{github_token_sed}
+REMAINING=$(grep -c 'CHANGE_ME' "$VAULT_FILE" 2>/dev/null || echo 0)
+
+ansible-vault encrypt "$VAULT_FILE" --vault-password-file="$VPF" 2>&1 || {{
+    echo "ERROR: Failed to re-encrypt vault after secret generation"
+    exit 1
+}}
+
+VERIFY_LINE=$(head -1 "$VAULT_FILE")
+if [[ "$VERIFY_LINE" != *'$ANSIBLE_VAULT'* ]]; then
+    echo "ERROR: Vault file not encrypted after re-encryption attempt"
+    exit 1
+fi
+
+echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain)"
+"#,
+                            vault_rel = vault_rel,
+                            admin_email_sed = admin_email_sed,
+                            github_token_sed = github_token_sed,
+                        );
+
+                        let gen_result: color_eyre::Result<(i32, String)> = if is_remote {
+                            if let Some((ref host, ref user, ref key)) = ssh_details {
+                                let ssh = crate::modules::ssh::SshConnection::new(
+                                    profile_host.as_deref().unwrap_or(host), user, key,
+                                );
+                                remote::exec_remote_with_vault(&ssh, &remote_path, &secrets_script, vp)
+                            } else {
+                                Err(color_eyre::eyre::eyre!("No SSH connection"))
+                            }
+                        } else {
+                            let env_script = repo_root.join("scripts/lib/vault-pass-from-env.sh");
+                            match std::process::Command::new("bash")
+                                .arg("-c")
+                                .arg(&secrets_script)
+                                .env("ANSIBLE_VAULT_PASSWORD", vp.as_str())
+                                .env("ANSIBLE_VAULT_PASSWORD_FILE", env_script.to_string_lossy().as_ref())
+                                .current_dir(&repo_root)
+                                .output()
+                            {
+                                Ok(output) => {
+                                    let exit_code = output.status.code().unwrap_or(1);
+                                    let combined = format!(
+                                        "{}{}",
+                                        String::from_utf8_lossy(&output.stdout),
+                                        String::from_utf8_lossy(&output.stderr)
+                                    );
+                                    Ok((exit_code, remote::strip_ansi(&combined)))
+                                }
+                                Err(e) => Err(color_eyre::eyre::eyre!("{e}")),
+                            }
+                        };
+
+                        match gen_result {
+                            Ok((0, output)) => {
+                                for line in output.lines() {
+                                    let trimmed = line.trim();
+                                    if !trimmed.is_empty() {
+                                        let _ = tx.send(InstallUpdate::Log(format!("  {trimmed}")));
+                                    }
+                                }
+                            }
+                            Ok((code, output)) => {
+                                for line in output.lines() {
+                                    let trimmed = line.trim();
+                                    if !trimmed.is_empty() {
+                                        let _ = tx.send(InstallUpdate::Log(format!("  {trimmed}")));
+                                    }
+                                }
+                                let _ = tx.send(InstallUpdate::Log(format!(
+                                    "WARNING: Secret generation had issues (exit code {code}) — continuing anyway"
+                                )));
+                            }
+                            Err(e) => {
+                                let _ = tx.send(InstallUpdate::Log(format!(
+                                    "WARNING: Secret generation failed: {e} — continuing anyway"
+                                )));
+                            }
+                        }
+
+                        // Debug: dump vault contents
+                        let dump_script = format!(
+                            r#"set -euo pipefail
+VAULT_FILE="{vault_rel}"
+VPF="$ANSIBLE_VAULT_PASSWORD_FILE"
+if [ -f "$VAULT_FILE" ]; then
+    FIRST_LINE=$(head -1 "$VAULT_FILE")
+    if [[ "$FIRST_LINE" == *'$ANSIBLE_VAULT'* ]]; then
+        echo "=== VAULT CONTENTS (decrypted) ==="
+        ansible-vault view "$VAULT_FILE" --vault-password-file="$VPF" 2>&1 | grep -E '(password|token|key|secret|email|domain)' | sed 's/^\s*/  /'
+        echo "=== END VAULT ==="
+    else
+        echo "=== VAULT CONTENTS (plaintext) ==="
+        grep -E '(password|token|key|secret|email|domain)' "$VAULT_FILE" | sed 's/^\s*/  /'
+        echo "=== END VAULT ==="
+    fi
+else
+    echo "WARNING: Vault file not found at $VAULT_FILE"
+fi
+"#,
+                            vault_rel = vault_rel,
+                        );
+                        let dump_result: color_eyre::Result<(i32, String)> = if is_remote {
+                            if let Some((ref host, ref user, ref key)) = ssh_details {
+                                let ssh = crate::modules::ssh::SshConnection::new(
+                                    profile_host.as_deref().unwrap_or(host), user, key,
+                                );
+                                remote::exec_remote_with_vault(&ssh, &remote_path, &dump_script, vp)
+                            } else {
+                                Err(color_eyre::eyre::eyre!("No SSH connection"))
+                            }
+                        } else {
+                            let env_script = repo_root.join("scripts/lib/vault-pass-from-env.sh");
+                            match std::process::Command::new("bash")
+                                .arg("-c")
+                                .arg(&dump_script)
+                                .env("ANSIBLE_VAULT_PASSWORD", vp.as_str())
+                                .env("ANSIBLE_VAULT_PASSWORD_FILE", env_script.to_string_lossy().as_ref())
+                                .current_dir(&repo_root)
+                                .output()
+                            {
+                                Ok(output) => {
+                                    let exit_code = output.status.code().unwrap_or(1);
+                                    let combined = format!(
+                                        "{}{}",
+                                        String::from_utf8_lossy(&output.stdout),
+                                        String::from_utf8_lossy(&output.stderr)
+                                    );
+                                    Ok((exit_code, remote::strip_ansi(&combined)))
+                                }
+                                Err(e) => Err(color_eyre::eyre::eyre!("{e}")),
+                            }
+                        };
+                        match dump_result {
+                            Ok((_, output)) => {
+                                for line in output.lines() {
+                                    let _ = tx.send(InstallUpdate::Log(format!("  {}", line)));
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx.send(InstallUpdate::Log(format!("  Vault dump failed: {e}")));
+                            }
+                        }
+
+                        vault_setup_done = true;
+                    }
+                }
+
+                // Start model download in background now that prerequisites are installed
+                if model_download_handle.is_none() {
+                    let _ = tx.send(InstallUpdate::Log(
+                        "Starting model download in background...".into(),
+                    ));
+                    let dl_tx = tx.clone();
+                    let dl_tier = profile_model_tier.clone();
+                    let dl_backend = profile_llm_backend.clone();
+                    let dl_prefix = vault_prefix.clone();
+                    model_download_handle = if is_remote {
+                        if let Some((ref host, ref user, ref key)) = ssh_details {
+                            let host = host.clone();
+                            let user = user.clone();
+                            let key = key.clone();
+                            let rp = remote_path.clone();
+                            Some(std::thread::spawn(move || -> i32 {
+                                let ssh_conn =
+                                    crate::modules::ssh::SshConnection::new(&host, &user, &key);
+                                let mut env_prefix = String::new();
+                                if let Some(ref tier) = dl_tier {
+                                    env_prefix.push_str(&format!("LLM_TIER={tier} "));
+                                }
+                                if let Some(ref backend) = dl_backend {
+                                    env_prefix.push_str(&format!("LLM_BACKEND={backend} "));
+                                }
+                                let cmd = format!(
+                                    "{env_prefix}CONTAINER_PREFIX={dl_prefix} bash scripts/llm/download-models.sh"
+                                );
+                                let on_line = |line: &str| {
+                                    let _ = dl_tx.send(InstallUpdate::Log(format!("  [model] {line}")));
+                                };
+                                match remote::exec_remote_streaming(&ssh_conn, &rp, &cmd, on_line) {
+                                    Ok(0) => 0,
+                                    Ok(code) => {
+                                        let _ = dl_tx.send(InstallUpdate::Log(format!(
+                                            "  [model] Error: exit code {code}"
+                                        )));
+                                        code
+                                    }
+                                    Err(e) => {
+                                        let _ = dl_tx.send(InstallUpdate::Log(format!(
+                                            "  [model] Error: {e}"
+                                        )));
+                                        1
+                                    }
+                                }
+                            }))
+                        } else {
+                            None
+                        }
+                    } else {
+                        let repo = repo_root.clone();
+                        Some(std::thread::spawn(move || -> i32 {
+                            use std::io::BufRead;
+
+                            let script = repo.join("scripts/llm/download-models.sh");
+                            if !script.exists() {
+                                let _ = dl_tx.send(InstallUpdate::Log(format!(
+                                    "  [model] Error: script not found: {}",
+                                    script.display()
+                                )));
+                                return 1;
+                            }
+                            let script_path = script.to_string_lossy();
+                            let cmd_str = format!(
+                                "bash '{}' 2>&1",
+                                script_path.replace("'", "'\\''")
+                            );
+                            let mut cmd = std::process::Command::new("bash");
+                            cmd.arg("-c")
+                                .arg(&cmd_str)
+                                .current_dir(&repo)
+                                .stdout(std::process::Stdio::piped())
+                                .stderr(std::process::Stdio::piped())
+                                .env("CONTAINER_PREFIX", &dl_prefix);
+                            if let Some(ref tier) = dl_tier {
+                                cmd.env("LLM_TIER", tier);
+                            }
+                            if let Some(ref backend) = dl_backend {
+                                cmd.env("LLM_BACKEND", backend);
+                            }
+                            let mut child = match cmd.spawn() {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    let _ = dl_tx.send(InstallUpdate::Log(format!(
+                                        "  [model] Error: {e}"
+                                    )));
+                                    return 1;
+                                }
+                            };
+                            if let Some(stdout) = child.stdout.take() {
+                                let reader = std::io::BufReader::new(stdout);
+                                for line in reader.lines().flatten() {
+                                    let _ = dl_tx.send(InstallUpdate::Log(format!("  [model] {line}")));
+                                }
+                            }
+                            child
+                                .wait()
+                                .map(|s| if s.success() { 0 } else { 1 })
+                                .unwrap_or(1)
+                        }))
+                    };
+                }
+
                 continue;
             } else if stage_services_to_deploy.len() == 1
                 && stage_services_to_deploy.first().map(|s| s.as_str()) == Some("_docker_cleanup")
@@ -1927,6 +2843,107 @@ echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain
                     }
                 }
                 continue;
+            } else if stage_services_to_deploy.len() == 1
+                && stage_services_to_deploy.first().map(|s| s.as_str()) == Some("_mlx_host_agent")
+            {
+                let _ = tx.send(InstallUpdate::Log(
+                    "Setting up MLX host agent...".into(),
+                ));
+                for svc in services {
+                    let _ = tx.send(InstallUpdate::ServiceStatus {
+                        name: svc.clone(),
+                        status: InstallStatus::Deploying,
+                    });
+                }
+
+                let setup_cmd = format!("BUSIBOX_ENV={profile_environment} LLM_BACKEND=mlx bash scripts/make/install.sh --mlx-host-setup");
+
+                let result: color_eyre::Result<(i32, String)> = if is_remote {
+                    if let Some((ref host, ref user, ref key)) = ssh_details {
+                        let ssh = crate::modules::ssh::SshConnection::new(
+                            profile_host.as_deref().unwrap_or(host),
+                            user,
+                            key,
+                        );
+                        let full_cmd = format!("cd {} && {}", remote_path, setup_cmd);
+                        match ssh.run(&full_cmd) {
+                            Ok(output) => {
+                                Ok((0, remote::strip_ansi(&output)))
+                            }
+                            Err(e) => Err(color_eyre::eyre::eyre!("{e}")),
+                        }
+                    } else {
+                        Err(color_eyre::eyre::eyre!("No SSH details"))
+                    }
+                } else {
+                    match std::process::Command::new("bash")
+                        .arg("-c")
+                        .arg(setup_cmd)
+                        .current_dir(&repo_root)
+                        .output()
+                    {
+                        Ok(output) => {
+                            let exit_code = output.status.code().unwrap_or(1);
+                            let combined = format!(
+                                "{}{}",
+                                String::from_utf8_lossy(&output.stdout),
+                                String::from_utf8_lossy(&output.stderr)
+                            );
+                            Ok((exit_code, remote::strip_ansi(&combined)))
+                        }
+                        Err(e) => Err(color_eyre::eyre::eyre!("{e}")),
+                    }
+                };
+
+                match result {
+                    Ok((code, output)) => {
+                        for line in output.lines() {
+                            let trimmed = line.trim();
+                            if !trimmed.is_empty() {
+                                let _ = tx.send(InstallUpdate::Log(format!("  {trimmed}")));
+                            }
+                        }
+                        if code == 0 {
+                            for svc in services {
+                                let _ = tx.send(InstallUpdate::ServiceStatus {
+                                    name: svc.clone(),
+                                    status: InstallStatus::Healthy,
+                                });
+                            }
+                            let _ = tx.send(InstallUpdate::Log(
+                                "✓ MLX host agent setup complete".into(),
+                            ));
+                        } else {
+                            any_failed = true;
+                            for svc in services {
+                                let _ = tx.send(InstallUpdate::ServiceStatus {
+                                    name: svc.clone(),
+                                    status: InstallStatus::Failed(format!("exit code {code}")),
+                                });
+                            }
+                            let _ = tx.send(InstallUpdate::Log(format!(
+                                "FAILED: MLX host agent setup (exit code {code})"
+                            )));
+                        }
+                    }
+                    Err(e) => {
+                        any_failed = true;
+                        let _ = tx.send(InstallUpdate::Log(format!(
+                            "FAILED: MLX host agent setup: {e}"
+                        )));
+                        for svc in services {
+                            let _ = tx.send(InstallUpdate::ServiceStatus {
+                                name: svc.clone(),
+                                status: InstallStatus::Failed(e.to_string()),
+                            });
+                        }
+                    }
+                }
+
+                if any_failed {
+                    break;
+                }
+                continue;
             }
 
             let service_list = stage_services_to_deploy.join(",");
@@ -1946,12 +2963,18 @@ echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain
                 .as_deref()
                 .filter(|r| !r.is_empty() && *r != "latest")
                 .unwrap_or("main");
-            let ref_exports = format!(
+            let mut ref_exports = format!(
                 "BUSIBOX_FRONTEND_GITHUB_REF={ref_val} \
                  MODEL_HOST_CACHE=$HOME/.cache \
                  HF_HOST_CACHE=$HOME/.cache/huggingface \
                  FASTEMBED_HOST_CACHE=$HOME/.cache/fastembed "
             );
+            if let Some(ref backend) = profile_llm_backend {
+                ref_exports.push_str(&format!("LLM_BACKEND={backend} "));
+            }
+            if let Some(ref token) = github_token {
+                ref_exports.push_str(&format!("GITHUB_AUTH_TOKEN={token} "));
+            }
             let make_args = format!("{ref_exports}install SERVICE={service_list}");
 
             // Use streaming functions so each line appears in the log immediately

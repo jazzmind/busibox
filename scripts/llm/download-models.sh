@@ -37,12 +37,48 @@ TIER="${LLM_TIER:-$(bash "${SCRIPT_DIR}/get-memory-tier.sh" "$BACKEND")}"
 # Download order: most critical first, least needed last
 ALL_ROLES=(test fast embed agent voice transcribe image visual-embedding)
 
+# Find Python 3.10+ (required by outlines/mlx-lm)
+find_python310() {
+    for candidate in python3.13 python3.12 python3.11 python3.10; do
+        local p
+        p=$(command -v "$candidate" 2>/dev/null) && { echo "$p"; return 0; }
+    done
+    for prefix in /opt/homebrew/bin /usr/local/bin; do
+        for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+            [[ -x "${prefix}/${candidate}" ]] && {
+                local ver
+                ver=$("${prefix}/${candidate}" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null)
+                [[ -n "$ver" && "$ver" -ge 10 ]] && { echo "${prefix}/${candidate}"; return 0; }
+            }
+        done
+    done
+    if command -v python3 &>/dev/null; then
+        local ver
+        ver=$(python3 -c 'import sys; print(sys.version_info.minor)' 2>/dev/null)
+        [[ -n "$ver" && "$ver" -ge 10 ]] && { echo "python3"; return 0; }
+    fi
+    return 1
+}
+
 # Setup or use the MLX virtual environment
 setup_venv() {
     mkdir -p "${HOME}/.busibox"
     if [[ ! -d "$MLX_VENV_DIR" ]]; then
-        info "Creating Python virtual environment for model downloads..."
-        python3 -m venv "$MLX_VENV_DIR"
+        local py
+        py=$(find_python310) || py="python3"
+        info "Creating Python virtual environment for model downloads ($(${py} --version 2>&1))..."
+        "$py" -m venv "$MLX_VENV_DIR"
+    else
+        local venv_ver
+        venv_ver=$("${MLX_VENV_DIR}/bin/python3" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)
+        if [[ "$venv_ver" -lt 10 ]]; then
+            warn "MLX venv uses Python 3.${venv_ver} (need 3.10+). Recreating..."
+            rm -rf "$MLX_VENV_DIR"
+            local py
+            py=$(find_python310) || py="python3"
+            info "Creating Python virtual environment ($(${py} --version 2>&1))..."
+            "$py" -m venv "$MLX_VENV_DIR"
+        fi
     fi
 }
 
@@ -72,6 +108,16 @@ check_model_cached() {
     # HuggingFace uses double-dash for / separator: org/model -> models--org--model
     local model_dir="${cache_dir}/models--${model//\//--}"
     [[ -d "$model_dir" ]]
+}
+
+# Check if a model is cached in fastembed cache
+check_fastembed_cached() {
+    local model="$1"
+    local fastembed_cache="${HOME}/.cache/fastembed"
+    local model_normalized="${model//\//_}"
+    model_normalized="${model_normalized//:/_}"
+    local cache_path="${fastembed_cache}/${model_normalized}"
+    [[ -d "$cache_path" ]] && [[ -f "$cache_path/model_optimized.onnx" || -f "$cache_path/model.onnx" || -f "$cache_path/onnx/model.onnx" ]]
 }
 
 # Download a single HuggingFace model
@@ -106,6 +152,40 @@ snapshot_download('${model}', local_dir_use_symlinks=True)
     fi
 }
 
+# Download a model into fastembed's cache format
+# fastembed uses: ~/.cache/fastembed/{org_model} where / becomes _
+download_fastembed_model() {
+    local model="$1"
+    local role="$2"
+    local fastembed_cache="${HOME}/.cache/fastembed"
+    local model_normalized="${model//\//_}"
+    model_normalized="${model_normalized//:/_}"
+    local cache_path="${fastembed_cache}/${model_normalized}"
+
+    if [[ -d "$cache_path" ]] && [[ -f "$cache_path/model_optimized.onnx" || -f "$cache_path/model.onnx" ]]; then
+        success "${role}: ${model} (fastembed cached)"
+        return 0
+    fi
+
+    info "Pre-caching ${role}: ${model} for fastembed..."
+
+    mkdir -p "$cache_path"
+
+    local py
+    py=$(get_venv_python)
+
+    "$py" -c "
+from huggingface_hub import snapshot_download
+snapshot_download('${model}', local_dir='${cache_path}')
+" 2>&1
+
+    if [[ -d "$cache_path" ]] && [[ -f "$cache_path/model_optimized.onnx" || -f "$cache_path/model.onnx" || -f "$cache_path/onnx/model.onnx" ]]; then
+        success "${role}: ${model} (fastembed cache ready)"
+    else
+        warn "${role}: ${model} — fastembed pre-cache may need the ONNX file"
+    fi
+}
+
 # Get model name for a role using get-models.sh
 # USE_TIER_ONLY=1 forces tier-based resolution for ALL roles (not purpose-based)
 # so downloads match the hardware tier, not the dev environment defaults
@@ -132,7 +212,17 @@ check_all_models() {
             continue
         fi
         if check_model_cached "$model"; then
-            echo -e "  ${GREEN}✓${NC} ${role}: ${model}"
+            # For embed role, also check fastembed cache
+            if [[ "$role" == "embed" ]]; then
+                if check_fastembed_cached "$model"; then
+                    echo -e "  ${GREEN}✓${NC} ${role}: ${model} (hf + fastembed)"
+                else
+                    echo -e "  ${YELLOW}△${NC} ${role}: ${model} (hf cached, fastembed not cached)"
+                    all_cached=false
+                fi
+            else
+                echo -e "  ${GREEN}✓${NC} ${role}: ${model}"
+            fi
         else
             echo -e "  ${YELLOW}○${NC} ${role}: ${model} (not cached)"
             all_cached=false
@@ -172,6 +262,11 @@ download_all_hf_models() {
             continue
         fi
         download_hf_model "$model" "$role"
+
+        # Also cache embed models in fastembed format for instant container startup
+        if [[ "$role" == "embed" ]]; then
+            download_fastembed_model "$model" "$role"
+        fi
     done
 }
 
@@ -296,6 +391,10 @@ main() {
                 warn "${target}: not configured for ${TIER}/${BACKEND}"
             else
                 download_hf_model "$model" "$target"
+                # Also cache embed models in fastembed format
+                if [[ "$target" == "embed" ]]; then
+                    download_fastembed_model "$model" "$target"
+                fi
             fi
             ;;
         *)

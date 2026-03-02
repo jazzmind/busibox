@@ -34,6 +34,19 @@ const FIELD_MODEL_TIER: usize = 7;
 const FIELD_ADMIN_EMAIL: usize = 8;
 const FIELD_FRONTEND_REF: usize = 9;
 
+// Default settings use a subset of fields
+const DEFAULTS_FIELD_LABELS: &[&str] = &[
+    "Admin Email",
+    "HuggingFace Token",
+    "Frontend Ref",
+    "Remote User",
+];
+const DEFAULTS_FIELD_COUNT: usize = 4;
+const DEFAULTS_ADMIN_EMAIL: usize = 0;
+const DEFAULTS_HF_TOKEN: usize = 1;
+const DEFAULTS_FRONTEND_REF: usize = 2;
+const DEFAULTS_REMOTE_USER: usize = 3;
+
 pub fn render(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -45,48 +58,90 @@ pub fn render(f: &mut Frame, app: &App) {
         .margin(2)
         .split(f.area());
 
+    let is_defaults = app.profile_edit_id.as_deref() == Some("__defaults__");
     let profile_id = app.profile_edit_id.as_deref().unwrap_or("unknown");
-    let title = Paragraph::new(format!("Edit Profile: {profile_id}"))
-        .style(theme::title())
-        .alignment(Alignment::Center);
+    let title = if is_defaults {
+        Paragraph::new("Default Settings")
+    } else {
+        Paragraph::new(format!("Edit Profile: {profile_id}"))
+    }
+    .style(theme::title())
+    .alignment(Alignment::Center);
     f.render_widget(title, chunks[0]);
 
-    let profile = get_editing_profile(app);
-
     let mut rows: Vec<Row> = Vec::new();
-    for (i, label) in FIELD_LABELS.iter().enumerate() {
-        let value = if app.profile_editing && i == app.profile_edit_field {
-            format!("{}▎", app.profile_edit_buffer)
-        } else {
-            field_value(&profile, i)
-        };
 
-        let label_style = if i == app.profile_edit_field {
-            theme::highlight()
-        } else {
-            theme::heading()
-        };
+    if is_defaults {
+        let defaults = app
+            .profiles
+            .as_ref()
+            .and_then(|pf| pf.defaults.clone())
+            .unwrap_or_default();
 
-        let value_style = if app.profile_editing && i == app.profile_edit_field {
-            Style::default().fg(Color::White).bg(Color::DarkGray)
-        } else if i == app.profile_edit_field {
-            theme::selected()
-        } else {
-            theme::normal()
-        };
+        for (i, label) in DEFAULTS_FIELD_LABELS.iter().enumerate() {
+            let value = if app.profile_editing && i == app.profile_edit_field {
+                format!("{}▎", app.profile_edit_buffer)
+            } else {
+                defaults_field_value(&defaults, i)
+            };
 
-        let hint = field_hint(i, &profile);
-        let hint_cell = if !hint.is_empty() && i == app.profile_edit_field {
-            Cell::from(hint).style(theme::muted())
-        } else {
-            Cell::from("")
-        };
+            let label_style = if i == app.profile_edit_field {
+                theme::highlight()
+            } else {
+                theme::heading()
+            };
 
-        rows.push(Row::new(vec![
-            Cell::from(format!(" {label}")).style(label_style),
-            Cell::from(format!(" {value}")).style(value_style),
-            hint_cell,
-        ]));
+            let value_style = if app.profile_editing && i == app.profile_edit_field {
+                Style::default().fg(Color::White).bg(Color::DarkGray)
+            } else if i == app.profile_edit_field {
+                theme::selected()
+            } else {
+                theme::normal()
+            };
+
+            rows.push(Row::new(vec![
+                Cell::from(format!(" {label}")).style(label_style),
+                Cell::from(format!(" {value}")).style(value_style),
+                Cell::from(""),
+            ]));
+        }
+    } else {
+        let profile = get_editing_profile(app);
+
+        for (i, label) in FIELD_LABELS.iter().enumerate() {
+            let value = if app.profile_editing && i == app.profile_edit_field {
+                format!("{}▎", app.profile_edit_buffer)
+            } else {
+                field_value(&profile, i)
+            };
+
+            let label_style = if i == app.profile_edit_field {
+                theme::highlight()
+            } else {
+                theme::heading()
+            };
+
+            let value_style = if app.profile_editing && i == app.profile_edit_field {
+                Style::default().fg(Color::White).bg(Color::DarkGray)
+            } else if i == app.profile_edit_field {
+                theme::selected()
+            } else {
+                theme::normal()
+            };
+
+            let hint = field_hint(i, &profile);
+            let hint_cell = if !hint.is_empty() && i == app.profile_edit_field {
+                Cell::from(hint).style(theme::muted())
+            } else {
+                Cell::from("")
+            };
+
+            rows.push(Row::new(vec![
+                Cell::from(format!(" {label}")).style(label_style),
+                Cell::from(format!(" {value}")).style(value_style),
+                hint_cell,
+            ]));
+        }
     }
 
     let table = Table::new(
@@ -101,7 +156,11 @@ pub fn render(f: &mut Frame, app: &App) {
         Block::default()
             .borders(Borders::ALL)
             .border_style(theme::dim())
-            .title(" Profile Fields ")
+            .title(if is_defaults {
+                " Default Fields "
+            } else {
+                " Profile Fields "
+            })
             .title_style(theme::heading()),
     )
     .row_highlight_style(theme::selected());
@@ -362,12 +421,31 @@ fn handle_nav_mode(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            if app.profile_edit_field < FIELD_COUNT - 1 {
+            let max_field = if app.profile_edit_id.as_deref() == Some("__defaults__") {
+                DEFAULTS_FIELD_COUNT - 1
+            } else {
+                FIELD_COUNT - 1
+            };
+            if app.profile_edit_field < max_field {
                 app.profile_edit_field += 1;
             }
         }
         KeyCode::Enter => {
-            if app.profile_edit_field == FIELD_MODEL_TIER {
+            if app.profile_edit_id.as_deref() == Some("__defaults__") {
+                // Defaults: all text fields
+                let defaults = app
+                    .profiles
+                    .as_ref()
+                    .and_then(|pf| pf.defaults.clone())
+                    .unwrap_or_default();
+                // For HF token, show real value when editing
+                app.profile_edit_buffer = match app.profile_edit_field {
+                    DEFAULTS_HF_TOKEN => defaults.huggingface_token.unwrap_or_default(),
+                    _ => defaults_field_value(&defaults, app.profile_edit_field),
+                };
+                app.profile_editing = true;
+                app.input_mode = InputMode::Editing;
+            } else if app.profile_edit_field == FIELD_MODEL_TIER {
                 let profile = get_editing_profile(app);
                 let tier = profile.effective_model_tier();
                 app.profile_edit_tier_cursor = tier
@@ -397,6 +475,13 @@ fn handle_nav_mode(app: &mut App, key: KeyEvent) {
 fn handle_edit_mode(app: &mut App, key: KeyEvent) {
     if app.profile_edit_tier_selecting {
         handle_tier_selector(app, key);
+        return;
+    }
+
+    let is_defaults = app.profile_edit_id.as_deref() == Some("__defaults__");
+    if is_defaults {
+        // All defaults fields are text fields
+        handle_text_edit(app, key);
         return;
     }
 
@@ -498,7 +583,11 @@ fn handle_text_edit(app: &mut App, key: KeyEvent) {
             app.input_mode = InputMode::Normal;
         }
         KeyCode::Enter => {
-            apply_field(app, app.profile_edit_field, &app.profile_edit_buffer.clone());
+            if app.profile_edit_id.as_deref() == Some("__defaults__") {
+                apply_defaults_field(app, app.profile_edit_field, &app.profile_edit_buffer.clone());
+            } else {
+                apply_field(app, app.profile_edit_field, &app.profile_edit_buffer.clone());
+            }
             app.profile_editing = false;
             app.input_mode = InputMode::Normal;
         }
@@ -685,8 +774,98 @@ fn apply_field(app: &mut App, field: usize, value: &str) {
     }
 }
 
+fn defaults_field_value(defaults: &profile::ProfileDefaults, field: usize) -> String {
+    match field {
+        DEFAULTS_ADMIN_EMAIL => defaults.admin_email.clone().unwrap_or_default(),
+        DEFAULTS_HF_TOKEN => defaults
+            .huggingface_token
+            .as_ref()
+            .map(|t| {
+                if t.len() > 8 {
+                    format!("{}...{}", &t[..4], &t[t.len() - 4..])
+                } else {
+                    t.clone()
+                }
+            })
+            .unwrap_or_default(),
+        DEFAULTS_FRONTEND_REF => defaults
+            .frontend_ref
+            .clone()
+            .unwrap_or_else(|| "latest".into()),
+        DEFAULTS_REMOTE_USER => defaults
+            .remote_user
+            .clone()
+            .unwrap_or_else(|| "root".into()),
+        _ => String::new(),
+    }
+}
+
+fn apply_defaults_field(app: &mut App, field: usize, value: &str) {
+    let profiles = match &mut app.profiles {
+        Some(p) => p,
+        None => return,
+    };
+
+    let defaults = profiles.defaults.get_or_insert_with(Default::default);
+
+    match field {
+        DEFAULTS_ADMIN_EMAIL => {
+            defaults.admin_email = if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            };
+        }
+        DEFAULTS_HF_TOKEN => {
+            // Only update if the user actually typed something new (not the masked version)
+            if !value.contains("...") {
+                defaults.huggingface_token = if value.is_empty() {
+                    None
+                } else {
+                    Some(value.to_string())
+                };
+            }
+        }
+        DEFAULTS_FRONTEND_REF => {
+            defaults.frontend_ref = if value.is_empty() || value == "latest" {
+                None
+            } else {
+                Some(value.to_string())
+            };
+        }
+        DEFAULTS_REMOTE_USER => {
+            defaults.remote_user = if value.is_empty() || value == "root" {
+                None
+            } else {
+                Some(value.to_string())
+            };
+        }
+        _ => {}
+    }
+}
+
 fn save_profile(app: &mut App) {
     let repo_root = app.repo_root.clone();
+
+    if app.profile_edit_id.as_deref() == Some("__defaults__") {
+        // Saving defaults
+        if let Some(profiles) = &app.profiles {
+            match profile::save_profiles(&repo_root, profiles) {
+                Ok(()) => {
+                    app.set_message("Default settings saved", MessageKind::Success);
+                    app.screen = Screen::ProfileSelect;
+                    app.profile_edit_id = None;
+                    app.profile_editing = false;
+                    app.input_mode = InputMode::Normal;
+                }
+                Err(e) => {
+                    app.set_message(&format!("Failed to save: {e}"), MessageKind::Error);
+                }
+            }
+        }
+        return;
+    }
+
     if let Some(profiles) = &app.profiles {
         match profile::save_profiles(&repo_root, profiles) {
             Ok(()) => {

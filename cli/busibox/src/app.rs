@@ -1,4 +1,5 @@
 use crate::modules::hardware::HardwareProfile;
+use crate::modules::health::{GroupHealth, HealthUpdate, ServiceHealthResult};
 use crate::modules::models::ModelRecommendation;
 use crate::modules::profile::{Profile, ProfilesFile};
 use crate::modules::ssh::SshConnection;
@@ -84,6 +85,12 @@ pub struct App {
     pub install_models_complete: bool,
     pub install_portal_url: Option<String>,
     pub install_rx: Option<mpsc::Receiver<InstallUpdate>>,
+    pub install_waiting_retry: Option<std::sync::mpsc::Sender<bool>>,
+    pub install_prereq_hint: Vec<String>,
+    pub install_waiting_token: Option<std::sync::mpsc::Sender<String>>,
+    pub install_token_input: String,
+    pub install_token_message: String,
+    pub install_token_error: String,
 
     // Manage state
     pub manage_services: Vec<ServiceStatus>,
@@ -146,6 +153,8 @@ pub struct App {
 
     // Pending master password change (needs TUI suspended)
     pub pending_password_change: bool,
+    /// Profile ID for password change when triggered from profile select (else uses active)
+    pub pending_password_change_profile: Option<String>,
 
     // Pending binary deployment to remote host
     pub pending_deploy_binary: bool,
@@ -153,10 +162,16 @@ pub struct App {
     // Clean install: tear down all existing containers and volumes before installing
     pub clean_install: bool,
 
-    // Install submenu state
-    pub install_submenu_open: bool,
-    pub install_submenu_selected: usize,
+    // Health check state (welcome screen status panel)
+    pub health_results: Vec<ServiceHealthResult>,
+    pub health_groups: Vec<GroupHealth>,
+    pub health_rx: Option<mpsc::Receiver<HealthUpdate>>,
+    pub health_check_running: bool,
+    pub health_tick: usize,
+
+    // Install submenu / contextual action state
     pub deployment_state: DeploymentState,
+    pub action_menu_selected: usize,
 
     // Admin login screen state
     pub admin_login_magic_link: Option<String>,
@@ -278,16 +293,28 @@ pub enum InstallStatus {
     Failed(String),
 }
 
-#[derive(Debug)]
 pub enum InstallUpdate {
     Log(String),
     ServiceStatus { name: String, status: InstallStatus },
     Complete { portal_url: Option<String> },
+    /// Worker is paused waiting for user to press Enter (retry) or Esc (abort).
+    /// `hint` lines are displayed prominently on the install screen.
+    WaitForRetry {
+        hint: Vec<String>,
+        response: std::sync::mpsc::Sender<bool>,
+    },
+    /// Worker needs a GitHub token to continue.
+    /// User types the token, presses Enter, and it's sent back.
+    NeedGitHubToken {
+        message: String,
+        response: std::sync::mpsc::Sender<String>,
+    },
 }
 
 #[derive(Debug)]
 pub enum ManageUpdate {
     Log(String),
+    StatusResult { name: String, status: String },
     Complete { success: bool },
 }
 
@@ -346,6 +373,12 @@ impl App {
             install_models_complete: false,
             install_portal_url: None,
             install_rx: None,
+            install_waiting_retry: None,
+            install_prereq_hint: Vec::new(),
+            install_waiting_token: None,
+            install_token_input: String::new(),
+            install_token_message: String::new(),
+            install_token_error: String::new(),
             manage_services: Vec::new(),
             manage_selected: 0,
             manage_log: Vec::new(),
@@ -380,11 +413,16 @@ impl App {
             pending_vault_setup: false,
             pending_profile_export: false,
             pending_password_change: false,
+            pending_password_change_profile: None,
             pending_deploy_binary: false,
             clean_install: false,
-            install_submenu_open: false,
-            install_submenu_selected: 0,
+            health_results: Vec::new(),
+            health_groups: Vec::new(),
+            health_rx: None,
+            health_check_running: false,
+            health_tick: 0,
             deployment_state: DeploymentState::Unknown,
+            action_menu_selected: 0,
             admin_login_magic_link: None,
             admin_login_totp_code: None,
             admin_login_verify_url: None,
@@ -442,9 +480,9 @@ impl App {
             self.local_hardware.as_ref()
         };
         match hw.map(|h| &h.llm_backend) {
-            Some(LlmBackend::Mlx) => vec!["litellm"],  // MLX runs on the host, not as a docker service
-            Some(LlmBackend::Cloud) => vec!["litellm"], // Cloud only needs litellm gateway
-            _ => vec!["litellm", "vllm"],               // Default: litellm + vllm
+            Some(LlmBackend::Mlx) => vec!["litellm", "mlx"],
+            Some(LlmBackend::Cloud) => vec!["litellm"],
+            _ => vec!["litellm", "vllm"],
         }
     }
 
@@ -458,30 +496,26 @@ impl App {
         hw.map(|h| h.apple_silicon).unwrap_or(false)
     }
 
-    pub fn welcome_menu_items(&self) -> Vec<&str> {
-        if self.has_profiles() {
-            vec!["Install / Update", "Profiles", "Quit"]
-        } else {
-            vec!["Profiles", "Quit"]
+    /// Context-sensitive actions for the welcome screen, based on deployment state.
+    pub fn contextual_actions(&self) -> Vec<&str> {
+        if !self.has_profiles() {
+            return vec![];
         }
-    }
-
-    pub fn install_submenu_items(&self) -> Vec<&str> {
         match &self.deployment_state {
             DeploymentState::Unknown | DeploymentState::Checking => {
-                vec!["Checking..."]
+                vec![]
             }
             DeploymentState::None => {
                 vec!["Install"]
             }
             DeploymentState::Partial(_) => {
-                vec!["Continue Install", "Clean Install"]
+                vec!["Continue Install", "Manage Services", "Clean Install"]
             }
             DeploymentState::BootstrapComplete => {
-                vec!["Admin Login", "Manage", "Update", "Clean Install"]
+                vec!["Continue Install (Web)", "Admin Login", "Manage Services", "Clean Install"]
             }
             DeploymentState::Complete => {
-                vec!["Admin Login", "Manage", "Update", "Clean Install"]
+                vec!["Admin Login", "Manage Services", "Update", "Clean Install"]
             }
         }
     }

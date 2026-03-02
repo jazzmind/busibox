@@ -103,6 +103,49 @@ clone_monorepo() {
 }
 
 # =============================================================================
+# Update Monorepo (git pull)
+# =============================================================================
+update_monorepo() {
+    if [ -z "${GITHUB_AUTH_TOKEN:-}" ]; then
+        log_error "GITHUB_AUTH_TOKEN is required for updating"
+        return 1
+    fi
+
+    local target_ref="${BUSIBOX_FRONTEND_GITHUB_REF:-main}"
+
+    cd "${MONOREPO_DIR}"
+
+    # Get current commit before pull
+    local before_commit
+    before_commit=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+
+    log_info "Updating busibox-frontend to ${target_ref} (current: ${before_commit:0:8})..."
+
+    # Configure git auth for pull
+    git remote set-url origin "https://${GITHUB_AUTH_TOKEN}@github.com/jazzmind/busibox-frontend.git" 2>/dev/null || true
+
+    # Fetch and reset to the target ref
+    # We use fetch+reset instead of pull because the volume may have local changes
+    if ! git fetch origin "${target_ref}" --depth 1 2>&1; then
+        log_error "Failed to fetch ${target_ref}"
+        return 1
+    fi
+
+    git reset --hard "origin/${target_ref}" 2>&1 || git reset --hard FETCH_HEAD 2>&1
+
+    local after_commit
+    after_commit=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+
+    if [ "${before_commit}" = "${after_commit}" ]; then
+        log_info "Already up to date (${after_commit:0:8})"
+        return 1  # Return 1 to indicate no changes (not an error)
+    else
+        log_success "Updated from ${before_commit:0:8} to ${after_commit:0:8}"
+        return 0  # Return 0 to indicate changes were pulled
+    fi
+}
+
+# =============================================================================
 # Install Dependencies
 # =============================================================================
 install_deps() {
@@ -278,28 +321,37 @@ case "${1:-start}" in
                 run_migrations
             fi
         else
-            log_info "Monorepo already present, checking built apps..."
-            
+            log_info "Monorepo already present, checking for updates..."
+
+            # Try to pull latest code
+            code_updated=false
+            if update_monorepo; then
+                code_updated=true
+                log_info "Code updated, will rebuild all enabled apps"
+            fi
+
             # Ensure dependencies are installed (might be missing if volume only has source)
-            if [ ! -d "${MONOREPO_DIR}/node_modules" ]; then
+            if [ ! -d "${MONOREPO_DIR}/node_modules" ] || [ "$code_updated" = true ]; then
                 install_deps
             fi
-            
+
             # Ensure shared package is built
-            if [ ! -d "${MONOREPO_DIR}/packages/app/dist" ]; then
+            if [ ! -d "${MONOREPO_DIR}/packages/app/dist" ] || [ "$code_updated" = true ]; then
                 build_shared
             fi
-            
-            # Build any enabled apps that aren't built yet
+
+            # Build any enabled apps that aren't built yet OR need rebuild due to code update
             needs_build=false
             for app_name in portal agents admin chat appbuilder media documents; do
-                if is_app_enabled "${app_name}" && ! is_app_built "${app_name}"; then
-                    log_info "App ${app_name} not built yet, building..."
-                    build_app "${app_name}" || log_error "Failed to build ${app_name}, continuing..."
-                    needs_build=true
+                if is_app_enabled "${app_name}"; then
+                    if [ "$code_updated" = true ] || ! is_app_built "${app_name}"; then
+                        log_info "Building ${app_name}..."
+                        build_app "${app_name}" || log_error "Failed to build ${app_name}, continuing..."
+                        needs_build=true
+                    fi
                 fi
             done
-            
+
             # Run portal migrations if portal was just built
             if [ "$needs_build" = true ] && is_app_enabled "portal"; then
                 run_migrations

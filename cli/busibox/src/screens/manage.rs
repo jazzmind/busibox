@@ -1,4 +1,4 @@
-use crate::app::{App, ManageUpdate, MessageKind, Screen, ServiceStatus, SetupTarget};
+use crate::app::{App, ManageUpdate, MessageKind, Screen, ServiceStatus};
 use crate::modules::remote;
 use crate::theme;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -8,25 +8,59 @@ use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState, *};
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/// Map display name to make SERVICE= value for manage commands.
+fn service_to_make_name(display_name: &str) -> &str {
+    match display_name {
+        "portal" => "busibox-portal",
+        "admin" => "busibox-admin",
+        other => other,
+    }
+}
+
 fn get_all_services(app: &App) -> Vec<(&'static str, String)> {
+    use crate::modules::hardware::LlmBackend;
+
     let mut services = vec![
         ("Infrastructure", "postgres".to_string()),
         ("Infrastructure", "redis".to_string()),
         ("Infrastructure", "minio".to_string()),
         ("Infrastructure", "milvus".to_string()),
+        ("Infrastructure", "neo4j".to_string()),
         ("APIs", "authz".to_string()),
         ("APIs", "agent".to_string()),
-        ("APIs", "ingest".to_string()),
+        ("APIs", "data".to_string()),
+        ("APIs", "data-worker".to_string()),
         ("APIs", "search".to_string()),
         ("APIs", "deploy".to_string()),
         ("APIs", "docs".to_string()),
         ("APIs", "embedding".to_string()),
+        ("APIs", "bridge".to_string()),
     ];
-    for svc in app.llm_services() {
-        services.push(("LLM", svc.to_string()));
+
+    // LLM services based on hardware backend
+    let profile = app.active_profile().map(|(_, p)| p);
+    let is_remote = profile.map(|p| p.remote).unwrap_or(false);
+    let hw = if is_remote {
+        app.remote_hardware
+            .as_ref()
+            .or_else(|| profile.and_then(|p| p.hardware.as_ref()))
+    } else {
+        app.local_hardware.as_ref()
+    };
+    let is_mlx = hw
+        .map(|h| matches!(h.llm_backend, LlmBackend::Mlx))
+        .unwrap_or(false);
+
+    services.push(("LLM", "litellm".to_string()));
+    if is_mlx {
+        services.push(("LLM", "mlx".to_string()));
+    } else {
+        services.push(("LLM", "vllm".to_string()));
     }
+
     services.push(("Frontend", "proxy".to_string()));
-    services.push(("Frontend", "core-apps".to_string()));
+    services.push(("Frontend", "portal".to_string()));
+    services.push(("Frontend", "admin".to_string()));
     services
 }
 
@@ -69,17 +103,16 @@ pub fn render(f: &mut Frame, app: &App) {
             .iter()
             .enumerate()
             .map(|(i, svc)| {
-                let status_style = if svc.status.contains("running")
-                    || svc.status.contains("healthy")
-                    || svc.status.contains("active")
-                {
+                let status_style = if svc.status == "healthy" {
                     theme::success()
-                } else if svc.status.contains("stopped") || svc.status.contains("inactive") {
+                } else if svc.status == "unhealthy" {
                     theme::warning()
-                } else if svc.status.contains("error") || svc.status.contains("failed") {
+                } else if svc.status == "down" {
                     theme::error()
-                } else {
+                } else if svc.status == "checking..." {
                     theme::dim()
+                } else {
+                    theme::muted()
                 };
 
                 let row_style = if i == app.manage_selected {
@@ -327,9 +360,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                 .get(app.manage_selected)
                 .map(|s| s.status.clone())
                 .unwrap_or_default();
-            if current_status.contains("running")
-                || current_status.contains("active")
-            {
+            if current_status == "healthy" || current_status == "running" {
                 run_action(app, "stop");
             } else {
                 run_action(app, "start");
@@ -375,8 +406,12 @@ fn handle_log_viewer_key(app: &mut App, key: KeyEvent) {
 }
 
 pub fn load_service_status(app: &mut App) {
-    app.manage_services.clear();
+    use crate::modules::health::{self, HealthStatus};
+    use crate::modules::hardware::LlmBackend;
+    use crate::screens::install::env_to_prefix;
 
+    // Populate with "checking..." immediately
+    app.manage_services.clear();
     for (group, name) in get_all_services(app) {
         app.manage_services.push(ServiceStatus {
             name,
@@ -385,53 +420,93 @@ pub fn load_service_status(app: &mut App) {
         });
     }
 
-    // Batch all status checks in one make call (avoids N container startups)
-    let is_remote = app.setup_target == SetupTarget::Remote;
-    let profile_data = app.active_profile().map(|(_, p)| p.clone());
-    let ssh_ref = app.ssh_connection.clone();
-
-    let all_services: Vec<String> = app.manage_services.iter().map(|s| s.name.clone()).collect();
-    let service_list = all_services.join(",");
-
-    let batch_output = if is_remote {
-        if let Some(ssh) = &ssh_ref {
-            let remote_path = profile_data
-                .as_ref()
-                .map(|p| p.effective_remote_path())
-                .unwrap_or_else(|| app.remote_path_input.as_str());
-            remote::exec_make_capture(
-                ssh,
-                remote_path,
-                &format!("manage SERVICE={service_list} ACTION=status"),
-            )
-            .unwrap_or_default()
-        } else {
-            String::new()
+    // Get profile info for health checks
+    let profile = match app.active_profile() {
+        Some((_, p)) => p.clone(),
+        None => {
+            // No profile - mark all unknown
+            for svc in &mut app.manage_services {
+                svc.status = "no profile".into();
+            }
+            return;
         }
-    } else {
-        remote::run_local_make_capture(
-            &app.repo_root,
-            &format!("manage SERVICE={service_list} ACTION=status"),
-        )
-        .unwrap_or_default()
     };
 
-    // Parse the batch output — each service's status line typically contains the service name
-    for svc in &mut app.manage_services {
-        let raw_line = batch_output
-            .lines()
-            .filter(|l| l.contains(&svc.name))
-            .last()
-            .unwrap_or("unknown")
-            .trim()
-            .to_string();
-        let clean = remote::strip_ansi(&raw_line);
-        svc.status = if clean.is_empty() {
-            "unknown".into()
-        } else {
-            clean
-        };
-    }
+    let prefix = env_to_prefix(&profile.environment);
+    let is_remote = profile.remote;
+    let is_mlx = profile
+        .hardware
+        .as_ref()
+        .map(|h| matches!(h.llm_backend, LlmBackend::Mlx))
+        .unwrap_or(false);
+
+    let host = if is_remote {
+        profile.effective_host().unwrap_or("localhost").to_string()
+    } else {
+        "localhost".to_string()
+    };
+
+    let ssh_details = if is_remote {
+        let ssh_host = profile.effective_host().unwrap_or("localhost").to_string();
+        let ssh_user = profile.effective_user().to_string();
+        let ssh_key = profile.effective_ssh_key().to_string();
+        Some((ssh_host, ssh_user, ssh_key))
+    } else {
+        None
+    };
+
+    // Use health module for parallel checks
+    let (tx, rx) = std::sync::mpsc::channel::<ManageUpdate>();
+    app.manage_rx = Some(rx);
+    app.manage_action_running = true;
+
+    let service_names: Vec<String> = app.manage_services.iter().map(|s| s.name.clone()).collect();
+
+    std::thread::spawn(move || {
+        let defs = health::all_service_defs(is_mlx);
+        let mut handles = Vec::new();
+
+        for svc_name in &service_names {
+            let svc_name = svc_name.clone();
+            let host = host.clone();
+            let prefix = prefix.clone();
+            let ssh_details = ssh_details.clone();
+            let tx = tx.clone();
+
+            // Find matching health def
+            let def = defs.iter().find(|d| d.name == svc_name).cloned();
+
+            let handle = std::thread::spawn(move || {
+                let status_str = if let Some(def) = def {
+                    let ssh = ssh_details.as_ref().map(|(h, u, k)| {
+                        crate::modules::ssh::SshConnection::new(h, u, k)
+                    });
+                    let status =
+                        health::check_service_pub(&def, &host, &prefix, ssh.as_ref());
+                    match status {
+                        HealthStatus::Healthy => "healthy".to_string(),
+                        HealthStatus::Unhealthy => "unhealthy".to_string(),
+                        HealthStatus::Down => "down".to_string(),
+                        HealthStatus::Checking => "checking...".to_string(),
+                        HealthStatus::Unknown => "unknown".to_string(),
+                    }
+                } else {
+                    "unknown".to_string()
+                };
+
+                let _ = tx.send(ManageUpdate::StatusResult {
+                    name: svc_name,
+                    status: status_str,
+                });
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            let _ = handle.join();
+        }
+        let _ = tx.send(ManageUpdate::Complete { success: true });
+    });
 }
 
 fn run_action(app: &mut App, action: &str) {
@@ -440,24 +515,37 @@ fn run_action(app: &mut App, action: &str) {
         None => return,
     };
 
-    let is_remote = app.setup_target == SetupTarget::Remote;
-    let make_args = format!("manage SERVICE={} ACTION={action}", svc.name);
-
     // For logs, signal the main loop to run interactively (with TUI suspended)
     if action == "logs" {
+        let is_remote = app.active_profile().map(|(_, p)| p.remote).unwrap_or(false);
+        let env_val = app
+            .active_profile()
+            .map(|(_, p)| p.environment.as_str())
+            .unwrap_or("development");
+        let backend_val = app
+            .active_profile()
+            .map(|(_, p)| p.backend.to_lowercase())
+            .unwrap_or_else(|| "docker".into());
+        let make_svc = service_to_make_name(&svc.name);
+        let make_args = format!(
+            "manage SERVICE={make_svc} ACTION={action} BUSIBOX_ENV={env_val} BUSIBOX_BACKEND={backend_val}",
+        );
         if is_remote {
-            if let Some(ssh) = &app.ssh_connection {
-                let profile = app.active_profile().map(|(_, p)| p.clone());
-                let remote_path = profile
-                    .as_ref()
-                    .map(|p| p.effective_remote_path())
-                    .unwrap_or_else(|| app.remote_path_input.as_str());
-                app.pending_interactive_cmd = Some(format!(
-                    "REMOTE:{}:{}:cd {} && USE_MANAGER=0 make {}",
-                    ssh.host, ssh.key_path, remote_path, make_args
-                ));
+            if let Some((_, profile)) = app.active_profile() {
+                if let Some(host) = profile.effective_host() {
+                    let user = profile.effective_user();
+                    let key = profile.effective_ssh_key();
+                    let remote_path = profile.effective_remote_path();
+                    let env_prefix = "";
+                    app.pending_interactive_cmd = Some(format!(
+                        "REMOTE:{}:{}:{}:cd {} && {} USE_MANAGER=0 make {}",
+                        host, user, key, remote_path, env_prefix, make_args
+                    ));
+                } else {
+                    app.set_message("No host configured for remote profile", MessageKind::Error);
+                }
             } else {
-                app.set_message("No SSH connection", MessageKind::Error);
+                app.set_message("No active profile", MessageKind::Error);
             }
         } else {
             app.pending_interactive_cmd = Some(make_args);
@@ -465,49 +553,9 @@ fn run_action(app: &mut App, action: &str) {
         return;
     }
 
-    // For redeploy and restart, use async worker with log viewer
-    if action == "redeploy" || action == "restart" {
-        spawn_action_worker(app, &svc.name, action);
-        return;
-    }
-
-    // For quick actions (stop/start), run synchronously
-    let result = if is_remote {
-        if let Some(ssh) = &app.ssh_connection {
-            let profile = app.active_profile().map(|(_, p)| p.clone());
-            let remote_path = profile
-                .as_ref()
-                .map(|p| p.effective_remote_path())
-                .unwrap_or_else(|| app.remote_path_input.as_str());
-            remote::exec_make_quiet(ssh, remote_path, &make_args)
-        } else {
-            Err(color_eyre::eyre::eyre!("No SSH"))
-        }
-    } else {
-        remote::run_local_make_quiet(&app.repo_root, &make_args)
-            .map_err(|e| color_eyre::eyre::eyre!("{e}"))
-    };
-
-    match result {
-        Ok((0, _)) => {
-            app.set_message(
-                &format!("{} {} successful", action, svc.name),
-                MessageKind::Success,
-            );
-        }
-        Ok((code, _)) => {
-            app.set_message(
-                &format!("{} {} failed (exit {})", action, svc.name, code),
-                MessageKind::Error,
-            );
-        }
-        Err(e) => {
-            app.set_message(&format!("{action} error: {e}"), MessageKind::Error);
-        }
-    }
-
-    // Refresh status after action
-    load_service_status(app);
+    // All other actions (restart, redeploy, stop, start) use async worker with log viewer
+    let make_svc = service_to_make_name(&svc.name).to_string();
+    spawn_action_worker(app, &make_svc, action);
 }
 
 fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
@@ -519,30 +567,43 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
     app.manage_action_running = true;
     app.manage_action_complete = false;
 
-    let is_remote = app.setup_target == SetupTarget::Remote;
+    let is_remote = app.active_profile().map(|(_, p)| p.remote).unwrap_or(false);
     let repo_root = app.repo_root.clone();
     let service = service_name.to_string();
     let action = action.to_string();
     let vault_password = app.vault_password.clone();
+    let profile_env: Option<String> = app
+        .active_profile()
+        .map(|(_, p)| p.environment.clone());
+    let profile_backend: Option<String> = app
+        .active_profile()
+        .map(|(_, p)| p.backend.to_lowercase());
 
-    let ssh_details: Option<(String, String, String)> =
-        app.ssh_connection.as_ref().map(|ssh| {
-            (ssh.host.clone(), ssh.user.clone(), ssh.key_path.clone())
-        });
+    let ssh_details: Option<(String, String, String)> = if is_remote {
+        app.active_profile().and_then(|(_, p)| {
+            p.effective_host().map(|h| {
+                (
+                    h.to_string(),
+                    p.effective_user().to_string(),
+                    p.effective_ssh_key().to_string(),
+                )
+            })
+        })
+    } else {
+        None
+    };
 
     let profile_remote_path: Option<String> = app
         .active_profile()
-        .map(|(_, p)| p.clone())
-        .map(|p| p.effective_remote_path().to_string());
+        .map(|(_, p)| p.effective_remote_path().to_string());
     let profile_host: Option<String> = app
         .active_profile()
         .and_then(|(_, p)| p.effective_host().map(|s| s.to_string()));
-    let remote_path_input = app.remote_path_input.clone();
 
     std::thread::spawn(move || {
         let remote_path = profile_remote_path
             .as_deref()
-            .unwrap_or(&remote_path_input)
+            .unwrap_or("~/busibox")
             .to_string();
 
         let _ = tx.send(ManageUpdate::Log(format!(
@@ -582,7 +643,11 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
             }
         }
 
-        let make_args = format!("manage SERVICE={service} ACTION={action}");
+        let env_val = profile_env.as_deref().unwrap_or("development");
+        let backend_val = profile_backend.as_deref().unwrap_or("docker");
+        let make_args = format!(
+            "manage SERVICE={service} ACTION={action} BUSIBOX_ENV={env_val} BUSIBOX_BACKEND={backend_val}"
+        );
         let _ = tx.send(ManageUpdate::Log(format!("Running: make {make_args}")));
 
         let result: color_eyre::Result<(i32, String)> = if is_remote {

@@ -93,7 +93,7 @@ admin_port: 3002
 # Which core apps to build/start (comma-separated, or "all")
 # Computed from applications with auto_deploy: true in apps.yml
 # Override with a static value if needed, e.g. enabled_apps: "portal,admin,agents"
-enabled_apps: "{{ applications | dict2items | selectattr('value.auto_deploy', 'defined') | selectattr('value.auto_deploy') | map(attribute='key') | join(',') }}"
+enabled_apps: "{{ applications | selectattr('auto_deploy', 'defined') | selectattr('auto_deploy') | map(attribute='name') | map('regex_replace', '^busibox-', '') | join(',') }}"
 
 # ============================================================================
 # Domain Configuration - Docker
@@ -169,7 +169,7 @@ deploy_environment: docker
 # ============================================================================
 # GitHub Configuration
 # ============================================================================
-github_token: "{{ secrets.github.personal_access_token | default(lookup('env', 'GITHUB_AUTH_TOKEN')) | default('') }}"
+github_token: "{{ (secrets.github.personal_access_token if (secrets.github.personal_access_token | default('') | length > 0) and not (secrets.github.personal_access_token | default('') is match('CHANGE_ME.*')) else '') | default(lookup('env', 'GITHUB_AUTH_TOKEN')) | default('') }}"
 
 # Frontend monorepo (contains all apps and the shared busibox-app package)
 busibox_frontend_repo: "https://github.com/jazzmind/busibox-frontend.git"

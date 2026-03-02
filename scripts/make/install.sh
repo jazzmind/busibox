@@ -3791,34 +3791,105 @@ setup_host_agent() {
     set_state "HOST_AGENT_TOKEN" "$host_agent_token"
     set_state "HOST_AGENT_PORT" "8089"
     
-    # Run the launchd installer
+    # Try launchd installer first
     info "Installing host-agent as background service..."
+    local launchd_ok=false
     if [[ -f "${host_agent_dir}/install-host-agent.sh" ]]; then
-        bash "${host_agent_dir}/install-host-agent.sh" || {
-            warn "Failed to install host-agent as service - you can start it manually"
-            info "Run: $(get_mlx_python) ${host_agent_dir}/host-agent.py"
-            return 0
-        }
-        success "Host agent installed and started"
-    else
-        warn "Host agent installer not found - skipping service installation"
-        info "Run manually: $(get_mlx_python) ${host_agent_dir}/host-agent.py"
+        if bash "${host_agent_dir}/install-host-agent.sh" 2>&1; then
+            launchd_ok=true
+        fi
+    fi
+
+    # If launchd failed (common over SSH), start directly as background process
+    if [[ "$launchd_ok" != true ]]; then
+        warn "launchd install failed (this is normal over SSH) — starting host-agent directly"
+        local mlx_python
+        mlx_python=$(get_mlx_python)
+
+        # Kill any existing host-agent
+        pkill -f "host-agent.py" 2>/dev/null || true
+        sleep 1
+
+        # Start as background process with nohup, passing required env vars
+        local log_dir="${HOME}/Library/Logs/Busibox"
+        mkdir -p "$log_dir"
+        HOST_AGENT_TOKEN="$host_agent_token" \
+        HOST_AGENT_PORT="8089" \
+        HOST_AGENT_HOST="127.0.0.1" \
+        nohup "$mlx_python" "${host_agent_dir}/host-agent.py" \
+            > "${log_dir}/host-agent.log" 2> "${log_dir}/host-agent.error.log" &
+        local agent_pid=$!
+        disown "$agent_pid" 2>/dev/null || true
+        info "Host agent started with PID: ${agent_pid}"
     fi
     
     # Wait for host-agent to be ready
     info "Waiting for host-agent to be ready..."
-    local max_attempts=10
+    local max_attempts=15
     local attempt=0
+    local agent_ready=false
     while [[ $attempt -lt $max_attempts ]]; do
         if curl -sf http://localhost:8089/health &>/dev/null; then
-            success "Host agent is ready"
-            return 0
+            success "Host agent is ready at http://localhost:8089"
+            agent_ready=true
+            break
         fi
         sleep 1
         ((attempt++))
     done
-    
-    warn "Host agent health check timeout - it may still be starting"
+
+    if [[ "$agent_ready" != true ]]; then
+        local error_log="${HOME}/Library/Logs/Busibox/host-agent.error.log"
+        if [[ -f "$error_log" ]] && [[ -s "$error_log" ]]; then
+            warn "Host agent failed to start. Error log:"
+            tail -20 "$error_log" 2>/dev/null || true
+        fi
+        warn "Host agent health check timeout — MLX server start may fail"
+    fi
+
+    # Recreate deploy-api so it picks up the new HOST_AGENT_TOKEN
+    # (deploy-api was started before the token was generated)
+    info "Restarting deploy-api with HOST_AGENT_TOKEN..."
+    export HOST_AGENT_TOKEN="$host_agent_token"
+    local container_prefix
+    container_prefix=$(get_container_prefix 2>/dev/null || echo "prod")
+    export CONTAINER_PREFIX="$container_prefix"
+    export COMPOSE_PROJECT_NAME="${container_prefix}-busibox"
+    export BUSIBOX_HOST_PATH="${BUSIBOX_HOST_PATH:-${REPO_ROOT}}"
+
+    local compose_files="-f ${REPO_ROOT}/docker-compose.yml"
+    if [[ -f "${REPO_ROOT}/docker-compose.github.yml" ]]; then
+        compose_files="${compose_files} -f ${REPO_ROOT}/docker-compose.github.yml"
+    fi
+    local env_file
+    env_file=$(get_env_file 2>/dev/null || echo "")
+    local env_file_arg=""
+    if [[ -n "$env_file" && -f "$env_file" ]]; then
+        env_file_arg="--env-file ${env_file}"
+    fi
+
+    local docker_bin=""
+    docker_bin=$(command -v docker 2>/dev/null || true)
+    if [[ -z "$docker_bin" ]]; then
+        for candidate in /opt/homebrew/bin/docker /usr/local/bin/docker /usr/bin/docker; do
+            if [[ -x "$candidate" ]]; then
+                docker_bin="$candidate"
+                break
+            fi
+        done
+    fi
+
+    if [[ -n "$docker_bin" ]]; then
+        if cd "${REPO_ROOT}" && "$docker_bin" compose ${compose_files} ${env_file_arg} up -d --no-deps --force-recreate deploy-api 2>&1; then
+            success "Deploy API restarted with HOST_AGENT_TOKEN"
+        else
+            warn "Could not restart deploy-api — you may need to redeploy it"
+        fi
+    else
+        warn "Docker CLI not found in this shell; skipping deploy-api restart"
+        warn "You may need to redeploy deploy-api to pick up HOST_AGENT_TOKEN"
+    fi
+
     return 0
 }
 

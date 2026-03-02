@@ -10,7 +10,10 @@ use clap::Parser;
 use color_eyre::Result;
 use crossterm::event::{self, Event, KeyEventKind};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+static QUIT_SIGNAL: AtomicBool = AtomicBool::new(false);
 
 #[derive(Parser)]
 #[command(name = "busibox", about = "Busibox Infrastructure CLI")]
@@ -22,6 +25,13 @@ struct Cli {
 
 fn main() -> Result<()> {
     color_eyre::install()?;
+
+    // Ctrl+C force-quit works even when event loop is busy
+    ctrlc::set_handler(|| {
+        QUIT_SIGNAL.store(true, Ordering::SeqCst);
+    })
+    .expect("Error setting Ctrl-C handler");
+
     let cli = Cli::parse();
 
     let repo_root = cli
@@ -50,6 +60,8 @@ fn main() -> Result<()> {
                 screens::welcome::check_model_cache(&mut app);
             }
         }
+        // Auto-detect deployment state on startup
+        screens::welcome::trigger_health_checks(&mut app);
     }
 
     // If the active profile has an encrypted vault key, prompt for unlock on startup
@@ -62,15 +74,25 @@ fn main() -> Result<()> {
     let mut terminal = tui::init()?;
 
     while !app.should_quit {
+        if QUIT_SIGNAL.load(Ordering::SeqCst) {
+            app.should_quit = true;
+            break;
+        }
         terminal.draw(|f| render(&app, f))?;
 
-        // Tick spinner animation on install and manage screens
+        // Tick spinner animation on install, manage, and welcome screens
         if app.screen == Screen::Install {
             app.install_tick = app.install_tick.wrapping_add(1);
         }
         if app.screen == Screen::Manage && app.manage_action_running {
             app.manage_tick = app.manage_tick.wrapping_add(1);
         }
+        if app.screen == Screen::Welcome && app.health_check_running {
+            app.health_tick = app.health_tick.wrapping_add(1);
+        }
+
+        // Drain health check updates
+        screens::welcome::process_health_updates(&mut app);
 
         // Drain install updates from background worker
         if let Some(rx) = app.install_rx.take() {
@@ -96,13 +118,21 @@ fn main() -> Result<()> {
                             }
                         }
                     }
+                    Ok(app::InstallUpdate::WaitForRetry { hint, response }) => {
+                        app.install_prereq_hint = hint;
+                        app.install_waiting_retry = Some(response);
+                    }
+                    Ok(app::InstallUpdate::NeedGitHubToken { message, response }) => {
+                        app.install_token_message = message;
+                        app.install_token_input.clear();
+                        app.install_token_error.clear();
+                        app.install_waiting_token = Some(response);
+                    }
                     Ok(app::InstallUpdate::Complete { portal_url }) => {
                         app.install_complete = true;
                         if let Some(url) = portal_url {
                             app.install_portal_url = Some(url.clone());
                             app.install_log.push(format!("Portal setup: {url}"));
-                            screens::install::open_browser(&url);
-                            app.pending_login = true;
                         }
                         put_back = false;
                         break;
@@ -135,14 +165,24 @@ fn main() -> Result<()> {
                                     app.manage_log.len().saturating_sub(1);
                             }
                         }
+                        Ok(app::ManageUpdate::StatusResult { name, status }) => {
+                            if let Some(svc) =
+                                app.manage_services.iter_mut().find(|s| s.name == name)
+                            {
+                                svc.status = status;
+                            }
+                        }
                         Ok(app::ManageUpdate::Complete { success }) => {
                             app.manage_action_running = false;
-                            app.manage_action_complete = true;
-                            app.manage_log_scroll =
-                                app.manage_log.len().saturating_sub(1);
+                            if app.manage_log_visible {
+                                // Action completed (had log viewer open)
+                                app.manage_action_complete = true;
+                                app.manage_log_scroll =
+                                    app.manage_log.len().saturating_sub(1);
+                                manage_completed = true;
+                                manage_success = success;
+                            }
                             put_back = false;
-                            manage_completed = true;
-                            manage_success = success;
                             break;
                         }
                         Err(TryRecvError::Empty) => break,
@@ -211,8 +251,9 @@ fn main() -> Result<()> {
         // Handle master password change (needs TUI suspended)
         if app.pending_password_change {
             app.pending_password_change = false;
+            let profile_id = app.pending_password_change_profile.take();
             tui::suspend()?;
-            handle_password_change(&app);
+            handle_password_change(&app, profile_id.as_deref());
             eprintln!("\nPress Enter to continue...");
             let _ = std::io::stdin().read_line(&mut String::new());
             terminal = tui::resume()?;
@@ -266,13 +307,14 @@ fn main() -> Result<()> {
             eprintln!("\n--- Press Ctrl+C to stop viewing logs and return to Busibox ---\n");
 
             if cmd.starts_with("REMOTE:") {
-                // Parse remote command: "REMOTE:host:key:command"
-                let parts: Vec<&str> = cmd.splitn(4, ':').collect();
-                if parts.len() == 4 {
+                // Parse remote command: "REMOTE:host:user:key:command"
+                let parts: Vec<&str> = cmd.splitn(5, ':').collect();
+                if parts.len() >= 5 {
                     let host = parts[1];
-                    let key = parts[2];
-                    let remote_cmd = parts[3];
-                    let ssh = modules::ssh::SshConnection::new(host, "root", key);
+                    let user = parts[2];
+                    let key = parts[3];
+                    let remote_cmd = parts[4];
+                    let ssh = modules::ssh::SshConnection::new(host, user, key);
                     let _ = ssh.run_tty(remote_cmd);
                 }
             } else {
@@ -351,13 +393,24 @@ fn render(app: &App, f: &mut ratatui::Frame) {
 }
 
 fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
-    use crossterm::event::KeyCode;
+    use crossterm::event::{KeyCode, KeyModifiers};
 
-    // Global quit: 'q' quits from any screen (unless user is typing or viewing logs)
+    // Force quit on Ctrl+C from any screen, any state
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.should_quit = true;
+        return;
+    }
+
+    // 'q' during log viewer: close log viewer and return to manage screen
+    if key.code == KeyCode::Char('q') && app.manage_log_visible {
+        app.manage_log_visible = false;
+        return;
+    }
+
+    // Global quit: 'q' quits from any screen (unless user is typing or viewing install logs)
     if key.code == KeyCode::Char('q')
         && app.input_mode != app::InputMode::Editing
         && !app.install_log_visible
-        && !app.manage_log_visible
         && !app.profile_editing
         && !app.profile_edit_tier_selecting
         && app.screen != Screen::AdminLogin
@@ -1247,16 +1300,20 @@ fn handle_profile_export(app: &App) {
     }
 }
 
-/// Change the master password for the active profile's vault key.
-fn handle_password_change(app: &App) {
+/// Change the master password for a profile's vault key.
+/// Uses profile_id_override if provided (e.g. from profile select), else the active profile.
+fn handle_password_change(app: &App, profile_id_override: Option<&str>) {
     use modules::vault;
 
-    let (profile_id, _) = match app.active_profile() {
-        Some((id, p)) => (id.to_string(), p.clone()),
-        None => {
-            eprintln!("No active profile.");
-            return;
-        }
+    let profile_id = match profile_id_override {
+        Some(id) => id.to_string(),
+        None => match app.active_profile() {
+            Some((id, _)) => id.to_string(),
+            None => {
+                eprintln!("No active profile.");
+                return;
+            }
+        },
     };
 
     if !vault::has_vault_key(&profile_id) {

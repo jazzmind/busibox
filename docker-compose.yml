@@ -981,6 +981,8 @@ services:
     hostname: deploy-api
     labels:
       - "version=${GIT_COMMIT:-unknown}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Hot-reload: mount source code and use --reload flag
     volumes:
       - ./srv/deploy/src:/app/src:ro

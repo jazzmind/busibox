@@ -88,15 +88,14 @@
 
 - name: Deploy GitHub token for private repository access
   copy:
-    content: "{{ secrets.github.personal_access_token }}"
+    content: "{{ secrets.github.personal_access_token if (secrets.github.personal_access_token | default('') | length > 0 and not (secrets.github.personal_access_token | default('') is match('CHANGE_ME.*'))) else (github_token | default(lookup('env', 'GITHUB_AUTH_TOKEN') | default(''))) }}"
     dest: "~/.github_token"
     mode: "0600"
     owner: root
     group: root
   no_log: true
   when: 
-    - secrets.github.personal_access_token is defined
-    - secrets.github.personal_access_token | length > 0
+    - (secrets.github.personal_access_token is defined and secrets.github.personal_access_token | length > 0 and not (secrets.github.personal_access_token is match('CHANGE_ME.*'))) or (github_token | default(lookup('env', 'GITHUB_AUTH_TOKEN')) | default('') | length > 0)
   tags:
     - always  # Always run for any app deployment
 
