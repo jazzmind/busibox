@@ -435,7 +435,7 @@
     MILVUS_HOST: localhost
     MILVUS_PORT: "19530"
     # Embedding dimension from model registry
-    EMBEDDING_DIMENSION: "{{ available_models[model_purposes.embedding | default('bge-large')].dimension | default(1024) }}"
+    EMBEDDING_DIMENSION: "{{ available_models[model_purposes.embedding | default('nomic-embed')].dimension | default(768) }}"
   register: hybrid_schema_init
   failed_when: false  # Don't fail - we'll check result and advise user
   when: milvus_health.status is defined and milvus_health.status == 200

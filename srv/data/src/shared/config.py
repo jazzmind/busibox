@@ -53,7 +53,7 @@ class Config:
         # Embedding API configuration (dedicated embedding service)
         # When EMBEDDING_API_URL is set, uses remote service instead of local FastEmbed
         self.embedding_api_url = os.getenv("EMBEDDING_API_URL", "")
-        self.embedding_dimension = int(os.getenv("EMBEDDING_DIMENSION", "1024"))
+        self.embedding_dimension = int(os.getenv("EMBEDDING_DIMENSION", "768"))
         
         # FastEmbed configuration (local text embeddings - fallback when no API URL)
         self.fastembed_model = os.getenv("FASTEMBED_MODEL", "BAAI/bge-large-en-v1.5")

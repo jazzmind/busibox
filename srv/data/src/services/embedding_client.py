@@ -26,7 +26,7 @@ class EmbeddingClient:
         """
         self.config = config
         self.api_url = config.get("embedding_api_url") or os.getenv("EMBEDDING_API_URL", "http://embedding-api:8005")
-        self.dimension = config.get("embedding_dimension", 1024)
+        self.dimension = config.get("embedding_dimension", 768)
         self.batch_size = config.get("embedding_batch_size", 32)
         
         # HTTP client with longer timeout for batch operations

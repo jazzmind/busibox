@@ -15,6 +15,6 @@ embedding_cache_dir: "{{ '/home/' + embedding_api_user + '/.cache/fastembed' if 
 
 # FastEmbed model configuration (derived from model_registry.yml in template)
 # Default values if model_registry not available
-embedding_model: "BAAI/bge-large-en-v1.5"
-embedding_dimension: 1024
+embedding_model: "nomic-ai/nomic-embed-text-v1.5"
+embedding_dimension: 768
 embedding_batch_size: 32

@@ -306,7 +306,7 @@ else
 from pymilvus import connections, Collection, utility, FieldSchema, CollectionSchema, DataType
 import os
 
-dim = int(os.environ.get('EMBEDDING_DIMENSION', 1024))
+dim = int(os.environ.get('EMBEDDING_DIMENSION', 768))
 milvus_host = os.environ.get('MILVUS_HOST', 'milvus')
 connections.connect('default', host=milvus_host, port=19530)
 

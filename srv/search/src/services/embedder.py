@@ -21,7 +21,7 @@ class EmbeddingService:
         # Use embedding-api directly (internal service, no auth needed)
         self.api_url = config.get("embedding_api_url", "http://embedding-api:8005")
         self.model = config.get("embedding_model", "bge-large-en-v1.5")
-        self.embedding_dim = config.get("embedding_dim", 1024)
+        self.embedding_dim = config.get("embedding_dim", 768)
         self.timeout = 30.0
         
         logger.info(
