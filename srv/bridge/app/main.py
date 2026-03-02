@@ -12,18 +12,20 @@ import asyncio
 import httpx
 import logging
 import re
+import secrets
 import sys
 from collections import defaultdict
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 import json
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from .agent_client import AgentClient
+from .agent_client import AgentClient, StaleTokenError
 from .channel_identity import ChannelIdentityResolver
 from .config import Settings, get_settings
 from .discord_client import DiscordClient
 from .email_client import EmailClient
-from .email_inbound_client import EmailInboundClient
+from .email_inbound_client import EmailInboundClient, InboundEmailMessage
 from .signal_client import SignalClient, SignalMessage
 from .telegram_client import TelegramClient, TelegramMessage
 from .telegram_formatter import markdown_to_telegram_html
@@ -113,6 +115,37 @@ class MessageProcessor:
                     return normalized
         except Exception as exc:
             logger.warning("Failed to resolve channel binding: %s", exc)
+        return None
+
+    async def _refresh_binding_token(self, channel: str, external_sender: str) -> Dict[str, str] | None:
+        """Ask authz to re-sign a stale delegation token for this binding."""
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{self.authz_base_url}/internal/channel-bindings/refresh-token",
+                    json={
+                        "channel_type": channel,
+                        "external_id": external_sender,
+                    },
+                )
+            if resp.status_code != 200:
+                logger.warning(
+                    "Binding token refresh failed: %s %s",
+                    resp.status_code, resp.text,
+                )
+                return None
+            binding = (resp.json() or {}).get("binding")
+            if isinstance(binding, dict):
+                normalized = {
+                    "user_id": str(binding.get("user_id") or ""),
+                    "delegation_token": str(binding.get("delegation_token") or ""),
+                }
+                if normalized["user_id"] and normalized["delegation_token"]:
+                    cache_key = f"{channel}:{external_sender}".strip().lower()
+                    self._binding_cache[cache_key] = normalized
+                    return normalized
+        except Exception as exc:
+            logger.warning("Failed to refresh binding token: %s", exc)
         return None
 
     async def _verify_link_code(
@@ -216,6 +249,7 @@ class MessageProcessor:
 
         request: Dict[str, Any] = {
             "channel": channel,
+            "external_sender": external_sender,
             "sender_key": sender_key,
             "text": text,
             "attachments": attachments or [],
@@ -296,6 +330,46 @@ class MessageProcessor:
                 delete_message=request.get("delete_message"),
                 format_content=request.get("format_content"),
             )
+        except StaleTokenError:
+            external_sender = request.get("external_sender", "")
+            if not request["delegation_token_override"] or not external_sender:
+                logger.error(
+                    "Stale global delegation token — regenerate via "
+                    "'make install SERVICE=bridge' after updating vault"
+                )
+                await send_message("Sorry, the service token has expired. An admin needs to regenerate it.")
+                return
+            logger.warning(
+                "Stale delegation token for %s:%s — attempting refresh",
+                channel, external_sender,
+            )
+            refreshed = await self._refresh_binding_token(channel, external_sender)
+            if not refreshed:
+                await send_message(
+                    "Your linked channel token has expired. "
+                    "Please re-link your channel in Account settings."
+                )
+                return
+            old_token = request["delegation_token_override"]
+            request["delegation_token_override"] = refreshed["delegation_token"]
+            request["agent_client"]._token_cache.pop(old_token, None)
+            try:
+                await self._process_streaming(
+                    text=request["text"],
+                    attachments=request.get("attachments") or [],
+                    sender=request["sender_key"],
+                    agent_client=request["agent_client"],
+                    delegation_token_override=request["delegation_token_override"],
+                    send_message=send_message,
+                    cancel_event=cancel_event,
+                    channel=channel,
+                    edit_message=request.get("edit_message"),
+                    delete_message=request.get("delete_message"),
+                    format_content=request.get("format_content"),
+                )
+            except Exception as e:
+                logger.error("Error processing %s message after token refresh: %s", channel, e, exc_info=True)
+                await send_message("Sorry, I encountered an error processing your message.")
         except Exception as e:
             logger.error("Error processing %s message: %s", channel, e, exc_info=True)
             await send_message("Sorry, I encountered an error processing your message.")
@@ -922,13 +996,117 @@ class WhatsAppWebhookBot:
                     )
 
 
+@dataclass
+class _PendingEmailConfirmation:
+    """Tracks a confirmation code sent to an inbound email sender."""
+    code: str
+    expires_at: datetime
+    original_message: InboundEmailMessage
+    binding: Dict[str, str]
+
+
 class EmailInboundBot:
-    """Inbound email polling + agent reply loop."""
+    """Inbound email polling with per-conversation confirmation.
+
+    Flow:
+    1. Email arrives; bridge looks up a channel binding for the sender.
+    2. If no binding, reply asking user to link their email in Account settings.
+    3. If an active confirmed session exists (< TTL), process normally.
+    4. Otherwise send a 6-digit confirmation code and hold the original message.
+    5. When the user replies with the code (within TTL), confirm and process.
+    """
 
     def __init__(self, settings: Settings, processor: MessageProcessor):
         self.settings = settings
         self.processor = processor
         self._running = False
+        self._pending: Dict[str, _PendingEmailConfirmation] = {}
+        self._confirmed_sessions: Dict[str, datetime] = {}
+
+    def _session_active(self, sender: str) -> bool:
+        confirmed_at = self._confirmed_sessions.get(sender)
+        if not confirmed_at:
+            return False
+        return datetime.now(timezone.utc) - confirmed_at < timedelta(
+            seconds=self.settings.email_confirmation_ttl
+        )
+
+    def _touch_session(self, sender: str) -> None:
+        self._confirmed_sessions[sender] = datetime.now(timezone.utc)
+
+    async def _send_confirmation(
+        self,
+        email_client: EmailClient,
+        sender: str,
+        inbound_msg: InboundEmailMessage,
+        binding: Dict[str, str],
+    ) -> None:
+        code = secrets.token_hex(3).upper()  # 6 hex chars
+        self._pending[sender] = _PendingEmailConfirmation(
+            code=code,
+            expires_at=datetime.now(timezone.utc) + timedelta(
+                seconds=self.settings.email_confirmation_ttl
+            ),
+            original_message=inbound_msg,
+            binding=binding,
+        )
+        ttl_hours = self.settings.email_confirmation_ttl // 3600
+        subject = f"Re: {inbound_msg.subject or 'Your message'}"
+        text_body = (
+            f"To confirm this email action, reply with the following code:\n\n"
+            f"  {code}\n\n"
+            f"This code expires in {ttl_hours} hour{'s' if ttl_hours != 1 else ''}.\n"
+            f"If you did not send this email, please ignore this message."
+        )
+        html_body = (
+            f"<p>To confirm this email action, reply with the following code:</p>"
+            f"<p style='font-size:24px;font-weight:bold;letter-spacing:4px'>{code}</p>"
+            f"<p>This code expires in {ttl_hours} hour{'s' if ttl_hours != 1 else ''}.</p>"
+            f"<p><em>If you did not send this email, please ignore this message.</em></p>"
+        )
+        await email_client.send(to=sender, subject=subject, html=html_body, text=text_body)
+        logger.info("Sent email confirmation code to %s", sender)
+
+    def _extract_code(self, body: str) -> str | None:
+        """Extract a 6-char hex code from the message body."""
+        stripped = body.strip().split("\n")[0].strip()
+        if len(stripped) == 6 and all(c in "0123456789ABCDEFabcdef" for c in stripped):
+            return stripped.upper()
+        return None
+
+    async def _process_and_reply(
+        self,
+        *,
+        sender: str,
+        body: str,
+        subject: str,
+        binding: Dict[str, str],
+        email_client: EmailClient,
+        agent_client: AgentClient,
+    ) -> None:
+        chunks: List[str] = []
+
+        async def _capture(chunk: str):
+            chunks.append(chunk)
+
+        await self.processor.process(
+            channel="email",
+            external_sender=sender,
+            text=body,
+            send_message=_capture,
+            send_typing_start=None,
+            send_typing_stop=None,
+            agent_client=agent_client,
+        )
+        if not chunks:
+            return
+        response_text = "\n\n".join(chunks)
+        await email_client.send(
+            to=sender,
+            subject=f"Re: {subject or 'Your message'}",
+            html=response_text.replace("\n", "<br/>"),
+            text=response_text,
+        )
 
     async def run(self):
         self._running = True
@@ -963,29 +1141,65 @@ class EmailInboundBot:
                 if not body.strip():
                     continue
 
-                chunks: List[str] = []
+                # --- Check for pending confirmation reply ---
+                pending = self._pending.get(sender)
+                if pending:
+                    if datetime.now(timezone.utc) > pending.expires_at:
+                        del self._pending[sender]
+                        pending = None
+                    else:
+                        code = self._extract_code(body)
+                        if code and code == pending.code:
+                            self._touch_session(sender)
+                            held = pending.original_message
+                            del self._pending[sender]
+                            logger.info("Email confirmed for %s — processing held message", sender)
+                            await self._process_and_reply(
+                                sender=sender,
+                                body=held.body or held.subject or "",
+                                subject=held.subject,
+                                binding=pending.binding,
+                                email_client=email_client,
+                                agent_client=agent_client,
+                            )
+                            continue
+                        # Code didn't match — fall through to normal flow
+                        # (the user might have sent a new unrelated email)
 
-                async def _capture(chunk: str):
-                    chunks.append(chunk)
-
-                await self.processor.process(
-                    channel="email",
-                    external_sender=sender,
-                    text=body,
-                    send_message=_capture,
-                    send_typing_start=None,
-                    send_typing_stop=None,
-                    agent_client=agent_client,
-                )
-                if not chunks:
+                # --- Resolve channel binding ---
+                binding = await self.processor._resolve_sender_binding("email", sender)
+                if not binding:
+                    await email_client.send(
+                        to=sender,
+                        subject=f"Re: {inbound_msg.subject or 'Your message'}",
+                        html=(
+                            "<p>Your email address is not linked to a Busibox account.</p>"
+                            "<p>Please link your email in your <strong>Account settings</strong> "
+                            "in the Busibox portal, then try again.</p>"
+                        ),
+                        text=(
+                            "Your email address is not linked to a Busibox account.\n"
+                            "Please link your email in your Account settings "
+                            "in the Busibox portal, then try again."
+                        ),
+                    )
                     continue
-                response_text = "\n\n".join(chunks)
-                await email_client.send(
-                    to=sender,
-                    subject=f"Re: {inbound_msg.subject or 'Your message'}",
-                    html=response_text.replace("\n", "<br/>"),
-                    text=response_text,
-                )
+
+                # --- Active session? Process directly ---
+                if self._session_active(sender):
+                    self._touch_session(sender)
+                    await self._process_and_reply(
+                        sender=sender,
+                        body=body,
+                        subject=inbound_msg.subject,
+                        binding=binding,
+                        email_client=email_client,
+                        agent_client=agent_client,
+                    )
+                    continue
+
+                # --- No active session — send confirmation ---
+                await self._send_confirmation(email_client, sender, inbound_msg, binding)
 
 
 async def run_api_server(settings: Settings, whatsapp_handler: Callable[[dict], Awaitable[None]] | None):
@@ -1044,9 +1258,6 @@ async def run_discord_bot(settings: Settings, processor: MessageProcessor):
 
 async def run_email_inbound_bot(settings: Settings, processor: MessageProcessor):
     if not settings.email_inbound_enabled:
-        return
-    if not settings.delegation_token:
-        logger.warning("Inbound email enabled but DELEGATION_TOKEN not set")
         return
     if not settings.imap_host or not settings.imap_user or not settings.imap_password:
         logger.warning("Inbound email enabled but IMAP credentials are incomplete")

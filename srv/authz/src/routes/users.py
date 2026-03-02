@@ -121,6 +121,11 @@ class InternalChannelBindingVerify(BaseModel):
     link_code: str = Field(..., min_length=4, max_length=64)
 
 
+class InternalChannelBindingRefresh(BaseModel):
+    channel_type: str = Field(..., min_length=2, max_length=64)
+    external_id: str = Field(..., min_length=1, max_length=256)
+
+
 class RoleResponse(BaseModel):
     id: str
     name: str
@@ -751,6 +756,76 @@ async def internal_lookup_channel_binding(request: Request):
     if not binding:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Binding not found")
     return {"binding": binding}
+
+
+@router.post("/internal/channel-bindings/refresh-token")
+async def internal_refresh_channel_binding_token(request: Request):
+    """
+    Re-sign a stale delegation token with the current signing key.
+
+    Called by bridge when token exchange fails with ``invalid_subject_token_key``
+    after an authz key rotation.  The underlying delegation record in
+    ``authz_delegation_tokens`` must still be valid (not revoked, not expired).
+    """
+    body = await request.json()
+    try:
+        data = InternalChannelBindingRefresh.model_validate(body)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+    db = _get_pg(request)
+    await db.connect()
+
+    binding = await db.lookup_user_channel_binding(
+        channel_type=data.channel_type,
+        external_id=data.external_id,
+    )
+    if not binding:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Binding not found")
+
+    old_jwt = binding.get("delegation_token") or ""
+    jti = binding.get("delegation_token_jti") or ""
+    if not old_jwt or not jti:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Binding has no delegation token to refresh",
+        )
+
+    delegation = await db.get_delegation_token(jti)
+    if not delegation:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Delegation token revoked or expired — user must re-link",
+        )
+
+    import jwt as pyjwt
+    try:
+        claims = pyjwt.decode(old_jwt, options={"verify_signature": False})
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot decode stored delegation JWT",
+        )
+
+    from routes.oauth import _sign_delegation_token
+
+    new_jwt_str = await _sign_delegation_token(
+        user_id=claims["sub"],
+        email=claims.get("email", ""),
+        jti=jti,
+        scopes=(claims.get("scope") or "").split(),
+        expires_at=claims["exp"],
+    )
+
+    updated = await db.update_channel_binding_token(
+        channel_type=data.channel_type,
+        external_id=data.external_id,
+        delegation_token=new_jwt_str,
+    )
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update binding")
+
+    return {"binding": updated}
 
 
 # ============================================================================

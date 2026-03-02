@@ -16,6 +16,12 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+class StaleTokenError(Exception):
+    """Raised when token exchange fails because the delegation token's
+    signing key no longer matches the authz active key."""
+    pass
+
+
 @dataclass
 class ChatResponse:
     """Represents a chat response from the Agent API."""
@@ -127,6 +133,15 @@ class AgentClient:
             
         except httpx.HTTPStatusError as e:
             logger.error(f"Token exchange failed: {e.response.status_code} - {e.response.text}")
+            if e.response.status_code == 401:
+                try:
+                    detail = e.response.json().get("detail", "")
+                except Exception:
+                    detail = ""
+                if detail == "invalid_subject_token_key":
+                    raise StaleTokenError(
+                        "Delegation token signed with rotated key"
+                    ) from e
             raise
         except Exception as e:
             logger.error(f"Failed to get auth token: {e}")

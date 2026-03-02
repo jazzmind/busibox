@@ -2229,6 +2229,35 @@ class PostgresService:
             )
             return [dict(row) for row in rows]
 
+    async def update_channel_binding_token(
+        self,
+        *,
+        channel_type: str,
+        external_id: str,
+        delegation_token: str,
+    ) -> dict | None:
+        """Update the delegation token JWT on a verified channel binding."""
+        channel = channel_type.strip().lower()
+        external = external_id.strip().lower()
+        if not channel or not external:
+            return None
+
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE authz_user_channel_bindings
+                SET delegation_token = $1, updated_at = now()
+                WHERE channel_type = $2 AND external_id = $3 AND verified_at IS NOT NULL
+                RETURNING id::text, user_id::text, channel_type, external_id,
+                          delegation_token, delegation_token_jti::text,
+                          verified_at, created_at, updated_at
+                """,
+                delegation_token,
+                channel,
+                external,
+            )
+            return dict(row) if row else None
+
     async def delete_user_channel_binding(self, user_id: str, binding_id: str) -> bool:
         """Delete a user-owned channel binding."""
         uid = validate_uuid(user_id, "user_id")

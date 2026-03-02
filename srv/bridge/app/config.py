@@ -236,6 +236,10 @@ class Settings(BaseSettings):
         "",
         description="Comma-separated list of allowed sender emails (empty = all)",
     )
+    email_confirmation_ttl: int = Field(
+        10800,
+        description="Seconds before an email confirmation session expires (default 3 hours)",
+    )
 
     def get_email_allowed_senders(self) -> List[str]:
         """Parse allowed inbound sender addresses."""

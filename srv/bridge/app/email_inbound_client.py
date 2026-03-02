@@ -17,6 +17,8 @@ class InboundEmailMessage:
     sender_email: str
     subject: str
     body: str
+    in_reply_to: str = ""
+    references: str = ""
 
 
 class EmailInboundClient:
@@ -72,12 +74,16 @@ class EmailInboundClient:
                 subject = parsed.get("Subject", "") or ""
                 body = self._extract_body(parsed)
                 message_id = parsed.get("Message-ID", uid.decode("utf-8", errors="ignore"))
+                in_reply_to = parsed.get("In-Reply-To", "") or ""
+                references = parsed.get("References", "") or ""
                 out.append(
                     InboundEmailMessage(
                         message_id=message_id,
                         sender_email=sender_email,
                         subject=subject,
                         body=body.strip(),
+                        in_reply_to=in_reply_to.strip(),
+                        references=references.strip(),
                     )
                 )
 
