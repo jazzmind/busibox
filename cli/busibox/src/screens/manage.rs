@@ -8,6 +8,10 @@ use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState, *};
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// Map display name to make SERVICE= value for manage commands.
 fn service_to_make_name(display_name: &str) -> &str {
     match display_name {
@@ -240,7 +244,14 @@ fn render_log_viewer(f: &mut Frame, app: &App) {
     let tick = app.manage_tick;
     let spinner_char = SPINNER[tick % SPINNER.len()];
 
-    let subtitle = if app.manage_action_running {
+    let subtitle = if app.manage_waiting_confirm.is_some() {
+        Paragraph::new(Line::from(vec![
+            Span::styled("? ", theme::warning()),
+            Span::styled(&app.manage_confirm_prompt, theme::warning()),
+            Span::styled("  [y/n]", theme::muted()),
+        ]))
+        .alignment(Alignment::Center)
+    } else if app.manage_action_running {
         Paragraph::new(Line::from(vec![
             Span::styled(format!("{spinner_char} "), theme::info()),
             Span::styled("Running...", theme::info()),
@@ -321,7 +332,9 @@ fn render_log_viewer(f: &mut Frame, app: &App) {
         );
     }
 
-    let help_text = if app.manage_action_running {
+    let help_text = if app.manage_waiting_confirm.is_some() {
+        " y Yes (overwrite)  n No (keep existing)  ↑/↓ Scroll"
+    } else if app.manage_action_running {
         " ↑/↓ Scroll  (waiting for action to complete...)"
     } else {
         " ↑/↓ Scroll  c Copy  Esc/l Close log viewer"
@@ -385,6 +398,37 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_log_viewer_key(app: &mut App, key: KeyEvent) {
+    if let Some(sender) = app.manage_waiting_confirm.take() {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let _ = sender.send(true);
+                app.manage_confirm_prompt.clear();
+                return;
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                let _ = sender.send(false);
+                app.manage_confirm_prompt.clear();
+                return;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if app.manage_log_scroll > 0 {
+                    app.manage_log_scroll -= 1;
+                }
+                app.manage_waiting_confirm = Some(sender);
+                return;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.manage_log_scroll += 1;
+                app.manage_waiting_confirm = Some(sender);
+                return;
+            }
+            _ => {
+                app.manage_waiting_confirm = Some(sender);
+                return;
+            }
+        }
+    }
+
     match key.code {
         KeyCode::Esc | KeyCode::Char('l') => {
             if !app.manage_action_running {
@@ -595,6 +639,8 @@ fn run_action(app: &mut App, action: &str) {
 }
 
 fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
+    use crate::modules::hardware::LlmBackend;
+
     let (tx, rx) = std::sync::mpsc::channel::<ManageUpdate>();
     app.manage_rx = Some(rx);
     app.manage_log.clear();
@@ -636,6 +682,21 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
         .active_profile()
         .and_then(|(_, p)| p.effective_host().map(|s| s.to_string()));
 
+    let profile_model_tier: Option<String> = app
+        .active_profile()
+        .and_then(|(_, p)| p.effective_model_tier().map(|t| t.name().to_string()));
+    let profile_llm_backend: Option<String> = app
+        .active_profile()
+        .and_then(|(_, p)| p.hardware.as_ref().map(|h| match h.llm_backend {
+            LlmBackend::Mlx => "mlx".to_string(),
+            LlmBackend::Vllm => "vllm".to_string(),
+            LlmBackend::Cloud => "cloud".to_string(),
+        }));
+    let profile_network_base_octets: Option<String> = app
+        .active_profile()
+        .and_then(|(_, p)| p.network_base_octets.clone())
+        .filter(|v| !v.trim().is_empty());
+
     std::thread::spawn(move || {
         let remote_path = profile_remote_path
             .as_deref()
@@ -676,6 +737,132 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
                     return;
                 }
                 let _ = tx.send(ManageUpdate::Log("✓ Files synced".into()));
+            }
+        }
+
+        // For litellm redeploy/restart, regenerate model_config.yml (with keep/overwrite prompt)
+        if (service == "litellm") && (action == "redeploy" || action == "restart") && is_remote {
+            if let Some((ref host, ref user, ref key)) = ssh_details {
+                let display_host = profile_host.as_deref().unwrap_or(host);
+                let model_cfg_rel = "provision/ansible/group_vars/all/model_config.yml";
+                let local_model_cfg = repo_root.join(model_cfg_rel);
+
+                let should_generate = if local_model_cfg.exists() {
+                    let _ = tx.send(ManageUpdate::Log(
+                        "Existing model_config.yml found locally.".into(),
+                    ));
+                    let (confirm_tx, confirm_rx) = std::sync::mpsc::channel::<bool>();
+                    let _ = tx.send(ManageUpdate::WaitForConfirm {
+                        prompt: "Overwrite existing model_config.yml?".to_string(),
+                        response: confirm_tx,
+                    });
+                    match confirm_rx.recv() {
+                        Ok(answer) => answer,
+                        Err(_) => false,
+                    }
+                } else {
+                    let _ = tx.send(ManageUpdate::Log(
+                        "No existing model_config.yml — generating...".into(),
+                    ));
+                    true
+                };
+
+                if should_generate {
+                    let _ = tx.send(ManageUpdate::Log(
+                        "Generating model_config.yml on remote host...".into(),
+                    ));
+
+                    let ssh = crate::modules::ssh::SshConnection::new(
+                        display_host, user, key,
+                    );
+                    let tx_model = tx.clone();
+                    let on_model_line = |line: &str| {
+                        let _ = tx_model.send(ManageUpdate::Log(
+                            format!("  [model-pipeline] {line}"),
+                        ));
+                    };
+
+                    let mut env_prefix = String::new();
+                    if let Some(ref tier) = profile_model_tier {
+                        env_prefix.push_str(&format!(
+                            "LLM_TIER={} MODEL_TIER={} ",
+                            shell_escape(tier),
+                            shell_escape(tier),
+                        ));
+                    }
+                    if let Some(ref backend) = profile_llm_backend {
+                        env_prefix.push_str(&format!(
+                            "LLM_BACKEND={} ",
+                            shell_escape(backend),
+                        ));
+                    }
+                    if let Some(ref octets) = profile_network_base_octets {
+                        env_prefix.push_str(&format!(
+                            "NETWORK_BASE_OCTETS={} ",
+                            shell_escape(octets),
+                        ));
+                    }
+                    let gen_cmd = format!(
+                        "{env_prefix}bash scripts/llm/generate-model-config.sh"
+                    );
+                    match remote::exec_remote_streaming(
+                        &ssh, &remote_path, &gen_cmd, on_model_line,
+                    ) {
+                        Ok(0) => {
+                            let remote_model_cfg = format!(
+                                "{}/{}",
+                                remote_path.trim_end_matches('/'),
+                                model_cfg_rel,
+                            );
+                            match remote::pull_file(
+                                display_host,
+                                user,
+                                key,
+                                &remote_model_cfg,
+                                &local_model_cfg,
+                            ) {
+                                Ok(()) => {
+                                    let _ = tx.send(ManageUpdate::Log(format!(
+                                        "✓ Pulled model_config.yml to {}",
+                                        local_model_cfg.display(),
+                                    )));
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(ManageUpdate::Log(format!(
+                                        "WARNING: Failed to pull model_config.yml: {e}"
+                                    )));
+                                }
+                            }
+                        }
+                        Ok(code) => {
+                            let _ = tx.send(ManageUpdate::Log(format!(
+                                "WARNING: generate-model-config.sh exited with code {code}"
+                            )));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(ManageUpdate::Log(format!(
+                                "WARNING: generate-model-config.sh failed: {e}"
+                            )));
+                        }
+                    }
+                    // Re-sync so the newly pulled model_config.yml is available on remote
+                    if local_model_cfg.exists() {
+                        let _ = tx.send(ManageUpdate::Log(
+                            "Re-syncing model_config.yml to remote...".into(),
+                        ));
+                        if let Err(e) = remote::sync(
+                            &repo_root, display_host, user, key, &remote_path,
+                        ) {
+                            let _ = tx.send(ManageUpdate::Log(format!(
+                                "WARNING: Re-sync failed: {e}"
+                            )));
+                        }
+                    }
+                } else {
+                    let _ = tx.send(ManageUpdate::Log(
+                        "Keeping existing model_config.yml".into(),
+                    ));
+                }
             }
         }
 

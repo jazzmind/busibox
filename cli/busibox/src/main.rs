@@ -172,10 +172,14 @@ fn main() -> Result<()> {
                                 svc.status = status;
                             }
                         }
+                        Ok(app::ManageUpdate::WaitForConfirm { prompt, response }) => {
+                            app.manage_confirm_prompt = prompt;
+                            app.manage_waiting_confirm = Some(response);
+                            break;
+                        }
                         Ok(app::ManageUpdate::Complete { success }) => {
                             app.manage_action_running = false;
                             if app.manage_log_visible {
-                                // Action completed (had log viewer open)
                                 app.manage_action_complete = true;
                                 app.manage_log_scroll =
                                     app.manage_log.len().saturating_sub(1);

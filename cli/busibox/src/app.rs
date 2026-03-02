@@ -102,6 +102,8 @@ pub struct App {
     pub manage_action_complete: bool,
     pub manage_tick: usize,
     pub manage_rx: Option<mpsc::Receiver<ManageUpdate>>,
+    pub manage_waiting_confirm: Option<std::sync::mpsc::Sender<bool>>,
+    pub manage_confirm_prompt: String,
 
     // Scroll state (model download, hardware report, ssh setup)
     pub model_download_scroll: usize,
@@ -333,6 +335,12 @@ pub enum ManageUpdate {
     Log(String),
     StatusResult { name: String, status: String },
     Complete { success: bool },
+    /// Worker pauses and asks a yes/no question.
+    /// The user's answer (true = yes/overwrite, false = no/keep) is sent back.
+    WaitForConfirm {
+        prompt: String,
+        response: std::sync::mpsc::Sender<bool>,
+    },
 }
 
 impl std::fmt::Display for InstallStatus {
@@ -405,6 +413,8 @@ impl App {
             manage_action_complete: false,
             manage_tick: 0,
             manage_rx: None,
+            manage_waiting_confirm: None,
+            manage_confirm_prompt: String::new(),
             model_download_scroll: 0,
             hardware_report_scroll: 0,
             ssh_setup_scroll: 0,
