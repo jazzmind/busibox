@@ -156,7 +156,7 @@ def get_data_schema() -> SchemaManager:
             extracted_keywords TEXT[],
             metadata JSONB DEFAULT '{}',
             permissions JSONB NOT NULL DEFAULT '{"visibility": "private"}',
-            visibility VARCHAR(20) DEFAULT 'personal' CHECK (visibility IN ('personal', 'shared', 'group')),
+            visibility VARCHAR(20) DEFAULT 'personal' CHECK (visibility IN ('personal', 'shared', 'group', 'authenticated')),
             has_markdown BOOLEAN DEFAULT false,
             markdown_path VARCHAR(512),
             images_path VARCHAR(512),
@@ -885,11 +885,14 @@ def get_data_schema() -> SchemaManager:
     # Drop existing policies for idempotency
     schema.add_rls("DROP POLICY IF EXISTS personal_docs_select ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS shared_docs_select ON data_files")
+    schema.add_rls("DROP POLICY IF EXISTS authenticated_docs_select ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS data_files_insert ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS personal_docs_update ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS shared_docs_update ON data_files")
+    schema.add_rls("DROP POLICY IF EXISTS authenticated_docs_update ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS personal_docs_delete ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS shared_docs_delete ON data_files")
+    schema.add_rls("DROP POLICY IF EXISTS authenticated_docs_delete ON data_files")
     
     # DATA_FILES POLICIES
     schema.add_rls("""
@@ -915,6 +918,13 @@ def get_data_schema() -> SchemaManager:
                     )
                 )
             )
+        )
+    """)
+    
+    schema.add_rls("""
+        CREATE POLICY authenticated_docs_select ON data_files FOR SELECT USING (
+            visibility = 'authenticated'
+            AND NULLIF(current_setting('app.user_id', true), '') IS NOT NULL
         )
     """)
     
@@ -954,6 +964,16 @@ def get_data_schema() -> SchemaManager:
     """)
     
     schema.add_rls("""
+        CREATE POLICY authenticated_docs_update ON data_files FOR UPDATE USING (
+            visibility = 'authenticated'
+            AND owner_id = COALESCE(
+                NULLIF(current_setting('app.user_id', true), '')::uuid,
+                '00000000-0000-0000-0000-000000000000'::uuid
+            )
+        ) WITH CHECK (true)
+    """)
+    
+    schema.add_rls("""
         CREATE POLICY personal_docs_delete ON data_files FOR DELETE USING (
             visibility = 'personal' 
             AND owner_id = COALESCE(
@@ -985,6 +1005,16 @@ def get_data_schema() -> SchemaManager:
         )
     """)
     
+    schema.add_rls("""
+        CREATE POLICY authenticated_docs_delete ON data_files FOR DELETE USING (
+            visibility = 'authenticated'
+            AND owner_id = COALESCE(
+                NULLIF(current_setting('app.user_id', true), '')::uuid,
+                '00000000-0000-0000-0000-000000000000'::uuid
+            )
+        )
+    """)
+    
     # CHUNKS POLICIES
     schema.add_rls("DROP POLICY IF EXISTS chunks_select ON data_chunks")
     schema.add_rls("DROP POLICY IF EXISTS chunks_insert ON data_chunks")
@@ -1004,6 +1034,8 @@ def get_data_schema() -> SchemaManager:
                         WHERE dr.file_id = f.file_id
                         AND dr.role_id = ANY(COALESCE(string_to_array(current_setting('app.user_role_ids_read', true), ',')::uuid[], ARRAY[]::uuid[]))
                     ))
+                    OR
+                    (f.visibility = 'authenticated' AND NULLIF(current_setting('app.user_id', true), '') IS NOT NULL)
                 )
             )
         )
@@ -1031,6 +1063,8 @@ def get_data_schema() -> SchemaManager:
                         WHERE dr.file_id = f.file_id
                         AND dr.role_id = ANY(COALESCE(string_to_array(current_setting('app.user_role_ids_read', true), ',')::uuid[], ARRAY[]::uuid[]))
                     ))
+                    OR
+                    (f.visibility = 'authenticated' AND NULLIF(current_setting('app.user_id', true), '') IS NOT NULL)
                 )
             )
         )
@@ -1056,6 +1090,8 @@ def get_data_schema() -> SchemaManager:
                         WHERE dr.file_id = f.file_id
                         AND dr.role_id = ANY(COALESCE(string_to_array(current_setting('app.user_role_ids_read', true), ',')::uuid[], ARRAY[]::uuid[]))
                     ))
+                    OR
+                    (f.visibility = 'authenticated' AND NULLIF(current_setting('app.user_id', true), '') IS NOT NULL)
                 )
             )
         )

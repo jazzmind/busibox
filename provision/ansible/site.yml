@@ -287,7 +287,42 @@
     - role: deploy_api
       tags: [apis, deploy, deploy_api]
 
-# 3.2 Data (file ingestion, worker)
+# 3.2a Redis (runs on data-lxc but as a separate lightweight play)
+# Separated from main data play so --tags redis doesn't trigger the entire data role
+- hosts: data
+  tags: [redis]
+  tasks:
+    - name: Load secrets
+      include_vars:
+        file: "{{ playbook_dir }}/roles/secrets/vars/vault.{{ deployment_environment | default('dev') }}.yml"
+      no_log: true
+      tags: [redis]
+    - name: Install Redis (standalone)
+      apt:
+        name: [redis-server, redis-tools]
+        state: present
+        update_cache: yes
+      tags: [redis]
+    - name: Configure Redis to listen on all interfaces
+      lineinfile:
+        path: /etc/redis/redis.conf
+        regexp: '^bind '
+        line: 'bind 0.0.0.0 ::1'
+      tags: [redis]
+    - name: Disable Redis protected mode (internal network)
+      lineinfile:
+        path: /etc/redis/redis.conf
+        regexp: '^protected-mode '
+        line: 'protected-mode no'
+      tags: [redis]
+    - name: Start and enable Redis
+      systemd:
+        name: redis-server
+        state: restarted
+        enabled: yes
+      tags: [redis]
+
+# 3.2b Data (file ingestion, worker)
 # Tag structure:
 #   - apis_data: runs entire data role
 #   - data: runs entire data role
@@ -295,11 +330,12 @@
 #   - data_worker: runs only worker tasks (shared deploy + worker service)
 # NOTE: data_api/data_worker are on play tags to allow the play to run,
 # but task-level tags filter which specific tasks execute
+# NOTE: Redis is NOT included here — use the dedicated redis play above
 - hosts: data
-  tags: [apis, apis_data, data, data_api, data_worker, redis]
+  tags: [apis, apis_data, data, data_api, data_worker]
   roles:
     - role: data
-      tags: [apis, apis_data, data, data_api, data_worker, redis]
+      tags: [apis, apis_data, data, data_api, data_worker]
 
 # 3.2.1 Embedding API (separate play to avoid running data role GPU tasks)
 # Uses FastEmbed for CPU-based embeddings - does NOT need GPU

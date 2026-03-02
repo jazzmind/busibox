@@ -149,6 +149,56 @@ fn get_bootstrap_stages(app: &App) -> Vec<(&'static str, &'static str, Vec<Strin
     stages
 }
 
+fn get_update_stages(app: &App) -> Vec<(&'static str, &'static str, Vec<String>)> {
+    use crate::modules::hardware::LlmBackend;
+
+    let is_mlx = app
+        .active_profile()
+        .and_then(|(_, p)| p.hardware.as_ref())
+        .map(|h| matches!(h.llm_backend, LlmBackend::Mlx))
+        .unwrap_or(false);
+
+    let mut stages = vec![
+        ("Prerequisites", "Ansible & Dependencies", vec!["_prerequisites".into()]),
+        ("Database", "PostgreSQL", vec!["postgres".into()]),
+        ("Infrastructure", "Redis, MinIO, Milvus, Neo4j", vec![
+            "redis".into(), "minio".into(), "milvus".into(), "neo4j".into(),
+        ]),
+        ("Authentication", "AuthZ API", vec!["authz".into()]),
+        ("Embedding", "Embedding API", vec!["embedding".into()]),
+        ("Data", "Data API & Worker", vec!["data".into()]),
+        ("Search", "Search API", vec!["search".into()]),
+        ("Agent", "Agent API", vec!["agent".into()]),
+        ("Deployment", "Deploy API", vec!["deploy".into()]),
+        ("Bridge", "Bridge Service", vec!["bridge".into()]),
+        ("Docs", "Docs API", vec!["docs".into()]),
+        ("LLM Gateway", "LiteLLM", vec!["litellm".into()]),
+    ];
+
+    if is_mlx {
+        stages.push(("MLX Host Agent", "Host agent for MLX control", vec!["_mlx_host_agent".into()]));
+    }
+
+    stages.push((
+        "Frontend",
+        "All Frontend Apps",
+        vec!["core-apps".into()],
+    ));
+    stages.push(("Proxy", "Nginx Proxy", vec!["proxy".into()]));
+    stages.push(("Validation", "Verify env secrets", vec!["_validate_env".into()]));
+
+    stages
+}
+
+/// Returns the appropriate stages based on whether this is an update or bootstrap install.
+fn get_stages(app: &App) -> Vec<(&'static str, &'static str, Vec<String>)> {
+    if app.is_update {
+        get_update_stages(app)
+    } else {
+        get_bootstrap_stages(app)
+    }
+}
+
 pub fn render(f: &mut Frame, app: &App) {
     if app.install_log_visible {
         render_log_viewer(f, app);
@@ -167,7 +217,8 @@ pub fn render(f: &mut Frame, app: &App) {
         .margin(2)
         .split(f.area());
 
-    let title = Paragraph::new("Bootstrap Installation")
+    let title_text = if app.is_update { "Update All Services" } else { "Bootstrap Installation" };
+    let title = Paragraph::new(title_text)
         .style(theme::title())
         .alignment(Alignment::Center);
     f.render_widget(title, chunks[0]);
@@ -181,16 +232,18 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 
     let any_failed = app.install_services.iter().any(|s| matches!(s.status, InstallStatus::Failed(_)));
+    let progress_text = if app.is_update { "Update" } else { "Installation" };
     let subtitle = if app.install_complete && any_failed {
-        Paragraph::new("Installation finished with errors!")
+        Paragraph::new(format!("{progress_text} finished with errors!"))
             .style(theme::error())
             .alignment(Alignment::Center)
     } else if app.install_complete {
-        Paragraph::new("Installation complete!")
+        Paragraph::new(format!("{progress_text} complete!"))
             .style(theme::success())
             .alignment(Alignment::Center)
     } else {
-        Paragraph::new("Installing core services...")
+        let active_text = if app.is_update { "Updating all services..." } else { "Installing core services..." };
+        Paragraph::new(active_text)
             .style(theme::muted())
             .alignment(Alignment::Center)
     };
@@ -202,7 +255,7 @@ pub fn render(f: &mut Frame, app: &App) {
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(""));
 
-    let stages = get_bootstrap_stages(app);
+    let stages = get_stages(app);
     for (stage_name, description, services) in &stages {
         let stage_status = aggregate_stage_status(app, services);
 
@@ -969,7 +1022,7 @@ fn init_install(app: &mut App) {
     app.install_portal_url = None;
     app.install_tick = 0;
 
-    let stages = get_bootstrap_stages(app);
+    let stages = get_stages(app);
     for (_, _, services) in &stages {
         for svc in services {
             app.install_services.push(ServiceInstallState {
@@ -992,6 +1045,7 @@ fn spawn_install_worker(app: &mut App) {
     let remote_path_input = app.remote_path_input.clone();
     let vault_password: Option<String> = app.vault_password.clone();
     let clean_install = app.clean_install;
+    let is_update = app.is_update;
     // Derive vault prefix from environment (same logic as service-deploy.sh get_container_prefix)
     let vault_prefix: String = app
         .active_profile()
@@ -1001,6 +1055,10 @@ fn spawn_install_worker(app: &mut App) {
         .active_profile()
         .map(|(_, p)| p.environment.clone())
         .unwrap_or_else(|| "development".into());
+    let profile_backend: String = app
+        .active_profile()
+        .map(|(_, p)| p.backend.clone())
+        .unwrap_or_else(|| "docker".into());
 
     let ssh_details: Option<(String, String, String)> = app.ssh_connection.as_ref().map(|ssh| {
         (ssh.host.clone(), ssh.user.clone(), ssh.key_path.clone())
@@ -1022,6 +1080,15 @@ fn spawn_install_worker(app: &mut App) {
     let frontend_ref: Option<String> = app
         .active_profile()
         .and_then(|(_, p)| p.frontend_ref.clone());
+    let site_domain: String = app
+        .active_profile()
+        .and_then(|(_, p)| p.site_domain.clone())
+        .filter(|d| !d.trim().is_empty())
+        .unwrap_or_else(|| "localhost".to_string());
+    let ssl_cert_name: Option<String> = app
+        .active_profile()
+        .and_then(|(_, p)| p.ssl_cert_name.clone())
+        .filter(|c| !c.trim().is_empty());
     let profile_model_tier: Option<String> = app
         .active_profile()
         .and_then(|(_, p)| p.effective_model_tier().map(|t| t.name().to_string()));
@@ -1050,7 +1117,7 @@ fn spawn_install_worker(app: &mut App) {
 
     let needs_token = !private_repos.is_empty() && github_token.is_none();
 
-    let stages: Vec<(String, String, Vec<String>)> = get_bootstrap_stages(app)
+    let stages: Vec<(String, String, Vec<String>)> = get_stages(app)
         .into_iter()
         .map(|(name, desc, svcs)| (name.to_string(), desc.to_string(), svcs))
         .collect();
@@ -1109,6 +1176,12 @@ fn spawn_install_worker(app: &mut App) {
                 }
                 let _ = tx.send(InstallUpdate::Log("✓ Files synced".into()));
             }
+        }
+
+        if let Err(e) = prepare_ssl_inputs(&repo_root, &site_domain, ssl_cert_name.as_deref()) {
+            let _ = tx.send(InstallUpdate::Log(format!(
+                "WARNING: SSL certificate preparation skipped: {e}"
+            )));
         }
 
         // If private repos were detected and we have no token, prompt for one
@@ -1814,7 +1887,9 @@ fi
                     fi
 
                     # === Docker checks ===
-                    if [ "$(uname)" = "Darwin" ] && command -v brew &>/dev/null; then
+                    if [ "${BUSIBOX_TARGET_BACKEND:-docker}" = "proxmox" ]; then
+                        echo "✓ Skipping Docker checks for proxmox backend"
+                    elif [ "$(uname)" = "Darwin" ] && command -v brew &>/dev/null; then
                         # Install docker CLI + compose via Homebrew if not present
                         if ! command -v docker &>/dev/null; then
                             echo "Installing docker CLI via Homebrew..."
@@ -1952,18 +2027,20 @@ fi
                             echo "✓ Docker daemon running"
                         fi
                     fi
-                    echo "✓ docker: $(docker --version)"
+                    if [ "${BUSIBOX_TARGET_BACKEND:-docker}" != "proxmox" ]; then
+                        echo "✓ docker: $(docker --version)"
 
-                    # Check docker compose
-                    if docker compose version &>/dev/null; then
-                        echo "✓ docker compose: $(docker compose version --short 2>/dev/null || docker compose version)"
-                    elif command -v docker-compose &>/dev/null; then
-                        echo "✓ docker-compose: $(docker-compose --version)"
-                    else
-                        echo "ERROR: docker compose is not available."
-                        echo ""
-                        echo "Please install Docker Compose v2."
-                        exit 1
+                        # Check docker compose
+                        if docker compose version &>/dev/null; then
+                            echo "✓ docker compose: $(docker compose version --short 2>/dev/null || docker compose version)"
+                        elif command -v docker-compose &>/dev/null; then
+                            echo "✓ docker-compose: $(docker-compose --version)"
+                        else
+                            echo "ERROR: docker compose is not available."
+                            echo ""
+                            echo "Please install Docker Compose v2."
+                            exit 1
+                        fi
                     fi
 
                     # Ensure jq is available (needed by Ansible health checks)
@@ -1997,7 +2074,8 @@ fi
                                 key,
                             );
                             let full_cmd = format!(
-                                "{} bash -c {}",
+                                "export BUSIBOX_TARGET_BACKEND={}; {} bash -c {}",
+                                shell_escape(&profile_backend),
                                 crate::modules::remote::SHELL_PATH_PREAMBLE,
                                 shell_escape(prereq_script)
                             );
@@ -2038,6 +2116,7 @@ fi
                         match std::process::Command::new("bash")
                             .arg("-c")
                             .arg(prereq_script)
+                            .env("BUSIBOX_TARGET_BACKEND", &profile_backend)
                             .output()
                         {
                             Ok(output) => {
@@ -2592,16 +2671,16 @@ fi
                     format!(r#"
                         set -e
                         echo "Clean install: removing all busibox Docker resources..."
-                        # Find and stop ALL busibox compose projects
+                        # Find and stop ALL busibox compose projects (with volumes)
                         for project in $(docker compose ls --format '{{{{.Name}}}}' 2>/dev/null | grep -i busibox || true); do
                             echo "  Stopping project: $project"
-                            docker compose -p "$project" down --remove-orphans 2>&1 || true
+                            docker compose -p "$project" down -v --remove-orphans 2>&1 || true
                         done
-                        # Also clean up any orphaned busibox containers
-                        ORPHANS=$(docker ps -a --format '{{{{.Names}}}}' 2>/dev/null | grep -E "^(dev|staging|prod|demo)-(postgres|redis|minio|minio-init|milvus|milvus-etcd|milvus-minio|milvus-init|neo4j|authz|agent|data-api|data-worker|search-api|deploy-api|docs-api|embedding-api|litellm|proxy|core-apps|admin|portal|chat|documents|media|appbuilder|busibox)" || true)
-                        if [ -n "$ORPHANS" ]; then
-                            echo "  Removing orphaned containers: $ORPHANS"
-                            echo "$ORPHANS" | xargs docker rm -f 2>/dev/null || true
+                        # Also stop/remove ALL containers with busibox-related names
+                        ALL_BUSIBOX=$(docker ps -a --format '{{{{.Names}}}}' 2>/dev/null | grep -E "^(dev|staging|prod|demo)-" || true)
+                        if [ -n "$ALL_BUSIBOX" ]; then
+                            echo "  Removing containers: $ALL_BUSIBOX"
+                            echo "$ALL_BUSIBOX" | xargs docker rm -f 2>/dev/null || true
                         fi
                         # Remove busibox volumes (preserve model caches for faster reinstall)
                         VOLS=$(docker volume ls --format '{{{{.Name}}}}' 2>/dev/null | grep -E "(dev|staging|prod|demo)-busibox" | grep -v -E "model_cache|fastembed_cache|vllm_cache|ollama" || true)
@@ -2965,6 +3044,99 @@ fi
                     break;
                 }
                 continue;
+            } else if stage_services_to_deploy.len() == 1
+                && stage_services_to_deploy.first().map(|s| s.as_str()) == Some("_validate_env")
+            {
+                let _ = tx.send(InstallUpdate::Log(
+                    "Validating environment secrets...".into(),
+                ));
+                for svc in services {
+                    let _ = tx.send(InstallUpdate::ServiceStatus {
+                        name: svc.clone(),
+                        status: InstallStatus::Deploying,
+                    });
+                }
+
+                let make_args = "validate-env".to_string();
+                let tx_stream = tx.clone();
+                let on_line = |line: &str| {
+                    let _ = tx_stream.send(InstallUpdate::Log(format!("  {line}")));
+                };
+
+                let result: color_eyre::Result<i32> = if is_remote {
+                    if let Some((ref host, ref user, ref key)) = ssh_details {
+                        let ssh = crate::modules::ssh::SshConnection::new(
+                            profile_host.as_deref().unwrap_or(host),
+                            user,
+                            key,
+                        );
+                        if let Some(ref vp) = vault_password {
+                            remote::exec_make_quiet_with_vault_streaming(
+                                &ssh,
+                                &remote_path,
+                                &make_args,
+                                vp,
+                                on_line,
+                            )
+                        } else {
+                            remote::exec_make_quiet_streaming(
+                                &ssh,
+                                &remote_path,
+                                &make_args,
+                                on_line,
+                            )
+                        }
+                    } else {
+                        Err(color_eyre::eyre::eyre!("No SSH connection"))
+                    }
+                } else if let Some(ref vp) = vault_password {
+                    remote::run_local_make_quiet_with_vault_streaming(
+                        &repo_root,
+                        &make_args,
+                        vp,
+                        on_line,
+                    )
+                } else {
+                    remote::run_local_make_quiet_streaming(
+                        &repo_root,
+                        &make_args,
+                        on_line,
+                    )
+                };
+
+                match result {
+                    Ok(0) => {
+                        for svc in services {
+                            let _ = tx.send(InstallUpdate::ServiceStatus {
+                                name: svc.clone(),
+                                status: InstallStatus::Healthy,
+                            });
+                        }
+                        let _ = tx.send(InstallUpdate::Log(
+                            "✓ Environment secrets validated".into(),
+                        ));
+                    }
+                    Ok(code) => {
+                        for svc in services {
+                            let _ = tx.send(InstallUpdate::ServiceStatus {
+                                name: svc.clone(),
+                                status: InstallStatus::Failed(format!("Mismatches found (exit code {code})")),
+                            });
+                        }
+                        let _ = tx.send(InstallUpdate::Log(format!(
+                            "⚠ Environment validation found issues (exit code {code})"
+                        )));
+                    }
+                    Err(e) => {
+                        for svc in services {
+                            let _ = tx.send(InstallUpdate::ServiceStatus {
+                                name: svc.clone(),
+                                status: InstallStatus::Failed(e.to_string()),
+                            });
+                        }
+                    }
+                }
+                continue;
             }
 
             let service_list = stage_services_to_deploy.join(",");
@@ -2986,6 +3158,7 @@ fi
                 .unwrap_or("main");
             let mut ref_exports = format!(
                 "BUSIBOX_FRONTEND_GITHUB_REF={ref_val} \
+                 SITE_DOMAIN={site_domain} \
                  MODEL_HOST_CACHE=$HOME/.cache \
                  HF_HOST_CACHE=$HOME/.cache/huggingface \
                  FASTEMBED_HOST_CACHE=$HOME/.cache/fastembed "
@@ -2995,6 +3168,9 @@ fi
             }
             if let Some(ref token) = github_token {
                 ref_exports.push_str(&format!("GITHUB_AUTH_TOKEN={token} "));
+            }
+            if is_update && service_list.contains("core-apps") {
+                ref_exports.push_str("ENABLED_APPS=all ");
             }
             let make_args = format!("{ref_exports}install SERVICE={service_list}");
 
@@ -3115,19 +3291,50 @@ fi
                 "✓ Bootstrap installation complete".into(),
             ));
             let portal_url = if is_remote {
-                let host = ssh_details
-                    .as_ref()
-                    .map(|(h, _, _)| h.as_str())
-                    .unwrap_or("localhost");
-                format!("http://{host}/portal/setup")
+                format!("https://{site_domain}/portal/setup")
             } else {
-                "http://localhost/portal/setup".to_string()
+                format!("https://{site_domain}/portal/setup")
             };
             let _ = tx.send(InstallUpdate::Complete {
                 portal_url: Some(portal_url),
             });
         }
     });
+}
+
+fn prepare_ssl_inputs(
+    repo_root: &std::path::Path,
+    site_domain: &str,
+    ssl_cert_name: Option<&str>,
+) -> color_eyre::Result<()> {
+    let site_domain = site_domain.trim();
+    if site_domain.is_empty() {
+        return Ok(());
+    }
+    let Some(cert_name) = ssl_cert_name.map(str::trim).filter(|c| !c.is_empty()) else {
+        return Ok(());
+    };
+    if cert_name == site_domain {
+        return Ok(());
+    }
+
+    let ssl_dir = repo_root.join("ssl");
+    let source_crt = ssl_dir.join(format!("{cert_name}.crt"));
+    let source_key = ssl_dir.join(format!("{cert_name}.key"));
+    if !source_crt.exists() || !source_key.exists() {
+        return Err(color_eyre::eyre::eyre!(
+            "selected certificate pair not found: {} / {}",
+            source_crt.display(),
+            source_key.display()
+        ));
+    }
+
+    std::fs::create_dir_all(&ssl_dir)?;
+    let target_crt = ssl_dir.join(format!("{site_domain}.crt"));
+    let target_key = ssl_dir.join(format!("{site_domain}.key"));
+    std::fs::copy(&source_crt, &target_crt)?;
+    std::fs::copy(&source_key, &target_key)?;
+    Ok(())
 }
 
 pub fn open_browser(url: &str) {

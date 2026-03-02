@@ -58,6 +58,8 @@
     src: "{{ docs_src_dir }}/src/"
     dest: "{{ docs_app_dir }}/src/"
     delete: yes
+    owner: no
+    group: no
     rsync_opts:
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
@@ -92,6 +94,8 @@
     src: "{{ docs_content_dir }}/"
     dest: "{{ docs_base_dir }}/docs/"
     delete: yes
+    owner: no
+    group: no
     rsync_opts:
       - "--exclude=archive"
       - "--exclude=.DS_Store"
@@ -111,6 +115,8 @@
     src: "{{ docs_openapi_dir }}/"
     dest: "{{ docs_base_dir }}/openapi/"
     delete: yes
+    owner: no
+    group: no
     rsync_opts:
       - "--exclude=.DS_Store"
   register: openapi_sync

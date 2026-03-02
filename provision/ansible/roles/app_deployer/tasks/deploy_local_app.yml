@@ -17,6 +17,8 @@
     src: "{{ app.local_src }}/"
     dest: "{{ app.deploy_path }}/"
     delete: yes
+    owner: no
+    group: no
     rsync_opts:
       - "--exclude=.git"
       - "--exclude=.venv"

@@ -358,6 +358,20 @@
         - user-apps
         - apps
 
+    # =========================================================================
+    # VALIDATION - Verify container env vars match vault secrets
+    # =========================================================================
+
+    - name: Validate Environment Secrets
+      ansible.builtin.include_role:
+        name: validate_env
+        tasks_from: docker
+        apply:
+          tags:
+            - validate_env
+      tags:
+        - validate_env
+
   post_tasks:
     - name: Display deployment summary
       ansible.builtin.debug:

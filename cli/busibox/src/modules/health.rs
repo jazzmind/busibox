@@ -21,6 +21,13 @@ pub struct ServiceHealthDef {
     pub name: &'static str,
     pub group: &'static str,
     pub check: CheckMethod,
+    /// Base Proxmox container ID (production). Staging adds 100.
+    /// Used to compute the service IP: production → 10.96.200.{id}, staging → 10.96.201.{id}.
+    /// DNS hostnames are NOT environment-qualified on the Proxmox host, so we must use IPs.
+    pub proxmox_container_id: Option<u16>,
+    /// For Proxmox CLI-only checks: the health endpoint to use instead of the Docker CLI command.
+    /// Format: (port, path). If None, falls back to ping.
+    pub proxmox_health: Option<(u16, &'static str)>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +57,8 @@ const CORE_SERVICES: &[ServiceHealthDef] = &[
         check: CheckMethod::Cli {
             command: "docker exec {PREFIX}-postgres pg_isready -U postgres 2>/dev/null",
         },
+        proxmox_container_id: Some(203),
+        proxmox_health: None, // TCP-only, use ping
     },
     ServiceHealthDef {
         name: "redis",
@@ -57,6 +66,8 @@ const CORE_SERVICES: &[ServiceHealthDef] = &[
         check: CheckMethod::Cli {
             command: "docker exec {PREFIX}-redis redis-cli ping 2>/dev/null",
         },
+        proxmox_container_id: Some(206),
+        proxmox_health: None, // TCP-only, use ping
     },
     ServiceHealthDef {
         name: "minio",
@@ -65,6 +76,8 @@ const CORE_SERVICES: &[ServiceHealthDef] = &[
             path: "/minio/health/live",
             port: 9000,
         },
+        proxmox_container_id: Some(205),
+        proxmox_health: None,
     },
     ServiceHealthDef {
         name: "milvus",
@@ -73,6 +86,8 @@ const CORE_SERVICES: &[ServiceHealthDef] = &[
             path: "/healthz",
             port: 9091,
         },
+        proxmox_container_id: Some(204),
+        proxmox_health: None,
     },
     ServiceHealthDef {
         name: "neo4j",
@@ -80,6 +95,8 @@ const CORE_SERVICES: &[ServiceHealthDef] = &[
         check: CheckMethod::Cli {
             command: "docker exec {PREFIX}-neo4j wget -q --spider http://localhost:7474 2>/dev/null && echo ok",
         },
+        proxmox_container_id: Some(213),
+        proxmox_health: Some((7474, "/")),
     },
 ];
 
@@ -91,6 +108,8 @@ const API_SERVICES: &[ServiceHealthDef] = &[
             path: "/health/live",
             port: 8010,
         },
+        proxmox_container_id: Some(210),
+        proxmox_health: None,
     },
     ServiceHealthDef {
         name: "agent",
@@ -99,6 +118,8 @@ const API_SERVICES: &[ServiceHealthDef] = &[
             path: "/health",
             port: 8000,
         },
+        proxmox_container_id: Some(202),
+        proxmox_health: None,
     },
     ServiceHealthDef {
         name: "data",
@@ -107,6 +128,8 @@ const API_SERVICES: &[ServiceHealthDef] = &[
             path: "/health",
             port: 8002,
         },
+        proxmox_container_id: Some(206),
+        proxmox_health: None,
     },
     ServiceHealthDef {
         name: "data-worker",
@@ -114,6 +137,8 @@ const API_SERVICES: &[ServiceHealthDef] = &[
         check: CheckMethod::Cli {
             command: "docker ps --filter name=^{PREFIX}-data-worker$ --filter status=running --format '{{.Names}}' 2>/dev/null",
         },
+        proxmox_container_id: Some(206),
+        proxmox_health: Some((8002, "/health")),
     },
     ServiceHealthDef {
         name: "search",
@@ -122,6 +147,8 @@ const API_SERVICES: &[ServiceHealthDef] = &[
             path: "/health",
             port: 8003,
         },
+        proxmox_container_id: Some(204),
+        proxmox_health: None,
     },
     ServiceHealthDef {
         name: "deploy",
@@ -130,6 +157,8 @@ const API_SERVICES: &[ServiceHealthDef] = &[
             path: "/health/live",
             port: 8011,
         },
+        proxmox_container_id: Some(210),
+        proxmox_health: None,
     },
     ServiceHealthDef {
         name: "docs",
@@ -138,6 +167,8 @@ const API_SERVICES: &[ServiceHealthDef] = &[
             path: "/health/live",
             port: 8004,
         },
+        proxmox_container_id: Some(202),
+        proxmox_health: None,
     },
     ServiceHealthDef {
         name: "embedding",
@@ -146,6 +177,8 @@ const API_SERVICES: &[ServiceHealthDef] = &[
             path: "/health",
             port: 8005,
         },
+        proxmox_container_id: Some(206),
+        proxmox_health: None,
     },
     ServiceHealthDef {
         name: "bridge",
@@ -154,6 +187,8 @@ const API_SERVICES: &[ServiceHealthDef] = &[
             path: "/health",
             port: 8081,
         },
+        proxmox_container_id: Some(211),
+        proxmox_health: None,
     },
 ];
 
@@ -164,6 +199,8 @@ const LLM_VLLM: ServiceHealthDef = ServiceHealthDef {
         path: "/health",
         port: 8000,
     },
+    proxmox_container_id: Some(208),
+    proxmox_health: None,
 };
 
 const LLM_MLX: ServiceHealthDef = ServiceHealthDef {
@@ -173,6 +210,8 @@ const LLM_MLX: ServiceHealthDef = ServiceHealthDef {
         path: "/v1/models",
         port: 8080,
     },
+    proxmox_container_id: Some(211),
+    proxmox_health: None,
 };
 
 const LLM_LITELLM: ServiceHealthDef = ServiceHealthDef {
@@ -182,6 +221,8 @@ const LLM_LITELLM: ServiceHealthDef = ServiceHealthDef {
         path: "/health/liveliness",
         port: 4000,
     },
+    proxmox_container_id: Some(207),
+    proxmox_health: None,
 };
 
 const APP_SERVICES: &[ServiceHealthDef] = &[
@@ -189,9 +230,20 @@ const APP_SERVICES: &[ServiceHealthDef] = &[
         name: "proxy",
         group: "Apps",
         check: CheckMethod::Http {
-            path: "/health",
+            path: "/",
             port: 80,
         },
+        proxmox_container_id: Some(200),
+        proxmox_health: None,
+    },
+    ServiceHealthDef {
+        name: "core-apps",
+        group: "Apps",
+        check: CheckMethod::Cli {
+            command: "docker ps --filter name=^{PREFIX}-core-apps$ --filter status=running --format '{{.Names}}' 2>/dev/null",
+        },
+        proxmox_container_id: Some(201),
+        proxmox_health: Some((3000, "/portal/api/health")),
     },
     ServiceHealthDef {
         name: "portal",
@@ -199,6 +251,8 @@ const APP_SERVICES: &[ServiceHealthDef] = &[
         check: CheckMethod::Cli {
             command: "docker exec {PREFIX}-core-apps curl -sf -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:3000/portal/api/health 2>/dev/null",
         },
+        proxmox_container_id: Some(201),
+        proxmox_health: Some((3000, "/portal/api/health")),
     },
     ServiceHealthDef {
         name: "admin",
@@ -206,6 +260,8 @@ const APP_SERVICES: &[ServiceHealthDef] = &[
         check: CheckMethod::Cli {
             command: "docker exec {PREFIX}-core-apps curl -sf -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:3002/admin/api/health 2>/dev/null",
         },
+        proxmox_container_id: Some(201),
+        proxmox_health: Some((3002, "/admin/api/health")),
     },
     ServiceHealthDef {
         name: "agents",
@@ -213,6 +269,8 @@ const APP_SERVICES: &[ServiceHealthDef] = &[
         check: CheckMethod::Cli {
             command: "docker exec {PREFIX}-core-apps curl -sf -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:3001/agents/api/health 2>/dev/null",
         },
+        proxmox_container_id: Some(201),
+        proxmox_health: Some((3001, "/agents/api/health")),
     },
     ServiceHealthDef {
         name: "chat",
@@ -220,6 +278,8 @@ const APP_SERVICES: &[ServiceHealthDef] = &[
         check: CheckMethod::Cli {
             command: "docker exec {PREFIX}-core-apps curl -sf -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:3003/chat/api/health 2>/dev/null",
         },
+        proxmox_container_id: Some(201),
+        proxmox_health: Some((3003, "/chat/api/health")),
     },
     ServiceHealthDef {
         name: "appbuilder",
@@ -227,6 +287,8 @@ const APP_SERVICES: &[ServiceHealthDef] = &[
         check: CheckMethod::Cli {
             command: "docker exec {PREFIX}-core-apps curl -sf -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:3004/builder/api/health 2>/dev/null",
         },
+        proxmox_container_id: Some(201),
+        proxmox_health: Some((3004, "/builder/api/health")),
     },
     ServiceHealthDef {
         name: "media",
@@ -234,6 +296,8 @@ const APP_SERVICES: &[ServiceHealthDef] = &[
         check: CheckMethod::Cli {
             command: "docker exec {PREFIX}-core-apps curl -sf -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:3005/media/api/health 2>/dev/null",
         },
+        proxmox_container_id: Some(201),
+        proxmox_health: Some((3005, "/media/api/health")),
     },
     ServiceHealthDef {
         name: "documents",
@@ -241,6 +305,8 @@ const APP_SERVICES: &[ServiceHealthDef] = &[
         check: CheckMethod::Cli {
             command: "docker exec {PREFIX}-core-apps curl -sf -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:3006/documents/api/health 2>/dev/null",
         },
+        proxmox_container_id: Some(201),
+        proxmox_health: Some((3006, "/documents/api/health")),
     },
 ];
 
@@ -265,7 +331,13 @@ fn check_service(
     host: &str,
     prefix: &str,
     ssh: Option<&SshConnection>,
+    is_proxmox: bool,
+    network_base: &str,
 ) -> HealthStatus {
+    if is_proxmox {
+        return check_service_proxmox(def, ssh, network_base);
+    }
+
     match &def.check {
         CheckMethod::Http { path, port } => {
             let url = format!("http://{host}:{port}{path}");
@@ -325,62 +397,255 @@ fn check_service(
     }
 }
 
+/// Interpret an HTTP status code for Proxmox health checks.
+/// Matches the bash backend (proxmox.sh) which treats 200, 301, 302, 401, 403
+/// as healthy — services behind auth or with redirects are still "up".
+fn proxmox_status_from_http(code: u16) -> HealthStatus {
+    match code {
+        0 => HealthStatus::Down,
+        200..=299 | 301 | 302 | 401 | 403 => HealthStatus::Healthy,
+        500..=599 => HealthStatus::Unhealthy,
+        _ => HealthStatus::Unhealthy,
+    }
+}
+
+/// Compute the LXC container IP from its base container ID and the profile's network base octets.
+/// E.g., network_base="10.96.201", base_id=210 → "10.96.201.210"
+fn container_ip(base_id: u16, network_base: &str) -> String {
+    format!("{network_base}.{base_id}")
+}
+
+/// Proxmox health check: runs via SSH on the Proxmox host, targeting computed container IPs
+/// (not DNS hostnames, which are not environment-qualified on the Proxmox host).
+fn check_service_proxmox(
+    def: &ServiceHealthDef,
+    ssh: Option<&SshConnection>,
+    network_base: &str,
+) -> HealthStatus {
+    let ssh = match ssh {
+        Some(s) => s,
+        None => return HealthStatus::Down,
+    };
+
+    let base_id = match def.proxmox_container_id {
+        Some(id) => id,
+        None => return HealthStatus::Down,
+    };
+
+    let ip = container_ip(base_id, network_base);
+
+    match &def.check {
+        CheckMethod::Http { path, port } => {
+            let url = format!("http://{ip}:{port}{path}");
+            let curl_cmd = format!(
+                "curl -s -o /dev/null -w '%{{http_code}}' --max-time 5 --connect-timeout 3 '{url}'"
+            );
+            let full_cmd = format!("{}{curl_cmd}", remote::SHELL_PATH_PREAMBLE);
+            let output = ssh.run(&full_cmd).unwrap_or_default();
+            let code = output.trim().parse::<u16>().unwrap_or(0);
+            proxmox_status_from_http(code)
+        }
+        CheckMethod::Cli { .. } => {
+            if let Some((port, path)) = def.proxmox_health {
+                let url = format!("http://{ip}:{port}{path}");
+                let curl_cmd = format!(
+                    "curl -s -o /dev/null -w '%{{http_code}}' --max-time 5 --connect-timeout 3 '{url}'"
+                );
+                let full_cmd = format!("{}{curl_cmd}", remote::SHELL_PATH_PREAMBLE);
+                let output = ssh.run(&full_cmd).unwrap_or_default();
+                let code = output.trim().parse::<u16>().unwrap_or(0);
+                proxmox_status_from_http(code)
+            } else {
+                let ping_cmd = format!("ping -c 1 -W 2 {ip} >/dev/null 2>&1 && echo ok");
+                let full_cmd = format!("{}{ping_cmd}", remote::SHELL_PATH_PREAMBLE);
+                match ssh.run(&full_cmd) {
+                    Ok(out) if out.trim().contains("ok") => HealthStatus::Healthy,
+                    _ => HealthStatus::Down,
+                }
+            }
+        }
+    }
+}
+
 /// Public wrapper for check_service, usable from manage screen.
 pub fn check_service_pub(
     def: &ServiceHealthDef,
     host: &str,
     prefix: &str,
     ssh: Option<&SshConnection>,
+    is_proxmox: bool,
+    network_base: &str,
+    vllm_network_base: &str,
 ) -> HealthStatus {
-    check_service(def, host, prefix, ssh)
+    let effective_base = if def.name == "vllm" { vllm_network_base } else { network_base };
+    check_service(def, host, prefix, ssh, is_proxmox, effective_base)
 }
 
-/// Run all health checks in parallel, sending results through the channel.
-/// `host` is "localhost" for local profiles or the remote hostname.
-/// `prefix` is the container prefix (e.g., "prod", "dev").
+/// Run all health checks, sending results through the channel as they complete.
+///
+/// For Proxmox: builds a single batched SSH command that runs all curl/ping checks
+/// in one round-trip, then parses the results. This avoids flaky parallel SSH issues.
+///
+/// For Docker (local or remote-docker): runs checks in parallel threads since each
+/// check is a local subprocess or a single SSH call with no contention.
+///
+/// `vllm_network_base`: when staging uses production vLLM, this points vLLM health
+/// checks at the production network instead of the profile's own network.
 pub fn run_health_checks(
     defs: Vec<ServiceHealthDef>,
     host: String,
     prefix: String,
     ssh_details: Option<(String, String, String)>, // (host, user, key)
+    is_proxmox: bool,
+    network_base: String,
+    vllm_network_base: String,
     tx: mpsc::Sender<HealthUpdate>,
 ) {
     std::thread::spawn(move || {
-        let mut handles = Vec::new();
+        if is_proxmox {
+            run_health_checks_proxmox_batched(&defs, &ssh_details, &network_base, &vllm_network_base, &tx);
+        } else {
+            run_health_checks_parallel(&defs, &host, &prefix, &ssh_details, &network_base, &tx);
+        }
+        let _ = tx.send(HealthUpdate::Complete);
+    });
+}
 
-        for def in defs {
-            let host = host.clone();
-            let prefix = prefix.clone();
-            let ssh_details = ssh_details.clone();
-            let tx = tx.clone();
-
-            let handle = std::thread::spawn(move || {
-                let ssh = ssh_details.as_ref().map(|(h, u, k)| {
-                    SshConnection::new(h, u, k)
-                });
-
-                let status = check_service(
-                    &def,
-                    &host,
-                    &prefix,
-                    ssh.as_ref(),
-                );
-
+/// Proxmox batched health checks: builds one SSH command that runs all checks sequentially
+/// on the remote host, separated by markers, and parses all results from a single SSH call.
+fn run_health_checks_proxmox_batched(
+    defs: &[ServiceHealthDef],
+    ssh_details: &Option<(String, String, String)>,
+    network_base: &str,
+    vllm_network_base: &str,
+    tx: &mpsc::Sender<HealthUpdate>,
+) {
+    let ssh = match ssh_details {
+        Some((h, u, k)) => SshConnection::new(h, u, k),
+        None => {
+            for def in defs {
                 let _ = tx.send(HealthUpdate::ServiceResult(ServiceHealthResult {
                     name: def.name.to_string(),
                     group: def.group.to_string(),
-                    status,
+                    status: HealthStatus::Down,
                 }));
+            }
+            return;
+        }
+    };
+
+    let mut commands: Vec<String> = Vec::new();
+    let marker = "___BUSIBOX_SEP___";
+
+    for def in defs {
+        let base_id = match def.proxmox_container_id {
+            Some(id) => id,
+            None => {
+                commands.push(format!("echo '{marker}:000'"));
+                continue;
+            }
+        };
+        let effective_base = if def.name == "vllm" { vllm_network_base } else { network_base };
+        let ip = container_ip(base_id, effective_base);
+
+        let check_cmd = match &def.check {
+            CheckMethod::Http { path, port } => {
+                let url = format!("http://{ip}:{port}{path}");
+                format!(
+                    "echo -n '{marker}:'; curl -s -o /dev/null -w '%{{http_code}}' --max-time 5 --connect-timeout 3 '{url}' 2>/dev/null || echo 000"
+                )
+            }
+            CheckMethod::Cli { .. } => {
+                if let Some((port, path)) = def.proxmox_health {
+                    let url = format!("http://{ip}:{port}{path}");
+                    format!(
+                        "echo -n '{marker}:'; curl -s -o /dev/null -w '%{{http_code}}' --max-time 5 --connect-timeout 3 '{url}' 2>/dev/null || echo 000"
+                    )
+                } else {
+                    format!(
+                        "ping -c 1 -W 2 {ip} >/dev/null 2>&1 && echo '{marker}:PING_OK' || echo '{marker}:PING_FAIL'"
+                    )
+                }
+            }
+        };
+        commands.push(check_cmd);
+    }
+
+    let batch = commands.join("; ");
+    let full_cmd = format!("{}{batch}", remote::SHELL_PATH_PREAMBLE);
+
+    let output = ssh.run(&full_cmd).unwrap_or_default();
+
+    let results: Vec<&str> = output.split(marker).filter(|s| !s.is_empty()).collect();
+
+    for (i, def) in defs.iter().enumerate() {
+        let status = if let Some(result) = results.get(i) {
+            let trimmed = result.trim().trim_start_matches(':');
+            if trimmed == "PING_OK" {
+                HealthStatus::Healthy
+            } else if trimmed == "PING_FAIL" {
+                HealthStatus::Down
+            } else {
+                let code = trimmed.parse::<u16>().unwrap_or(0);
+                proxmox_status_from_http(code)
+            }
+        } else {
+            HealthStatus::Down
+        };
+
+        let _ = tx.send(HealthUpdate::ServiceResult(ServiceHealthResult {
+            name: def.name.to_string(),
+            group: def.group.to_string(),
+            status,
+        }));
+    }
+}
+
+/// Non-Proxmox parallel health checks (Docker local/remote).
+fn run_health_checks_parallel(
+    defs: &[ServiceHealthDef],
+    host: &str,
+    prefix: &str,
+    ssh_details: &Option<(String, String, String)>,
+    network_base: &str,
+    tx: &mpsc::Sender<HealthUpdate>,
+) {
+    let mut handles = Vec::new();
+
+    for def in defs {
+        let def = def.clone();
+        let host = host.to_string();
+        let prefix = prefix.to_string();
+        let ssh_details = ssh_details.clone();
+        let network_base = network_base.to_string();
+        let tx = tx.clone();
+
+        let handle = std::thread::spawn(move || {
+            let ssh = ssh_details.as_ref().map(|(h, u, k)| {
+                SshConnection::new(h, u, k)
             });
-            handles.push(handle);
-        }
 
-        for handle in handles {
-            let _ = handle.join();
-        }
+            let status = check_service(
+                &def,
+                &host,
+                &prefix,
+                ssh.as_ref(),
+                false,
+                &network_base,
+            );
 
-        let _ = tx.send(HealthUpdate::Complete);
-    });
+            let _ = tx.send(HealthUpdate::ServiceResult(ServiceHealthResult {
+                name: def.name.to_string(),
+                group: def.group.to_string(),
+                status,
+            }));
+        });
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        let _ = handle.join();
+    }
 }
 
 /// Aggregate individual service results into group-level health.
@@ -476,6 +741,9 @@ pub fn start_health_checks(
     host: &str,
     prefix: &str,
     ssh_details: Option<(String, String, String)>,
+    is_proxmox: bool,
+    network_base: &str,
+    vllm_network_base: &str,
 ) -> mpsc::Receiver<HealthUpdate> {
     let (tx, rx) = mpsc::channel();
     let defs = all_service_defs(is_mlx);
@@ -485,6 +753,6 @@ pub fn start_health_checks(
         "localhost".to_string()
     };
 
-    run_health_checks(defs, host, prefix.to_string(), ssh_details, tx);
+    run_health_checks(defs, host, prefix.to_string(), ssh_details, is_proxmox, network_base.to_string(), vllm_network_base.to_string(), tx);
     rx
 }

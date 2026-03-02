@@ -325,6 +325,12 @@ backend_service_action() {
                 export DOCKER_DEV_MODE="github"
             fi
 
+            # When redeploying core-apps, enable all frontend apps so
+            # the rebuilt container starts everything (not just portal,admin).
+            if [[ "$service" == "core-apps" ]]; then
+                export ENABLED_APPS="all"
+            fi
+
             local cmd="ansible-playbook -i ${inventory} ${playbook} --tags ${tag} -e docker_force_recreate=true"
 
             local _vpd="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}"

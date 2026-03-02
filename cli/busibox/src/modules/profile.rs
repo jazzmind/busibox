@@ -57,6 +57,18 @@ pub struct Profile {
     pub allowed_email_domains: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frontend_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site_domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssl_cert_name: Option<String>,
+    /// First three octets of the container network (e.g. "10.96.200").
+    /// Defaults based on environment: "10.96.200" for production, "10.96.201" for staging.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_base_octets: Option<String>,
+    /// When true (staging default), vLLM health checks target the production network
+    /// instead of this profile's network, since staging shares production GPUs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_production_vllm: Option<bool>,
 }
 
 impl Profile {
@@ -87,6 +99,31 @@ impl Profile {
             .as_deref()
             .and_then(MemoryTier::from_name)
             .or_else(|| self.hardware.as_ref().map(|h| h.memory_tier))
+    }
+
+    pub fn effective_network_base(&self) -> &str {
+        if let Some(ref base) = self.network_base_octets {
+            base.as_str()
+        } else if self.environment == "staging" {
+            "10.96.201"
+        } else {
+            "10.96.200"
+        }
+    }
+
+    pub fn effective_use_production_vllm(&self) -> bool {
+        self.use_production_vllm
+            .unwrap_or_else(|| self.environment == "staging")
+    }
+
+    /// Network base to use for vLLM health checks. When use_production_vllm is true,
+    /// returns the production network base (defaulting to "10.96.200").
+    pub fn vllm_network_base(&self) -> &str {
+        if self.effective_use_production_vllm() {
+            "10.96.200"
+        } else {
+            self.effective_network_base()
+        }
     }
 }
 
@@ -151,6 +188,32 @@ pub fn upsert_profile(
     Ok(())
 }
 
+/// Delete a profile by ID. If the deleted profile was active, clears the active field.
+/// Also removes the profile's state directory from disk.
+pub fn delete_profile(repo_root: &Path, id: &str) -> Result<()> {
+    let mut profiles = load_profiles(repo_root)?;
+    if !profiles.profiles.contains_key(id) {
+        return Err(eyre!("Profile '{id}' not found"));
+    }
+    profiles.profiles.remove(id);
+    if profiles.active == id {
+        profiles.active = profiles
+            .profiles
+            .keys()
+            .next()
+            .cloned()
+            .unwrap_or_default();
+    }
+    save_profiles(repo_root, &profiles)?;
+
+    let profile_dir = repo_root.join(".busibox").join("profiles").join(id);
+    if profile_dir.exists() {
+        let _ = std::fs::remove_dir_all(&profile_dir);
+    }
+
+    Ok(())
+}
+
 /// Find the busibox repo root by walking up from the current directory.
 pub fn find_repo_root() -> Result<PathBuf> {
     let mut dir = std::env::current_dir()?;
@@ -197,6 +260,8 @@ pub fn write_profile_state(repo_root: &Path, profile_id: &str, profile: &Profile
                 && !l.starts_with("ALLOWED_DOMAINS=")
                 && !l.starts_with("MODEL_TIER=")
                 && !l.starts_with("LLM_BACKEND=")
+                && !l.starts_with("SITE_DOMAIN=")
+                && !l.starts_with("SSL_CERT_NAME=")
         })
         .map(|l| l.to_string())
         .collect();
@@ -216,6 +281,12 @@ pub fn write_profile_state(repo_root: &Path, profile_id: &str, profile: &Profile
             crate::modules::hardware::LlmBackend::Vllm => "vllm",
             crate::modules::hardware::LlmBackend::Cloud => "cloud",
         }));
+    }
+    if let Some(ref domain) = profile.site_domain {
+        lines.push(format!("SITE_DOMAIN={domain}"));
+    }
+    if let Some(ref cert_name) = profile.ssl_cert_name {
+        lines.push(format!("SSL_CERT_NAME={cert_name}"));
     }
 
     let content = lines.join("\n") + "\n";

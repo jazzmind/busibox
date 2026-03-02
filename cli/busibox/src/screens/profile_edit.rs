@@ -7,11 +7,15 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::*;
 use std::collections::HashMap;
+use std::path::Path;
+use std::process::Command;
 
 const FIELD_LABELS: &[&str] = &[
     "Label",
     "Environment",
     "Backend",
+    "Network Base",
+    "Use Prod vLLM",
     "Remote Host",
     "Remote User",
     "Remote Path",
@@ -20,21 +24,27 @@ const FIELD_LABELS: &[&str] = &[
     "Admin Email",
     "Allowed Domains",
     "Frontend Ref",
+    "Site Domain",
+    "SSL Certificate",
 ];
 
-const FIELD_COUNT: usize = 11;
+const FIELD_COUNT: usize = 15;
 
 const FIELD_LABEL: usize = 0;
 const FIELD_ENVIRONMENT: usize = 1;
 const FIELD_BACKEND: usize = 2;
-const FIELD_REMOTE_HOST: usize = 3;
-const FIELD_REMOTE_USER: usize = 4;
-const FIELD_REMOTE_PATH: usize = 5;
-const FIELD_TAILSCALE_IP: usize = 6;
-const FIELD_MODEL_TIER: usize = 7;
-const FIELD_ADMIN_EMAIL: usize = 8;
-const FIELD_ALLOWED_DOMAINS: usize = 9;
-const FIELD_FRONTEND_REF: usize = 10;
+const FIELD_NETWORK_BASE: usize = 3;
+const FIELD_USE_PROD_VLLM: usize = 4;
+const FIELD_REMOTE_HOST: usize = 5;
+const FIELD_REMOTE_USER: usize = 6;
+const FIELD_REMOTE_PATH: usize = 7;
+const FIELD_TAILSCALE_IP: usize = 8;
+const FIELD_MODEL_TIER: usize = 9;
+const FIELD_ADMIN_EMAIL: usize = 10;
+const FIELD_ALLOWED_DOMAINS: usize = 11;
+const FIELD_FRONTEND_REF: usize = 12;
+const FIELD_SITE_DOMAIN: usize = 13;
+const FIELD_SSL_CERT_NAME: usize = 14;
 
 // Default settings use a subset of fields
 const DEFAULTS_FIELD_LABELS: &[&str] = &[
@@ -490,7 +500,7 @@ fn handle_edit_mode(app: &mut App, key: KeyEvent) {
     let field = app.profile_edit_field;
 
     match field {
-        FIELD_ENVIRONMENT | FIELD_BACKEND | FIELD_MODEL_TIER => {
+        FIELD_ENVIRONMENT | FIELD_BACKEND | FIELD_MODEL_TIER | FIELD_SSL_CERT_NAME | FIELD_USE_PROD_VLLM => {
             handle_dropdown_edit(app, key);
         }
         _ => {
@@ -535,6 +545,7 @@ fn handle_tier_selector(app: &mut App, key: KeyEvent) {
 
 fn handle_dropdown_edit(app: &mut App, key: KeyEvent) {
     let field = app.profile_edit_field;
+    let profile = get_editing_profile(app);
 
     match key.code {
         KeyCode::Esc => {
@@ -547,7 +558,7 @@ fn handle_dropdown_edit(app: &mut App, key: KeyEvent) {
             app.input_mode = InputMode::Normal;
         }
         KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
-            let options = dropdown_options(field);
+            let options = dropdown_options(app, field, &profile);
             if options.is_empty() {
                 return;
             }
@@ -572,7 +583,7 @@ fn handle_dropdown_edit(app: &mut App, key: KeyEvent) {
                     }
                 }
             };
-            app.profile_edit_buffer = options[next_idx].to_string();
+            app.profile_edit_buffer = options[next_idx].clone();
         }
         _ => {}
     }
@@ -631,6 +642,10 @@ fn default_profile() -> profile::Profile {
         admin_email: None,
         allowed_email_domains: None,
         frontend_ref: None,
+        site_domain: Some("localhost".into()),
+        ssl_cert_name: None,
+        network_base_octets: None,
+        use_production_vllm: None,
     }
 }
 
@@ -639,6 +654,12 @@ fn field_value(profile: &profile::Profile, field: usize) -> String {
         FIELD_LABEL => profile.label.clone(),
         FIELD_ENVIRONMENT => profile.environment.clone(),
         FIELD_BACKEND => profile.backend.clone(),
+        FIELD_NETWORK_BASE => profile.effective_network_base().to_string(),
+        FIELD_USE_PROD_VLLM => match profile.use_production_vllm {
+            Some(true) => "yes".into(),
+            Some(false) => "no".into(),
+            None => "auto".into(),
+        },
         FIELD_REMOTE_HOST => profile.remote_host.clone().unwrap_or_default(),
         FIELD_REMOTE_USER => profile.remote_user.clone().unwrap_or_else(|| "root".into()),
         FIELD_REMOTE_PATH => profile
@@ -657,6 +678,14 @@ fn field_value(profile: &profile::Profile, field: usize) -> String {
             .clone()
             .unwrap_or_default(),
         FIELD_FRONTEND_REF => profile.frontend_ref.clone().unwrap_or_else(|| "latest".into()),
+        FIELD_SITE_DOMAIN => profile
+            .site_domain
+            .clone()
+            .unwrap_or_else(|| "localhost".into()),
+        FIELD_SSL_CERT_NAME => profile
+            .ssl_cert_name
+            .clone()
+            .unwrap_or_else(|| "(auto-detect)".into()),
         _ => String::new(),
     }
 }
@@ -665,6 +694,8 @@ fn field_hint(field: usize, profile: &profile::Profile) -> String {
     match field {
         FIELD_ENVIRONMENT => "←/→ to cycle: staging, production".into(),
         FIELD_BACKEND => "←/→ to cycle: docker, proxmox".into(),
+        FIELD_NETWORK_BASE => "First 3 octets of container network (e.g. 10.96.200)".into(),
+        FIELD_USE_PROD_VLLM => "auto = yes for staging, no for production".into(),
         FIELD_MODEL_TIER => {
             let hw_tier = profile
                 .hardware
@@ -675,6 +706,8 @@ fn field_hint(field: usize, profile: &profile::Profile) -> String {
         FIELD_ADMIN_EMAIL => "Used for initial login".into(),
         FIELD_ALLOWED_DOMAINS => "Comma-separated domains; leave blank to allow any domain".into(),
         FIELD_FRONTEND_REF => "Git ref: 'latest' (newest release), 'main' (dev), or tag 'v1.0.0'".into(),
+        FIELD_SITE_DOMAIN => "Domain used for HTTPS URLs and SSL certificate lookup".into(),
+        FIELD_SSL_CERT_NAME => "←/→ to cycle certs found in ssl/".into(),
         FIELD_REMOTE_HOST => {
             if profile.remote {
                 "SSH hostname or IP".into()
@@ -686,16 +719,51 @@ fn field_hint(field: usize, profile: &profile::Profile) -> String {
     }
 }
 
-fn dropdown_options(field: usize) -> Vec<&'static str> {
+fn dropdown_options(app: &App, field: usize, _profile: &profile::Profile) -> Vec<String> {
     match field {
-        FIELD_ENVIRONMENT => vec!["staging", "production"],
-        FIELD_BACKEND => vec!["docker", "proxmox"],
+        FIELD_ENVIRONMENT => vec!["staging".into(), "production".into()],
+        FIELD_BACKEND => vec!["docker".into(), "proxmox".into()],
+        FIELD_USE_PROD_VLLM => vec!["auto".into(), "yes".into(), "no".into()],
         FIELD_MODEL_TIER => {
             let tiers = MemoryTier::all();
-            tiers.iter().map(|t| t.name()).collect()
+            tiers.iter().map(|t| t.name().to_string()).collect()
+        }
+        FIELD_SSL_CERT_NAME => {
+            let mut options = vec!["(auto-detect)".to_string()];
+            let mut certs = ssl_cert_options(&app.repo_root);
+            options.append(&mut certs);
+            options
         }
         _ => vec![],
     }
+}
+
+fn ssl_cert_options(repo_root: &Path) -> Vec<String> {
+    let ssl_dir = repo_root.join("ssl");
+    let Ok(entries) = std::fs::read_dir(ssl_dir) else {
+        return vec![];
+    };
+
+    let mut certs = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("crt") {
+            continue;
+        }
+        let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if name.ends_with(".fullchain") {
+            continue;
+        }
+        let key_path = path.with_extension("key");
+        if key_path.exists() {
+            certs.push(name.to_string());
+        }
+    }
+    certs.sort();
+    certs.dedup();
+    certs
 }
 
 fn apply_field(app: &mut App, field: usize, value: &str) {
@@ -725,6 +793,20 @@ fn apply_field(app: &mut App, field: usize, value: &str) {
             });
         }
         FIELD_BACKEND => profile.backend = value.to_string(),
+        FIELD_NETWORK_BASE => {
+            profile.network_base_octets = if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            };
+        }
+        FIELD_USE_PROD_VLLM => {
+            profile.use_production_vllm = match value {
+                "yes" => Some(true),
+                "no" => Some(false),
+                _ => None,
+            };
+        }
         FIELD_REMOTE_HOST => {
             profile.remote_host = if value.is_empty() {
                 None
@@ -784,6 +866,20 @@ fn apply_field(app: &mut App, field: usize, value: &str) {
             } else {
                 profile.frontend_ref = Some(value.to_string());
             }
+        }
+        FIELD_SITE_DOMAIN => {
+            profile.site_domain = if value.is_empty() {
+                Some("localhost".to_string())
+            } else {
+                Some(value.to_string())
+            };
+        }
+        FIELD_SSL_CERT_NAME => {
+            profile.ssl_cert_name = if value.is_empty() || value == "(auto-detect)" {
+                None
+            } else {
+                Some(value.to_string())
+            };
         }
         _ => {}
     }
@@ -882,6 +978,17 @@ fn save_profile(app: &mut App) {
     }
 
     if let Some(profiles) = &app.profiles {
+        if let Some(ref id) = app.profile_edit_id {
+            if let Some(p) = profiles.profiles.get(id) {
+                if let Err(e) = validate_profile_ssl(&app.repo_root, p) {
+                    app.set_message(
+                        &format!("SSL validation failed: {e}"),
+                        MessageKind::Error,
+                    );
+                    return;
+                }
+            }
+        }
         match profile::save_profiles(&repo_root, profiles) {
             Ok(()) => {
                 if let Some(ref id) = app.profile_edit_id {
@@ -903,5 +1010,38 @@ fn save_profile(app: &mut App) {
                 );
             }
         }
+    }
+}
+
+fn validate_profile_ssl(repo_root: &Path, p: &profile::Profile) -> Result<(), String> {
+    let Some(cert_name) = p.ssl_cert_name.as_deref().filter(|s| !s.trim().is_empty()) else {
+        return Ok(());
+    };
+    let domain = p
+        .site_domain
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("localhost");
+    let cert_path = repo_root.join("ssl").join(format!("{cert_name}.crt"));
+    if !cert_path.exists() {
+        return Err(format!("certificate not found: {}", cert_path.display()));
+    }
+    let output = Command::new("openssl")
+        .arg("x509")
+        .arg("-checkhost")
+        .arg(domain)
+        .arg("-noout")
+        .arg("-in")
+        .arg(&cert_path)
+        .output()
+        .map_err(|e| format!("openssl check failed: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "domain '{}' does not match cert '{}'",
+            domain, cert_name
+        ))
     }
 }

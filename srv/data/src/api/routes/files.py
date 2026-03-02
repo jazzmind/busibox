@@ -182,6 +182,12 @@ async def check_file_access(
         else:
             return False, file_dict, f"Unauthorized: file requires roles {file_role_set}, user has {user_role_set}"
     
+    # Authenticated files: any logged-in user can read
+    if visibility == "authenticated":
+        if user_id:
+            return True, file_dict, None
+        return False, file_dict, "Unauthorized: authenticated visibility requires a logged-in user"
+    
     # Unknown visibility - deny access
     return False, file_dict, f"Unknown visibility: {visibility}"
 
@@ -1666,13 +1672,14 @@ async def move_file(fileId: str, request: Request):
     Move a document between visibility modes and update role bindings.
 
     Body:
-      - visibility: 'personal' or 'shared'
+      - visibility: 'personal', 'shared', or 'authenticated'
       - roleIds: [] required if visibility='shared'
       - libraryId: target library ID (optional, updates library association)
 
     Rules:
       - Moving to personal is allowed only if actor is the owner.
       - Moving to shared requires roleIds.
+      - Moving to authenticated makes the document readable by any logged-in user; writes restricted to owner.
     """
     body = await request.json()
     target_visibility = body.get("visibility")
@@ -1680,10 +1687,10 @@ async def move_file(fileId: str, request: Request):
     library_id = body.get("libraryId")
     actor_id = request.state.user_id
 
-    if target_visibility not in ("personal", "shared"):
+    if target_visibility not in ("personal", "shared", "authenticated"):
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "visibility must be 'personal' or 'shared'"},
+            content={"error": "visibility must be 'personal', 'shared', or 'authenticated'"},
         )
 
     if target_visibility == "shared" and (not isinstance(role_ids, list) or len(role_ids) == 0):

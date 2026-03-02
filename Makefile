@@ -853,6 +853,15 @@ else
 endif
 endif
 
+# Validate that container env vars match vault secrets
+# Usage: make validate-env
+validate-env:
+ifeq ($(USE_MANAGER),1)
+	@$(MANAGER_RUN) bash -c 'cd provision/ansible && ansible-playbook -i inventory/docker docker.yml --tags validate_env --vault-password-file ../../scripts/lib/vault-pass-from-env.sh'
+else
+	@cd provision/ansible && ansible-playbook -i inventory/docker docker.yml --tags validate_env --vault-password-file ../../scripts/lib/vault-pass-from-env.sh
+endif
+
 # Generate admin magic link and open browser
 # Usage: make login
 login:

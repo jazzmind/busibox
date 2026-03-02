@@ -5,8 +5,6 @@
   include_vars:
     file: "{{ playbook_dir }}/roles/secrets/vars/vault.{{ deployment_environment | default('dev') }}.yml"
   no_log: true
-  tags:
-    - always
 
 - name: Install rsync for synchronize module
   apt:
@@ -100,6 +98,8 @@
     src: "{{ authz_src_dir }}/src/"
     dest: "{{ authz_app_dir }}/src/"
     delete: yes
+    owner: no
+    group: no
     rsync_opts:
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
@@ -112,6 +112,8 @@
     src: "{{ playbook_dir }}/../../srv/shared/testing/"
     dest: "{{ authz_app_dir }}/src/testing/"
     delete: yes
+    owner: no
+    group: no
     rsync_opts:
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
@@ -163,6 +165,8 @@
     src: "{{ authz_src_dir }}/tests/"
     dest: "{{ authz_app_dir }}/tests/"
     delete: yes
+    owner: no
+    group: no
     rsync_opts:
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
@@ -173,6 +177,8 @@
     src: "{{ playbook_dir }}/../../srv/shared/testing/"
     dest: "{{ authz_app_dir }}/src/testing/"
     delete: yes
+    owner: no
+    group: no
     rsync_opts:
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
@@ -183,6 +189,8 @@
     src: "{{ playbook_dir }}/../../srv/shared/busibox_common/"
     dest: "{{ authz_app_dir }}/src/busibox_common/"
     delete: yes
+    owner: no
+    group: no
     rsync_opts:
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
@@ -259,8 +267,8 @@
   copy:
     content: |
       {
-        "commit": "{{ lookup('pipe', 'git rev-parse --short HEAD', cwd=playbook_dir + '/../..') }}",
-        "branch": "{{ lookup('pipe', 'git branch --show-current', cwd=playbook_dir + '/../..') }}",
+        "commit": "{{ lookup('pipe', 'cd ' + playbook_dir + '/../.. && git rev-parse --short HEAD 2>/dev/null || echo unknown') }}",
+        "branch": "{{ lookup('pipe', 'cd ' + playbook_dir + '/../.. && git branch --show-current 2>/dev/null || echo unknown') }}",
         "timestamp": "{{ now(utc=true).isoformat() }}",
         "deployed_by": "ansible"
       }
@@ -268,6 +276,7 @@
     owner: "{{ authz_user }}"
     group: "{{ authz_group }}"
     mode: "0644"
+  ignore_errors: true
   tags: [authz]
 
 - name: Restart authz service (always restart on deploy)

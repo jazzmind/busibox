@@ -51,7 +51,7 @@
 
 - name: Get new version to deploy
   set_fact:
-    agent_new_commit: "{{ lookup('pipe', 'git rev-parse --short HEAD', cwd=playbook_dir + '/../..') }}"
+    agent_new_commit: "{{ lookup('pipe', 'cd ' + playbook_dir + '/../.. && git rev-parse --short HEAD 2>/dev/null || echo unknown') }}"
   tags: [agent_api, agent_api_deploy]
 
 - name: Check if deployment is needed
@@ -102,6 +102,8 @@
     src: "{{ playbook_dir }}/../../srv/agent/"
     dest: "{{ agent_api_src_path }}/"
     delete: yes
+    owner: no
+    group: no
     rsync_opts:
       - "--exclude=.git"
       - "--exclude=.venv"
@@ -120,6 +122,8 @@
     src: "{{ playbook_dir }}/../../srv/shared/testing/"
     dest: "{{ agent_api_src_path }}/testing/"
     delete: yes
+    owner: no
+    group: no
     rsync_opts:
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
@@ -131,6 +135,8 @@
     src: "{{ playbook_dir }}/../../srv/shared/busibox_common/"
     dest: "{{ agent_api_src_path }}/busibox_common/"
     delete: yes
+    owner: no
+    group: no
     rsync_opts:
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
@@ -500,8 +506,8 @@
   copy:
     content: |
       {
-        "commit": "{{ lookup('pipe', 'git rev-parse --short HEAD', cwd=playbook_dir + '/../..') }}",
-        "branch": "{{ lookup('pipe', 'git branch --show-current', cwd=playbook_dir + '/../..') }}",
+        "commit": "{{ lookup('pipe', 'cd ' + playbook_dir + '/../.. && git rev-parse --short HEAD 2>/dev/null || echo unknown') }}",
+        "branch": "{{ lookup('pipe', 'cd ' + playbook_dir + '/../.. && git branch --show-current 2>/dev/null || echo unknown') }}",
         "timestamp": "{{ now(utc=true).isoformat() }}",
         "deployed_by": "ansible"
       }
@@ -509,6 +515,7 @@
     owner: "{{ agent_api_user }}"
     group: "{{ agent_api_user }}"
     mode: "0644"
+  ignore_errors: true
   when: agent_deployment_needed
   tags: [agent_api, agent_api_deploy]
 

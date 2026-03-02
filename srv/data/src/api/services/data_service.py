@@ -99,8 +99,8 @@ class DataService:
             schema: Optional JSON schema definition
             initial_records: Optional list of initial records
             metadata: Optional document metadata
-            visibility: 'personal' or 'shared'
-            role_ids: Role IDs for shared documents
+            visibility: 'personal', 'shared', or 'authenticated'
+            role_ids: Role IDs for shared documents (optional for authenticated)
             library_id: Optional library to place document in
             enable_cache: Whether to enable Redis caching
             source_app: Optional app identifier (e.g., "busibox-projects") for app data libraries
@@ -216,7 +216,7 @@ class DataService:
                 visibility=visibility,
                 owner_id=user_id,
                 role_ids=role_ids,
-                hint="For 'shared' visibility, roleIds must be provided. For 'personal' visibility, ensure owner_id matches request user_id.",
+                hint="For 'shared' visibility, roleIds must be provided. For 'personal' visibility, ensure owner_id matches request user_id. 'authenticated' visibility is readable by any logged-in user.",
             )
         
         return result
