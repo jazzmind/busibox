@@ -72,6 +72,9 @@ ARGS ?=
 CATEGORY ?=
 DETAIL ?=
 
+# Confirmation flag for destructive operations (milvus-reset)
+CONFIRM ?=
+
 # FAST mode: skip slow/gpu tests (default for local testing)
 FAST ?=
 
@@ -196,6 +199,7 @@ help:
 	@echo "  setup         - Initial setup (install dependencies)"
 	@echo "  configure     - Configure models, GPUs, secrets"
 	@echo "  deploy        - Deploy services (via Ansible)"
+	@echo "  milvus-reset  - Drop + recreate Milvus collection (new embedding dim)"
 	@echo "  mcp           - Build MCP server for Cursor AI"
 	@echo "  warmup        - Check cache and download missing models"
 	@echo ""
@@ -482,7 +486,7 @@ ifndef SERVICE
 	@echo ""
 	@exit 1
 endif
-	@FAST=$${FAST:-1} INV=docker bash scripts/test/run-local-tests.sh $(SERVICE) docker $(ARGS)
+	@FAST=$${FAST:-1} INV=docker CONTAINER_PREFIX=dev bash scripts/test/run-local-tests.sh $(SERVICE) docker $(ARGS)
 endif
 
 # Security tests
@@ -851,6 +855,17 @@ ifdef SERVICE
 else
 	@bash scripts/make/manage.sh
 endif
+endif
+
+# Reset Milvus collection (drop + recreate with correct embedding dimension)
+# WARNING: Destroys all vectors — documents must be re-embedded afterward
+# Usage: make milvus-reset                # Interactive confirmation
+#        make milvus-reset CONFIRM=yes    # Skip confirmation
+milvus-reset:
+ifeq ($(USE_MANAGER),1)
+	@CONFIRM="$(CONFIRM)" $(MANAGER_RUN_IT) bash scripts/make/milvus-reset.sh
+else
+	@CONFIRM="$(CONFIRM)" bash scripts/make/milvus-reset.sh
 endif
 
 # Validate that container env vars match vault secrets

@@ -962,7 +962,7 @@ async def embed_fields(
 
     return {
         "indexed": len(embeddings),
-        "dimension": config.get("embedding_dimension", 1024),
+        "dimension": config.get("embedding_dimension", 768),
     }
 
 
@@ -1054,7 +1054,7 @@ async def index_from_extraction(
 
     # Build Milvus entries
     embedding_client: Optional[EmbeddingClient] = None
-    embed_dim = config.get("embedding_dimension", 1024)
+    embed_dim = config.get("embedding_dimension", 768)
 
     texts_to_embed: List[str] = []
     entries_needing_embed: List[int] = []

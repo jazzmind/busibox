@@ -129,10 +129,10 @@ litellm_drop_params: false  # CRITICAL: Must be false to pass tools to vLLM
 litellm_add_function_to_prompt: true  # Add function definitions to prompt for models that need it
 
 # Embedding Configuration (for data service)
-# Reference model registry for embedding model configuration
-# New structure: model_purposes.embedding -> model key, lookup in available_models
+# Dimension is derived from model_registry.yml via model_purposes.embedding
+# Do NOT hardcode embedding_dimension here — Ansible templates resolve it
+# from available_models[model_purposes.embedding].dimension automatically.
 embedding_model: "{{ available_models[model_purposes.embedding].model }}"
-embedding_dimension: 4096  # Qwen3-Embedding-8B output dimension
 
 # NOTE: Ollama is DEPRECATED - use vLLM instead for local LLM inference
 # ollama_host and ollama_port have been removed

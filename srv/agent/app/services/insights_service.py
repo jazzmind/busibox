@@ -36,7 +36,7 @@ COLLECTION_NAME = "chat_insights"
 TASK_INSIGHTS_COLLECTION = "task_insights"
 
 # Default embedding dimension (can be overridden by model registry)
-DEFAULT_EMBEDDING_DIM = 1024
+DEFAULT_EMBEDDING_DIM = 768
 
 
 def get_embedding_dimension() -> int:
@@ -353,7 +353,7 @@ class InsightsService:
             embedding_field = next(
                 (f for f in schema.fields if f.name == "embedding"), None
             )
-            expected_dim = embedding_field.params.get("dim", 1024) if embedding_field else 1024
+            expected_dim = embedding_field.params.get("dim", 768) if embedding_field else 768
         except Exception:
             expected_dim = get_embedding_dimension()
         
@@ -423,7 +423,7 @@ class InsightsService:
             authorization: Bearer token (not used - embedding-api is internal service)
             
         Returns:
-            Embedding vector (1024 dimensions)
+            Embedding vector
         """
         async with httpx.AsyncClient(timeout=120.0) as client:  # 2 minutes for embedding generation
             # embedding-api uses /embed endpoint with OpenAI-compatible format

@@ -125,7 +125,7 @@ def mock_config():
         "postgres_password": "test_pass",
         "embedding_service_url": "http://localhost:8002",
         "embedding_model": "bge-large-en-v1.5",
-        "embedding_dim": 1024,
+        "embedding_dim": 768,
         "reranker_model": "BAAI/bge-reranker-v2-m3",
         "reranker_device": "cpu",
         "enable_reranking": True,

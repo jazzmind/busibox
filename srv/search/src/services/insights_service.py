@@ -17,7 +17,7 @@ import httpx
 logger = structlog.get_logger()
 
 COLLECTION_NAME = "chat_insights"
-DEFAULT_EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIMENSION", "1024"))
+DEFAULT_EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIMENSION", "768"))
 
 
 class ChatInsight:
@@ -242,7 +242,7 @@ class InsightsService:
             authorization: Bearer token (not used - embedding-api is internal service)
             
         Returns:
-            Embedding vector (1024 dimensions)
+            Embedding vector
         """
         async with httpx.AsyncClient(timeout=30.0) as client:
             # embedding-api is an internal service that doesn't require auth
