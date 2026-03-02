@@ -110,11 +110,16 @@ pub struct App {
 
     // Model tier selection (index into MemoryTier::all())
     pub model_tier_selected: usize,
-    pub model_config_email_focused: bool,
+    pub model_config_input_cursor: usize, // 0=tier,1=email,2=domain,3=cert
+    pub site_domain_input: String,
+    pub ssl_cert_name_input: String,
 
     // Profile state
     pub profiles: Option<ProfilesFile>,
     pub profile_selected: usize,
+
+    // Profile delete confirmation
+    pub profile_delete_confirming: bool,
 
     // Profile edit state
     pub profile_edit_field: usize,
@@ -161,6 +166,16 @@ pub struct App {
 
     // Clean install: tear down all existing containers and volumes before installing
     pub clean_install: bool,
+
+    // Update mode: redeploy ALL services (not just bootstrap) with latest code and secrets
+    pub is_update: bool,
+
+    // Clean install confirmation flow
+    pub pending_clean_install_confirm: bool,
+    pub clean_install_confirm_input: String,
+    // Update confirmation flow
+    pub pending_update_confirm: bool,
+    pub update_confirm_input: String,
 
     // Health check state (welcome screen status panel)
     pub health_results: Vec<ServiceHealthResult>,
@@ -394,9 +409,12 @@ impl App {
             hardware_report_scroll: 0,
             ssh_setup_scroll: 0,
             model_tier_selected: 0,
-            model_config_email_focused: false,
+            model_config_input_cursor: 0,
+            site_domain_input: "localhost".into(),
+            ssl_cert_name_input: String::new(),
             profiles: None,
             profile_selected: 0,
+            profile_delete_confirming: false,
             profile_edit_field: 0,
             profile_edit_buffer: String::new(),
             profile_editing: false,
@@ -418,6 +436,11 @@ impl App {
             pending_password_change_profile: None,
             pending_deploy_binary: false,
             clean_install: false,
+            is_update: false,
+            pending_clean_install_confirm: false,
+            clean_install_confirm_input: String::new(),
+            pending_update_confirm: false,
+            update_confirm_input: String::new(),
             health_results: Vec::new(),
             health_groups: Vec::new(),
             health_rx: None,

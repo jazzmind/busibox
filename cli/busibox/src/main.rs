@@ -800,8 +800,8 @@ fn handle_admin_login(app: &mut App) {
                 let mut magic_link = creds.magic_link;
                 let mut verify_url = creds.verify_url;
 
-                // For bootstrap state, use /portal/setup instead of /portal/verify
-                if app.deployment_state == crate::app::DeploymentState::BootstrapComplete {
+                // For fresh/clean installs, use /portal/setup instead of /portal/verify
+                if !app.is_update {
                     magic_link = magic_link.replace("/portal/verify", "/portal/setup");
                     verify_url = verify_url.replace("/portal/verify", "/portal/setup");
                 }

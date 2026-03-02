@@ -6,6 +6,12 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::*;
 use std::collections::HashMap;
+use std::path::Path;
+
+const FIELD_TIER: usize = 0;
+const FIELD_ADMIN_EMAIL: usize = 1;
+const FIELD_SITE_DOMAIN: usize = 2;
+const FIELD_SSL_CERT: usize = 3;
 
 pub fn render(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
@@ -13,6 +19,8 @@ pub fn render(f: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(10),
+            Constraint::Length(3),
+            Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Length(3),
         ])
@@ -43,33 +51,70 @@ pub fn render(f: &mut Frame, app: &App) {
     render_tier_list(f, app, content_chunks[0], recommended_tier);
     render_tier_details(f, app, content_chunks[1], backend);
 
-    render_admin_email_input(f, app, chunks[2]);
+    render_text_input(
+        f,
+        chunks[2],
+        " Admin Email ",
+        &app.admin_email_input,
+        "admin@example.com",
+        app.model_config_input_cursor == FIELD_ADMIN_EMAIL,
+    );
+    render_text_input(
+        f,
+        chunks[3],
+        " Site Domain ",
+        &app.site_domain_input,
+        "localhost",
+        app.model_config_input_cursor == FIELD_SITE_DOMAIN,
+    );
+    let cert_display = if app.ssl_cert_name_input.is_empty() {
+        "(auto-detect from domain)".to_string()
+    } else {
+        app.ssl_cert_name_input.clone()
+    };
+    render_picker_input(
+        f,
+        chunks[4],
+        " SSL Certificate (from ssl/) ",
+        &cert_display,
+        app.model_config_input_cursor == FIELD_SSL_CERT,
+    );
 
-    let help = if app.model_config_email_focused {
+    let help = if app.model_config_input_cursor == FIELD_TIER {
         Paragraph::new(Line::from(vec![
-            Span::styled("Type email  ", theme::normal()),
+            Span::styled("↑/↓ ", theme::highlight()),
+            Span::styled("Select tier  ", theme::normal()),
+            Span::styled("Enter ", theme::highlight()),
+            Span::styled("Confirm & Install  ", theme::normal()),
             Span::styled("Tab ", theme::highlight()),
-            Span::styled("Back to tiers  ", theme::normal()),
+            Span::styled("Edit fields  ", theme::normal()),
             Span::styled("Esc ", theme::muted()),
             Span::styled("Back", theme::muted()),
         ]))
     } else {
         Paragraph::new(Line::from(vec![
-            Span::styled(" ↑/↓ ", theme::highlight()),
-            Span::styled("Select tier  ", theme::normal()),
+            Span::styled("Type/Edit  ", theme::normal()),
+            Span::styled("←/→ ", theme::highlight()),
+            Span::styled("Cycle certs  ", theme::normal()),
+            Span::styled("Tab ", theme::highlight()),
+            Span::styled("Next field  ", theme::normal()),
             Span::styled("Enter ", theme::highlight()),
-            Span::styled("Confirm & Install  ", theme::normal()),
-            Span::styled(" Tab ", theme::highlight()),
-            Span::styled("Admin Email  ", theme::normal()),
+            Span::styled("Back to tiers  ", theme::normal()),
             Span::styled("Esc ", theme::muted()),
             Span::styled("Back", theme::muted()),
         ]))
     };
-    f.render_widget(help, chunks[3]);
+    f.render_widget(help, chunks[5]);
 }
 
-fn render_admin_email_input(f: &mut Frame, app: &App, area: Rect) {
-    let is_focused = app.model_config_email_focused;
+fn render_text_input(
+    f: &mut Frame,
+    area: Rect,
+    title: &str,
+    value: &str,
+    placeholder: &str,
+    is_focused: bool,
+) {
     let border_style = if is_focused {
         theme::highlight()
     } else {
@@ -77,17 +122,17 @@ fn render_admin_email_input(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let content = if is_focused {
-        let display = if app.admin_email_input.is_empty() {
+        let display = if value.is_empty() {
             "▎".to_string()
         } else {
-            format!("{}{}", app.admin_email_input, "▎")
+            format!("{value}▎")
         };
         Line::from(Span::styled(display, theme::normal()))
     } else {
-        let display = if app.admin_email_input.is_empty() {
-            "admin@example.com"
+        let display = if value.is_empty() {
+            placeholder
         } else {
-            &app.admin_email_input
+            value
         };
         Line::from(Span::styled(display, theme::muted()))
     };
@@ -95,10 +140,45 @@ fn render_admin_email_input(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(" Admin Email ")
+        .title(title)
         .title_style(theme::heading());
 
     let paragraph = Paragraph::new(content).block(block);
+    f.render_widget(paragraph, area);
+}
+
+fn render_picker_input(
+    f: &mut Frame,
+    area: Rect,
+    title: &str,
+    value: &str,
+    is_focused: bool,
+) {
+    let border_style = if is_focused {
+        theme::highlight()
+    } else {
+        theme::dim()
+    };
+    let display = if is_focused {
+        format!("< {value} >")
+    } else {
+        value.to_string()
+    };
+    let paragraph = Paragraph::new(Line::from(Span::styled(
+        display,
+        if is_focused {
+            theme::normal()
+        } else {
+            theme::muted()
+        },
+    )))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .title(title)
+            .title_style(theme::heading()),
+    );
     f.render_widget(paragraph, area);
 }
 
@@ -232,23 +312,44 @@ fn render_tier_details(f: &mut Frame, app: &App, area: Rect, backend: Option<&cr
 
 pub fn handle_key(app: &mut App, key: KeyEvent) {
     let tier_count = MemoryTier::all().len();
+    let cert_options = ssl_cert_options(&app.repo_root);
 
-    if app.model_config_email_focused {
+    if app.model_config_input_cursor != FIELD_TIER {
         match key.code {
-            KeyCode::Tab | KeyCode::Enter => {
-                app.model_config_email_focused = false;
-                app.input_mode = InputMode::Normal;
+            KeyCode::Tab => {
+                app.model_config_input_cursor = (app.model_config_input_cursor + 1).min(FIELD_SSL_CERT);
             }
             KeyCode::Esc => {
-                app.model_config_email_focused = false;
+                app.model_config_input_cursor = FIELD_TIER;
                 app.input_mode = InputMode::Normal;
-                app.screen = Screen::HardwareReport;
+            }
+            KeyCode::Enter => {
+                app.model_config_input_cursor = FIELD_TIER;
+                app.input_mode = InputMode::Normal;
+            }
+            KeyCode::Left => {
+                if app.model_config_input_cursor == FIELD_SSL_CERT {
+                    cycle_ssl_cert(app, &cert_options, false);
+                }
+            }
+            KeyCode::Right => {
+                if app.model_config_input_cursor == FIELD_SSL_CERT {
+                    cycle_ssl_cert(app, &cert_options, true);
+                }
             }
             KeyCode::Backspace => {
-                app.admin_email_input.pop();
+                if app.model_config_input_cursor == FIELD_ADMIN_EMAIL {
+                    app.admin_email_input.pop();
+                } else if app.model_config_input_cursor == FIELD_SITE_DOMAIN {
+                    app.site_domain_input.pop();
+                }
             }
             KeyCode::Char(c) => {
-                app.admin_email_input.push(c);
+                if app.model_config_input_cursor == FIELD_ADMIN_EMAIL {
+                    app.admin_email_input.push(c);
+                } else if app.model_config_input_cursor == FIELD_SITE_DOMAIN {
+                    app.site_domain_input.push(c);
+                }
             }
             _ => {}
         }
@@ -257,7 +358,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
 
     match key.code {
         KeyCode::Tab => {
-            app.model_config_email_focused = true;
+            app.model_config_input_cursor = FIELD_ADMIN_EMAIL;
             app.input_mode = InputMode::Editing;
         }
         KeyCode::Esc => {
@@ -280,7 +381,65 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+fn cycle_ssl_cert(app: &mut App, options: &[String], forward: bool) {
+    if options.is_empty() {
+        app.ssl_cert_name_input.clear();
+        return;
+    }
+    let current = options
+        .iter()
+        .position(|v| v == &app.ssl_cert_name_input)
+        .unwrap_or(0);
+    let next = if forward {
+        (current + 1) % options.len()
+    } else if current == 0 {
+        options.len() - 1
+    } else {
+        current - 1
+    };
+    app.ssl_cert_name_input = options[next].clone();
+}
+
+fn ssl_cert_options(repo_root: &Path) -> Vec<String> {
+    let mut options = vec![String::new()];
+    let ssl_dir = repo_root.join("ssl");
+    let Ok(entries) = std::fs::read_dir(ssl_dir) else {
+        return options;
+    };
+    let mut certs = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("crt") {
+            continue;
+        }
+        let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if name.ends_with(".fullchain") {
+            continue;
+        }
+        let key_path = path.with_extension("key");
+        if key_path.exists() {
+            certs.push(name.to_string());
+        }
+    }
+    certs.sort();
+    certs.dedup();
+    options.extend(certs);
+    options
+}
+
 pub fn load_recommendations(app: &mut App) {
+    if app.site_domain_input.trim().is_empty() {
+        app.site_domain_input = "localhost".to_string();
+    }
+    if app.ssl_cert_name_input.trim().is_empty() {
+        let options = ssl_cert_options(&app.repo_root);
+        if options.iter().any(|v| v == &app.site_domain_input) {
+            app.ssl_cert_name_input = app.site_domain_input.clone();
+        }
+    }
+
     let hw = if app.setup_target == SetupTarget::Remote {
         app.remote_hardware.as_ref()
     } else {
@@ -414,6 +573,18 @@ fn save_profile_and_continue(app: &mut App) {
         },
         allowed_email_domains: None,
         frontend_ref: None,
+        site_domain: if app.site_domain_input.trim().is_empty() {
+            Some("localhost".to_string())
+        } else {
+            Some(app.site_domain_input.trim().to_string())
+        },
+        ssl_cert_name: if app.ssl_cert_name_input.trim().is_empty() {
+            None
+        } else {
+            Some(app.ssl_cert_name_input.trim().to_string())
+        },
+        network_base_octets: None,
+        use_production_vllm: None,
     };
 
     match profile::upsert_profile(&app.repo_root, &profile_id, profile, true) {

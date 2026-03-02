@@ -385,8 +385,8 @@ class PostgresService:
         (ownership for personal, role access for shared) while allowing
         the new row values to be anything.
         """
-        if visibility not in ("personal", "shared"):
-            raise ValueError("visibility must be 'personal' or 'shared'")
+        if visibility not in ("personal", "shared", "authenticated"):
+            raise ValueError("visibility must be 'personal', 'shared', or 'authenticated'")
 
         async with self.acquire(request) as conn:
             await self._ensure_document_roles(conn)

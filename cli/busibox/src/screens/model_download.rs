@@ -363,6 +363,18 @@ fn save_profile_and_continue(app: &mut App) {
         admin_email: None,
         allowed_email_domains: None,
         frontend_ref: None,
+        site_domain: if app.site_domain_input.trim().is_empty() {
+            Some("localhost".to_string())
+        } else {
+            Some(app.site_domain_input.trim().to_string())
+        },
+        ssl_cert_name: if app.ssl_cert_name_input.trim().is_empty() {
+            None
+        } else {
+            Some(app.ssl_cert_name_input.trim().to_string())
+        },
+        network_base_octets: None,
+        use_production_vllm: None,
     };
 
     match profile::upsert_profile(&app.repo_root, &profile_id, profile, true) {

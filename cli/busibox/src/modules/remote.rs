@@ -25,7 +25,6 @@ const RSYNC_EXCLUDES: &[&str] = &[
     "venv/",
     ".next/",
     "*.log",
-    "ssl/",
     "k8s/kubeconfig-*.yaml",
     "k8s/secrets/",
     ".DS_Store",

@@ -64,6 +64,7 @@ fn get_all_services(app: &App) -> Vec<(&'static str, String)> {
     }
 
     services.push(("Frontend", "proxy".to_string()));
+    services.push(("Frontend", "core-apps".to_string()));
     services.push(("Frontend", "portal".to_string()));
     services.push(("Frontend", "admin".to_string()));
     services.push(("Frontend", "agents".to_string()));
@@ -445,6 +446,7 @@ pub fn load_service_status(app: &mut App) {
 
     let prefix = env_to_prefix(&profile.environment);
     let is_remote = profile.remote;
+    let is_proxmox = profile.backend == "proxmox";
     let is_mlx = profile
         .hardware
         .as_ref()
@@ -472,49 +474,73 @@ pub fn load_service_status(app: &mut App) {
     app.manage_action_running = true;
 
     let service_names: Vec<String> = app.manage_services.iter().map(|s| s.name.clone()).collect();
+    let network_base = profile.effective_network_base().to_string();
+    let vllm_network_base = profile.vllm_network_base().to_string();
 
     std::thread::spawn(move || {
         let defs = health::all_service_defs(is_mlx);
-        let mut handles = Vec::new();
 
-        for svc_name in &service_names {
-            let svc_name = svc_name.clone();
-            let host = host.clone();
-            let prefix = prefix.clone();
-            let ssh_details = ssh_details.clone();
-            let tx = tx.clone();
+        let check_defs: Vec<&health::ServiceHealthDef> = service_names
+            .iter()
+            .filter_map(|name| defs.iter().find(|d| d.name == *name))
+            .collect();
 
-            // Find matching health def
-            let def = defs.iter().find(|d| d.name == svc_name).cloned();
+        if is_proxmox {
+            let ssh = ssh_details.as_ref().map(|(h, u, k)| {
+                crate::modules::ssh::SshConnection::new(h, u, k)
+            });
 
-            let handle = std::thread::spawn(move || {
-                let status_str = if let Some(def) = def {
+            for def in &check_defs {
+                let status = health::check_service_pub(
+                    def, &host, &prefix, ssh.as_ref(), true, &network_base, &vllm_network_base,
+                );
+                let status_str = match status {
+                    HealthStatus::Healthy => "healthy".to_string(),
+                    HealthStatus::Unhealthy => "unhealthy".to_string(),
+                    HealthStatus::Down => "down".to_string(),
+                    HealthStatus::Checking => "checking...".to_string(),
+                };
+                let _ = tx.send(ManageUpdate::StatusResult {
+                    name: def.name.to_string(),
+                    status: status_str,
+                });
+            }
+        } else {
+            let mut handles = Vec::new();
+            for def in check_defs {
+                let def = def.clone();
+                let host = host.clone();
+                let prefix = prefix.clone();
+                let ssh_details = ssh_details.clone();
+                let network_base = network_base.clone();
+                let vllm_network_base = vllm_network_base.clone();
+                let tx = tx.clone();
+
+                let handle = std::thread::spawn(move || {
                     let ssh = ssh_details.as_ref().map(|(h, u, k)| {
                         crate::modules::ssh::SshConnection::new(h, u, k)
                     });
-                    let status =
-                        health::check_service_pub(&def, &host, &prefix, ssh.as_ref());
-                    match status {
+                    let status = health::check_service_pub(
+                        &def, &host, &prefix, ssh.as_ref(), false, &network_base, &vllm_network_base,
+                    );
+                    let status_str = match status {
                         HealthStatus::Healthy => "healthy".to_string(),
                         HealthStatus::Unhealthy => "unhealthy".to_string(),
                         HealthStatus::Down => "down".to_string(),
                         HealthStatus::Checking => "checking...".to_string(),
-                    }
-                } else {
-                    "unknown".to_string()
-                };
-
-                let _ = tx.send(ManageUpdate::StatusResult {
-                    name: svc_name,
-                    status: status_str,
+                    };
+                    let _ = tx.send(ManageUpdate::StatusResult {
+                        name: def.name.to_string(),
+                        status: status_str,
+                    });
                 });
-            });
-            handles.push(handle);
+                handles.push(handle);
+            }
+            for handle in handles {
+                let _ = handle.join();
+            }
         }
 
-        for handle in handles {
-            let _ = handle.join();
-        }
         let _ = tx.send(ManageUpdate::Complete { success: true });
     });
 }

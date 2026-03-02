@@ -1,0 +1,128 @@
+---
+# Validate that running Docker containers have the correct secrets from the vault.
+#
+# This role inspects key environment variables inside running containers and compares
+# them against the expected values from the Ansible vault. Any mismatches are reported.
+#
+# Vault variables used:
+#   secrets.postgresql.password
+#   secrets.minio.root_password
+#   secrets.authz_master_key
+#   secrets.litellm_master_key
+#   secrets.litellm_salt_key
+#   secrets.jwt_secret
+#   secrets.github.personal_access_token
+
+- name: Set container prefix
+  ansible.builtin.set_fact:
+    _prefix: "{{ container_prefix | default('dev') }}"
+
+- name: Define expected env var checks
+  ansible.builtin.set_fact:
+    _env_checks:
+      - container: "{{ _prefix }}-postgres"
+        var: POSTGRES_PASSWORD
+        expected: "{{ secrets.postgresql.password }}"
+      - container: "{{ _prefix }}-minio"
+        var: MINIO_ROOT_PASSWORD
+        expected: "{{ secrets.minio.root_password }}"
+      - container: "{{ _prefix }}-authz-api"
+        var: AUTHZ_MASTER_KEY
+        expected: "{{ secrets.authz_master_key }}"
+      - container: "{{ _prefix }}-authz-api"
+        var: POSTGRES_PASSWORD
+        expected: "{{ secrets.postgresql.password }}"
+      - container: "{{ _prefix }}-litellm"
+        var: LITELLM_MASTER_KEY
+        expected: "{{ secrets.litellm_master_key }}"
+      - container: "{{ _prefix }}-litellm"
+        var: LITELLM_SALT_KEY
+        expected: "{{ secrets.litellm_salt_key }}"
+      - container: "{{ _prefix }}-deploy-api"
+        var: POSTGRES_PASSWORD
+        expected: "{{ secrets.postgresql.password }}"
+      - container: "{{ _prefix }}-deploy-api"
+        var: LITELLM_MASTER_KEY
+        expected: "{{ secrets.litellm_master_key }}"
+      - container: "{{ _prefix }}-data-api"
+        var: POSTGRES_PASSWORD
+        expected: "{{ secrets.postgresql.password }}"
+      - container: "{{ _prefix }}-data-api"
+        var: MINIO_SECRET_KEY
+        expected: "{{ secrets.minio.root_password }}"
+      - container: "{{ _prefix }}-agent-api"
+        var: POSTGRES_PASSWORD
+        expected: "{{ secrets.postgresql.password }}"
+      - container: "{{ _prefix }}-search-api"
+        var: POSTGRES_PASSWORD
+        expected: "{{ secrets.postgresql.password }}"
+      - container: "{{ _prefix }}-core-apps"
+        var: SSO_JWT_SECRET
+        expected: "{{ secrets.jwt_secret }}"
+      - container: "{{ _prefix }}-core-apps"
+        var: GITHUB_AUTH_TOKEN
+        expected: "{{ secrets.github.personal_access_token }}"
+
+- name: Check if containers are running
+  ansible.builtin.command:
+    cmd: "docker ps --filter name=^{{ item.container }}$ --filter status=running --format '{{ '{{' }}.Names{{ '}}' }}'"
+  register: _running_checks
+  loop: "{{ _env_checks }}"
+  changed_when: false
+  failed_when: false
+
+- name: Build list of running containers
+  ansible.builtin.set_fact:
+    _running_containers: "{{ _running_checks.results | selectattr('stdout', 'ne', '') | map(attribute='item') | list }}"
+
+- name: Extract env vars from running containers
+  ansible.builtin.command:
+    cmd: "docker exec {{ item.container }} printenv {{ item.var }}"
+  register: _env_results
+  loop: "{{ _running_containers }}"
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Evaluate all checks
+  ansible.builtin.set_fact:
+    _all_results: >-
+      {%- set results = [] -%}
+      {%- for r in _env_results.results -%}
+        {%- set check = r.item -%}
+        {%- if r.rc != 0 -%}
+          {%- set _ = results.append({"container": check.container, "var": check.var, "status": "NOT_SET", "match": false}) -%}
+        {%- elif r.stdout | trim == check.expected -%}
+          {%- set _ = results.append({"container": check.container, "var": check.var, "status": "OK", "match": true}) -%}
+        {%- else -%}
+          {%- set _ = results.append({"container": check.container, "var": check.var, "status": "MISMATCH", "match": false}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ results }}
+
+- name: Count results
+  ansible.builtin.set_fact:
+    _pass_count: "{{ _all_results | selectattr('match', 'eq', true) | list | length }}"
+    _fail_count: "{{ _all_results | rejectattr('match', 'eq', true) | list | length }}"
+
+- name: Display validation results
+  ansible.builtin.debug:
+    msg: |
+      ═══════════════════════════════════════════════════════════════════
+      ENVIRONMENT VALIDATION RESULTS
+      ═══════════════════════════════════════════════════════════════════
+
+      {% for r in _all_results %}
+      {% if r.match %}  ✓ {{ r.container }} / {{ r.var }}: {{ r.status }}
+      {% else %}  ✗ {{ r.container }} / {{ r.var }}: {{ r.status }}
+      {% endif %}
+      {% endfor %}
+
+      ───────────────────────────────────────────────────────────────────
+      Total: {{ _all_results | length }}  |  Pass: {{ _pass_count }}  |  Fail: {{ _fail_count }}
+      ═══════════════════════════════════════════════════════════════════
+
+- name: Fail if mismatches found
+  ansible.builtin.fail:
+    msg: "{{ _fail_count }} environment variable(s) do not match vault secrets. See above for details."
+  when: _fail_count | int > 0

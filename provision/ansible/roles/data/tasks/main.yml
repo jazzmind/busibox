@@ -6,8 +6,6 @@
   include_vars:
     file: "{{ playbook_dir }}/roles/secrets/vars/vault.{{ deployment_environment | default('dev') }}.yml"
   no_log: true
-  tags:
-    - always
 
 # ============================================================================
 # System Dependencies
@@ -30,41 +28,9 @@
     update_cache: yes
   tags: [data, data_install]
 
-# Redis-only installation (minimal - just install and start Redis)
-# This block runs when --tags redis is used (e.g., from deploy-api bootstrap)
-- name: Install Redis (standalone)
-  apt:
-    name:
-      - redis-server
-      - redis-tools
-    state: present
-    update_cache: yes
-  tags: [redis]
-
-- name: Configure Redis to listen on all interfaces
-  lineinfile:
-    path: /etc/redis/redis.conf
-    regexp: '^bind '
-    line: 'bind 0.0.0.0 ::1'
-  notify: Restart Redis
-  tags: [redis]
-
-- name: Disable Redis protected mode (internal network)
-  lineinfile:
-    path: /etc/redis/redis.conf
-    regexp: '^protected-mode '
-    line: 'protected-mode no'
-  notify: Restart Redis
-  tags: [redis]
-
-- name: Start and enable Redis
-  systemd:
-    name: redis-server
-    state: restarted
-    enabled: yes
-  tags: [redis]
-
 # Ensure Redis is running (for full data role deployment)
+# NOTE: Redis installation/configuration is in a separate play in site.yml (--tags redis)
+# This task only ensures it's started when deploying the full data stack
 - name: Ensure Redis is enabled and started
   systemd:
     name: redis-server
@@ -110,6 +76,8 @@
     src: "{{ playbook_dir }}/../../srv/data/src/"
     dest: /srv/data/src/
     delete: yes
+    owner: no
+    group: no
     rsync_opts:
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
@@ -135,6 +103,8 @@
     src: "{{ playbook_dir }}/../../srv/data/tests/"
     dest: /srv/data/tests/
     delete: yes
+    owner: no
+    group: no
     rsync_opts:
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
@@ -145,6 +115,8 @@
     src: "{{ playbook_dir }}/../../srv/shared/testing/"
     dest: /srv/data/src/testing/
     delete: yes
+    owner: no
+    group: no
     rsync_opts:
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
@@ -155,6 +127,8 @@
     src: "{{ playbook_dir }}/../../srv/shared/busibox_common/"
     dest: /srv/data/src/busibox_common/
     delete: yes
+    owner: no
+    group: no
     rsync_opts:
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
@@ -165,7 +139,7 @@
     repo: "{{ test_docs_repo_url }}"
     dest: "{{ test_docs_repo_path }}"
     version: main
-    force: false
+    force: true
   delegate_to: localhost
   run_once: true
   tags: [data, data_deploy, data_tests]

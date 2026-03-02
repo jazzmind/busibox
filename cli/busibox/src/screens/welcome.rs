@@ -42,23 +42,45 @@ pub fn render(f: &mut Frame, app: &App) {
     render_system_info(f, app, content_chunks[0]);
     render_status_and_actions(f, app, content_chunks[1]);
 
-    // Status bar
-    let status_text = if let Some((msg, kind)) = &app.status_message {
-        let style = match kind {
-            crate::app::MessageKind::Info => theme::info(),
-            crate::app::MessageKind::Success => theme::success(),
-            crate::app::MessageKind::Warning => theme::warning(),
-            crate::app::MessageKind::Error => theme::error(),
-        };
-        Span::styled(msg.as_str(), style)
+    // Status bar / confirmation prompt
+    if app.pending_clean_install_confirm {
+        let prompt = Line::from(vec![
+            Span::styled(
+                " ⚠ This will DESTROY all data and containers. Type 'yes' to confirm: ",
+                theme::warning(),
+            ),
+            Span::styled(&app.clean_install_confirm_input, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled("█", Style::default().fg(Color::White)),
+        ]);
+        f.render_widget(Paragraph::new(prompt), chunks[3]);
+    } else if app.pending_update_confirm {
+        let prompt = Line::from(vec![
+            Span::styled(
+                " ⚠ Update redeploys all services. Type 'update' to confirm: ",
+                theme::warning(),
+            ),
+            Span::styled(&app.update_confirm_input, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled("█", Style::default().fg(Color::White)),
+        ]);
+        f.render_widget(Paragraph::new(prompt), chunks[3]);
     } else {
-        Span::styled(
-            " ↑/↓ Navigate  Enter Select  r Refresh  m Models  p Profiles  q Quit",
-            theme::muted(),
-        )
-    };
-    let status = Paragraph::new(Line::from(status_text));
-    f.render_widget(status, chunks[3]);
+        let status_text = if let Some((msg, kind)) = &app.status_message {
+            let style = match kind {
+                crate::app::MessageKind::Info => theme::info(),
+                crate::app::MessageKind::Success => theme::success(),
+                crate::app::MessageKind::Warning => theme::warning(),
+                crate::app::MessageKind::Error => theme::error(),
+            };
+            Span::styled(msg.as_str(), style)
+        } else {
+            Span::styled(
+                " ↑/↓ Navigate  Enter Select  r Refresh  m Models  p Profiles  q Quit",
+                theme::muted(),
+            )
+        };
+        let status = Paragraph::new(Line::from(status_text));
+        f.render_widget(status, chunks[3]);
+    }
 }
 
 fn render_system_info(f: &mut Frame, app: &App, area: Rect) {
@@ -349,6 +371,81 @@ fn render_action_menu(f: &mut Frame, app: &App, area: Rect) {
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) {
+    // Clean install confirmation prompt
+    if app.pending_clean_install_confirm {
+        match key.code {
+            KeyCode::Esc => {
+                app.pending_clean_install_confirm = false;
+                app.clean_install_confirm_input.clear();
+                app.clear_message();
+            }
+            KeyCode::Enter => {
+                if app.clean_install_confirm_input.trim().eq_ignore_ascii_case("yes") {
+                    app.pending_clean_install_confirm = false;
+                    app.clean_install_confirm_input.clear();
+                    app.clean_install = true;
+                    app.set_message(
+                        "⠋ Preparing clean install...",
+                        crate::app::MessageKind::Info,
+                    );
+                    app.pending_resume_install = true;
+                } else {
+                    app.pending_clean_install_confirm = false;
+                    app.clean_install_confirm_input.clear();
+                    app.set_message(
+                        "Clean install cancelled.",
+                        crate::app::MessageKind::Info,
+                    );
+                }
+            }
+            KeyCode::Backspace => {
+                app.clean_install_confirm_input.pop();
+            }
+            KeyCode::Char(c) => {
+                app.clean_install_confirm_input.push(c);
+            }
+            _ => {}
+        }
+        return;
+    }
+    // Update confirmation prompt
+    if app.pending_update_confirm {
+        match key.code {
+            KeyCode::Esc => {
+                app.pending_update_confirm = false;
+                app.update_confirm_input.clear();
+                app.clear_message();
+            }
+            KeyCode::Enter => {
+                if app.update_confirm_input.trim().eq_ignore_ascii_case("update") {
+                    app.pending_update_confirm = false;
+                    app.update_confirm_input.clear();
+                    app.is_update = true;
+                    app.set_message(
+                        "⠋ Preparing update (all services)...",
+                        crate::app::MessageKind::Info,
+                    );
+                    app.pending_resume_install = true;
+                } else {
+                    app.pending_update_confirm = false;
+                    app.update_confirm_input.clear();
+                    app.set_message(
+                        "Update cancelled.",
+                        crate::app::MessageKind::Info,
+                    );
+                }
+            }
+            KeyCode::Backspace => {
+                app.update_confirm_input.pop();
+            }
+            KeyCode::Char(c) => {
+                app.update_confirm_input.push(c);
+            }
+            _ => {}
+        }
+        return;
+    }
+
     let actions = app.contextual_actions();
     let action_count = actions.len();
 
@@ -417,12 +514,17 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
 
 fn handle_action_select(app: &mut App, action: &str) {
     match action {
-        "Install" | "Continue Install" | "Update" => {
+        "Install" | "Continue Install" => {
+            app.is_update = false;
             app.set_message(
                 "⠋ Connecting to remote host...",
                 crate::app::MessageKind::Info,
             );
             app.pending_resume_install = true;
+        }
+        "Update" => {
+            app.pending_update_confirm = true;
+            app.update_confirm_input.clear();
         }
         "Continue Install (Web)" => {
             app.set_message(
@@ -432,12 +534,7 @@ fn handle_action_select(app: &mut App, action: &str) {
             app.pending_sync_admin_login = true;
         }
         "Clean Install" => {
-            app.clean_install = true;
-            app.set_message(
-                "⠋ Preparing clean install...",
-                crate::app::MessageKind::Info,
-            );
-            app.pending_resume_install = true;
+            app.pending_clean_install_confirm = true;
         }
         "Admin Login" => {
             app.admin_login_magic_link = None;
@@ -472,6 +569,7 @@ pub fn trigger_health_checks(app: &mut App) {
     let prefix = env_to_prefix(&profile.environment);
 
     let is_remote = profile.remote;
+    let is_proxmox = profile.backend == "proxmox";
     let is_mlx = profile
         .hardware
         .as_ref()
@@ -508,7 +606,9 @@ pub fn trigger_health_checks(app: &mut App) {
         .collect();
     app.health_groups = health::aggregate_groups(&app.health_results);
 
-    let rx = health::start_health_checks(is_remote, is_mlx, &host, &prefix, ssh_details);
+    let network_base = profile.effective_network_base().to_string();
+    let vllm_network_base = profile.vllm_network_base().to_string();
+    let rx = health::start_health_checks(is_remote, is_mlx, &host, &prefix, ssh_details, is_proxmox, &network_base, &vllm_network_base);
     app.health_rx = Some(rx);
 }
 

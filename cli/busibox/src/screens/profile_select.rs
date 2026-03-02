@@ -118,26 +118,88 @@ pub fn render(f: &mut Frame, app: &App) {
         f.render_widget(msg, chunks[1]);
     }
 
-    let help = Paragraph::new(Line::from(vec![
-        Span::styled(" Enter ", theme::highlight()),
-        Span::styled("Activate  ", theme::normal()),
-        Span::styled("n ", theme::highlight()),
-        Span::styled("New  ", theme::normal()),
-        Span::styled("e ", theme::highlight()),
-        Span::styled("Edit  ", theme::normal()),
-        Span::styled("d ", theme::highlight()),
-        Span::styled("Defaults  ", theme::normal()),
-        Span::styled("p ", theme::highlight()),
-        Span::styled("Password  ", theme::normal()),
-        Span::styled("↑/↓ ", theme::highlight()),
-        Span::styled("Navigate  ", theme::normal()),
-        Span::styled("Esc ", theme::muted()),
-        Span::styled("Back", theme::muted()),
-    ]));
+    let help = if app.profile_delete_confirming {
+        Paragraph::new(Line::from(vec![
+            Span::styled(" ⚠ Delete this profile? ", theme::warning()),
+            Span::styled("y ", theme::highlight()),
+            Span::styled("Yes  ", theme::normal()),
+            Span::styled("n/Esc ", theme::muted()),
+            Span::styled("Cancel", theme::muted()),
+        ]))
+    } else {
+        Paragraph::new(Line::from(vec![
+            Span::styled(" Enter ", theme::highlight()),
+            Span::styled("Activate  ", theme::normal()),
+            Span::styled("n ", theme::highlight()),
+            Span::styled("New  ", theme::normal()),
+            Span::styled("e ", theme::highlight()),
+            Span::styled("Edit  ", theme::normal()),
+            Span::styled("x ", theme::highlight()),
+            Span::styled("Delete  ", theme::normal()),
+            Span::styled("d ", theme::highlight()),
+            Span::styled("Defaults  ", theme::normal()),
+            Span::styled("p ", theme::highlight()),
+            Span::styled("Password  ", theme::normal()),
+            Span::styled("↑/↓ ", theme::highlight()),
+            Span::styled("Navigate  ", theme::normal()),
+            Span::styled("Esc ", theme::muted()),
+            Span::styled("Back", theme::muted()),
+        ]))
+    };
     f.render_widget(help, chunks[2]);
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) {
+    // Delete confirmation mode
+    if app.profile_delete_confirming {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                app.profile_delete_confirming = false;
+                if let Some(profiles) = &app.profiles {
+                    let profile_ids: Vec<&String> = profiles.profiles.keys().collect();
+                    if let Some(id) = profile_ids.get(app.profile_selected) {
+                        let id = (*id).clone();
+                        let is_active = id == profiles.active;
+                        match profile::delete_profile(&app.repo_root, &id) {
+                            Ok(()) => {
+                                app.profiles = profile::load_profiles(&app.repo_root).ok();
+                                let new_count = app
+                                    .profiles
+                                    .as_ref()
+                                    .map(|p| p.profiles.len())
+                                    .unwrap_or(0);
+                                if app.profile_selected >= new_count && new_count > 0 {
+                                    app.profile_selected = new_count - 1;
+                                }
+                                let msg = if is_active {
+                                    format!("Deleted profile: {id} (switched active)")
+                                } else {
+                                    format!("Deleted profile: {id}")
+                                };
+                                app.set_message(&msg, MessageKind::Success);
+                                if is_active {
+                                    app.health_results.clear();
+                                    app.health_groups.clear();
+                                    app.vault_password = None;
+                                }
+                            }
+                            Err(e) => {
+                                app.set_message(
+                                    &format!("Failed to delete: {e}"),
+                                    MessageKind::Error,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {
+                app.profile_delete_confirming = false;
+            }
+        }
+        return;
+    }
+
     let profile_count = app
         .profiles
         .as_ref()
@@ -218,6 +280,11 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
             app.profile_editing = false;
             app.profile_edit_tier_selecting = false;
             app.screen = Screen::ProfileEdit;
+        }
+        KeyCode::Char('x') => {
+            if profile_count > 0 {
+                app.profile_delete_confirming = true;
+            }
         }
         KeyCode::Char('p') => {
             // Change master password for the selected profile

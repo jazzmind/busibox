@@ -154,14 +154,15 @@
   copy:
     content: |
       {
-        "commit": "{{ lookup('pipe', 'git rev-parse --short HEAD', cwd=playbook_dir + '/../..') }}",
-        "branch": "{{ lookup('pipe', 'git branch --show-current', cwd=playbook_dir + '/../..') }}",
+        "commit": "{{ lookup('pipe', 'cd ' + playbook_dir + '/../.. && git rev-parse --short HEAD 2>/dev/null || echo unknown') }}",
+        "branch": "{{ lookup('pipe', 'cd ' + playbook_dir + '/../.. && git branch --show-current 2>/dev/null || echo unknown') }}",
         "timestamp": "{{ now(utc=true).isoformat() }}",
         "deployed_by": "ansible",
         "litellm_version": "{{ litellm_installed_version.stdout | default('unknown') }}"
       }
     dest: /opt/litellm/.deploy_version
     mode: "0644"
+  ignore_errors: true
   tags: [litellm_configure]
 
 # Operational Tools (always deployed)

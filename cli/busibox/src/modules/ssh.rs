@@ -15,6 +15,10 @@ pub struct SshConnection {
     pub host: String,
     pub user: String,
     pub key_path: String,
+    /// Path to a ControlMaster socket for connection multiplexing.
+    /// When set, all ssh commands reuse the master connection, avoiding
+    /// parallel SSH handshake storms (which hit MaxStartups on the server).
+    pub control_path: Option<String>,
 }
 
 impl SshConnection {
@@ -23,6 +27,17 @@ impl SshConnection {
             host: host.to_string(),
             user: user.to_string(),
             key_path: key_path.to_string(),
+            control_path: None,
+        }
+    }
+
+    /// Create an SshConnection that reuses an existing ControlMaster socket.
+    pub fn with_control_path(host: &str, user: &str, key_path: &str, control_path: &str) -> Self {
+        Self {
+            host: host.to_string(),
+            user: user.to_string(),
+            key_path: key_path.to_string(),
+            control_path: Some(control_path.to_string()),
         }
     }
 
@@ -39,6 +54,10 @@ impl SshConnection {
             "-o".into(),
             "ConnectTimeout=10".into(),
         ];
+        if let Some(ref cp) = self.control_path {
+            args.push("-o".into());
+            args.push(format!("ControlPath={cp}"));
+        }
         let key = shellexpand_path(&self.key_path);
         if !key.is_empty() && Path::new(&key).exists() {
             args.push("-i".into());
@@ -84,6 +103,10 @@ impl SshConnection {
         }
         args.push("-o".into());
         args.push("StrictHostKeyChecking=accept-new".into());
+        if let Some(ref cp) = self.control_path {
+            args.push("-o".into());
+            args.push(format!("ControlPath={cp}"));
+        }
         args.push(self.ssh_target());
         args.push(cmd.to_string());
         Ok(Command::new("ssh")
@@ -99,6 +122,139 @@ impl SshConnection {
         self.run(&format!("which {cmd} 2>/dev/null"))
             .map(|s| !s.trim().is_empty())
             .unwrap_or(false)
+    }
+}
+
+/// An SSH ControlMaster session that stays open for the lifetime of this struct.
+/// All `SshConnection` instances created via `connection()` reuse the master,
+/// avoiding parallel SSH handshake storms that hit MaxStartups limits.
+#[allow(dead_code)]
+pub struct SshControlMaster {
+    control_path: String,
+    host: String,
+    user: String,
+    key_path: String,
+    _child: Option<std::process::Child>,
+}
+
+#[allow(dead_code)]
+impl SshControlMaster {
+    /// Start a ControlMaster connection in the background.
+    /// Each invocation gets a unique socket path to avoid conflicts with
+    /// previous sessions that may still be cleaning up.
+    pub fn start(host: &str, user: &str, key_path: &str) -> Result<Self> {
+        let control_dir = std::env::temp_dir().join("busibox-ssh");
+        std::fs::create_dir_all(&control_dir)?;
+
+        // Use a unique socket per invocation to avoid races with stale sockets
+        let unique_id = std::process::id();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let control_path = control_dir
+            .join(format!("ctrl-{}@{}-{}-{}", user, host, unique_id, ts))
+            .to_string_lossy()
+            .to_string();
+
+        let mut args = vec![
+            "-o".to_string(), "BatchMode=yes".into(),
+            "-o".into(), "StrictHostKeyChecking=accept-new".into(),
+            "-o".into(), "ConnectTimeout=10".into(),
+            "-o".into(), format!("ControlPath={control_path}"),
+            "-o".into(), "ControlMaster=yes".into(),
+            // No ControlPersist — we manage the lifetime ourselves via Drop
+            "-o".into(), "ControlPersist=no".into(),
+            "-N".into(),
+        ];
+
+        let key = shellexpand_path(key_path);
+        if !key.is_empty() && Path::new(&key).exists() {
+            args.push("-i".into());
+            args.push(key);
+        }
+        args.push(format!("{user}@{host}"));
+
+        let child = Command::new("ssh")
+            .args(&args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+
+        // Wait for the socket to appear, polling with backoff
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(5);
+        loop {
+            if Path::new(&control_path).exists() {
+                break;
+            }
+            if start.elapsed() > timeout {
+                // Master failed to establish; fall back to direct connections
+                return Err(eyre!("SSH ControlMaster socket did not appear within 5s"));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        // Verify the master actually works with a quick "check" command
+        let check = Command::new("ssh")
+            .args([
+                "-o", &format!("ControlPath={control_path}"),
+                "-O", "check",
+                &format!("{user}@{host}"),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+
+        if !check.map(|s| s.success()).unwrap_or(false) {
+            return Err(eyre!("SSH ControlMaster socket exists but check failed"));
+        }
+
+        Ok(Self {
+            control_path,
+            host: host.to_string(),
+            user: user.to_string(),
+            key_path: key_path.to_string(),
+            _child: Some(child),
+        })
+    }
+
+    /// Get the control socket path for this master.
+    pub fn control_path(&self) -> &str {
+        &self.control_path
+    }
+
+    /// Create an SshConnection that multiplexes over this master.
+    #[allow(dead_code)]
+    pub fn connection(&self) -> SshConnection {
+        SshConnection::with_control_path(
+            &self.host,
+            &self.user,
+            &self.key_path,
+            &self.control_path,
+        )
+    }
+}
+
+impl Drop for SshControlMaster {
+    fn drop(&mut self) {
+        // Ask the master to exit gracefully
+        let _ = Command::new("ssh")
+            .args([
+                "-o", &format!("ControlPath={}", self.control_path),
+                "-O", "exit",
+                &format!("{}@{}", self.user, self.host),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        // Give it a moment to clean up the socket
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let _ = std::fs::remove_file(&self.control_path);
+        if let Some(ref mut child) = self._child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 
