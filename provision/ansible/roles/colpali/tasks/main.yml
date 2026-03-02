@@ -6,8 +6,6 @@
   include_vars:
     file: "{{ playbook_dir }}/roles/secrets/vars/vault.{{ deployment_environment | default('dev') }}.yml"
   no_log: true
-  tags:
-    - always
 
 - name: Pre-check - Verify ColPali model is cached on host
   stat:

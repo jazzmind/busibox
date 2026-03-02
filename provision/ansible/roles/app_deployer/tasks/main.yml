@@ -25,8 +25,6 @@
   include_vars:
     file: "{{ playbook_dir }}/roles/secrets/vars/vault.{{ deployment_environment | default('dev') }}.yml"
   no_log: true
-  tags:
-    - always  # Must always run since .env deployment has 'always' tag
 
 # Legacy deploywatch directory (only needed for fallback mode)
 - name: Create deploywatch apps directory (legacy)
@@ -37,8 +35,6 @@
     owner: root
     group: root
   when: use_deploy_api is defined and not (use_deploy_api | bool)
-  tags:
-    - always
 
 # Legacy deploywatch script generation (deprecated)
 - name: Generate deploywatch scripts for each application (legacy - deprecated)
@@ -57,8 +53,6 @@
     - use_deploy_api is defined and not (use_deploy_api | bool)
     - applications | length > 0
     - item.local_src is not defined
-  tags:
-    - always
 
 # Legacy deploywatch orchestrator (deprecated)
 - name: Deploy deploywatch orchestrator script (legacy - deprecated)
@@ -69,8 +63,6 @@
     owner: root
     group: root
   when: use_deploy_api is defined and not (use_deploy_api | bool)
-  tags:
-    - always
 
 - name: Create application deploy directories
   file:
@@ -83,8 +75,6 @@
   loop_control:
     label: "{{ item.name }}: {{ item.deploy_path }}"
   when: applications | length > 0
-  tags:
-    - always  # Always run for any app deployment
 
 - name: Deploy GitHub token for private repository access
   copy:
@@ -96,12 +86,6 @@
   no_log: true
   when: 
     - (secrets.github.personal_access_token is defined and secrets.github.personal_access_token | length > 0 and not (secrets.github.personal_access_token is match('CHANGE_ME.*'))) or (github_token | default(lookup('env', 'GITHUB_AUTH_TOKEN')) | default('') | length > 0)
-  tags:
-    - always  # Always run for any app deployment
-
-# NOTE: Log viewing is handled by deploy-api, which uses SSH to fetch logs from containers.
-# Busibox Portal calls deploy-api's /system/services/{service}/logs endpoint.
-# Core-apps does NOT need direct SSH access to other containers.
 
 - name: Deploy application environment files (.env)
   template:
@@ -115,13 +99,11 @@
     label: "{{ item.name }}"
   vars:
     app: "{{ item }}"
-  no_log: true  # Don't log secrets
+  no_log: true
   when: 
     - applications | length > 0
     - deploy_app is not defined or deploy_app == item.name
   notify: Restart application
-  tags:
-    - always  # Always run for any app deployment
 
 - name: Display configuration summary
   debug:
@@ -142,9 +124,6 @@
   when:
     - use_deploy_api | default(true) | bool
     - deploy_api_admin_token is not defined or deploy_api_admin_token | length == 0
-  tags:
-    - always
-    - deploy_via_api
 
 - name: Deploy applications via Deploy API
   include_tasks: deploy_via_api.yml
@@ -159,11 +138,7 @@
     - applications | length > 0
     - deploy_apps is not defined or deploy_apps | bool
     - deploy_app is not defined or deploy_app == item.name
-    # Only deploy apps with auto_deploy: true (default) unless explicitly targeting via deploy_app
     - item.auto_deploy | default(true) or (deploy_app is defined and deploy_app == item.name)
-  tags:
-    - always
-    - deploy_via_api
 
 # =============================================================================
 # LEGACY DEPLOYWATCH MODE (Deprecated)
@@ -186,8 +161,6 @@
     - deploy_from_branch is defined
     - deploy_from_branch | bool
     - deploy_app is defined
-  tags:
-    - always
 
 - name: Deploy applications (legacy - deploywatch)
   include_tasks: deploy.yml
@@ -197,5 +170,3 @@
     - applications | length > 0
     - deploy_apps is not defined or deploy_apps | bool
     - deploy_from_branch is not defined or not (deploy_from_branch | bool)
-  tags:
-    - always

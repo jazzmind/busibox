@@ -7,8 +7,6 @@
   include_vars:
     file: "{{ playbook_dir }}/roles/secrets/vars/vault.{{ deployment_environment | default('dev') }}.yml"
   no_log: true
-  tags:
-    - always
 
 - name: Install required packages
   ansible.builtin.apt:
