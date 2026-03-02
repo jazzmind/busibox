@@ -23,6 +23,19 @@
 
 set -euo pipefail
 
+AUTO_INSTALL_MKCERT=true
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --no-auto-install)
+            AUTO_INSTALL_MKCERT=false
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SSL_DIR="${REPO_ROOT}/ssl"
@@ -44,8 +57,64 @@ if [[ -f "${SSL_DIR}/localhost.crt" ]] && [[ -f "${SSL_DIR}/localhost.key" ]]; t
     exit 0
 fi
 
+install_mkcert_if_possible() {
+    if command -v mkcert &>/dev/null; then
+        return 0
+    fi
+
+    if [[ "${AUTO_INSTALL_MKCERT}" != "true" ]]; then
+        return 1
+    fi
+
+    echo "mkcert not found - attempting automatic installation..."
+
+    if command -v brew &>/dev/null; then
+        if brew install mkcert nss; then
+            return 0
+        fi
+    fi
+
+    if command -v apt-get &>/dev/null; then
+        if [[ "$(id -u)" -eq 0 ]]; then
+            if apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y mkcert libnss3-tools; then
+                return 0
+            fi
+        elif command -v sudo &>/dev/null; then
+            if sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y mkcert libnss3-tools; then
+                return 0
+            fi
+        fi
+    fi
+
+    if command -v dnf &>/dev/null; then
+        if [[ "$(id -u)" -eq 0 ]]; then
+            if dnf install -y mkcert nss-tools; then
+                return 0
+            fi
+        elif command -v sudo &>/dev/null; then
+            if sudo dnf install -y mkcert nss-tools; then
+                return 0
+            fi
+        fi
+    fi
+
+    if command -v yum &>/dev/null; then
+        if [[ "$(id -u)" -eq 0 ]]; then
+            if yum install -y mkcert nss-tools; then
+                return 0
+            fi
+        elif command -v sudo &>/dev/null; then
+            if sudo yum install -y mkcert nss-tools; then
+                return 0
+            fi
+        fi
+    fi
+
+    return 1
+}
+
 # Try mkcert first (creates locally-trusted certificates - no browser warnings)
-if command -v mkcert &> /dev/null; then
+if install_mkcert_if_possible && command -v mkcert &> /dev/null; then
     echo "Using mkcert to generate locally-trusted certificates..."
     echo ""
     

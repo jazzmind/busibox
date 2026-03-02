@@ -111,8 +111,8 @@ services:
       - "config_version=${GIT_COMMIT:-unknown}"
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-${MINIO_ACCESS_KEY:-minioadmin}}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-${MINIO_SECRET_KEY:-minioadmin}}
     ports:
       - "9000:9000"   # API
       - "9001:9001"   # Console
@@ -139,7 +139,7 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      mc alias set myminio http://minio:9000 ${MINIO_ACCESS_KEY:-minioadmin} ${MINIO_SECRET_KEY:-minioadmin};
+      mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER:-${MINIO_ACCESS_KEY:-minioadmin}} ${MINIO_ROOT_PASSWORD:-${MINIO_SECRET_KEY:-minioadmin}};
       mc mb myminio/documents --ignore-existing;
       mc mb myminio/exports --ignore-existing;
       mc anonymous set download myminio/exports;
@@ -506,8 +506,8 @@ services:
       REDIS_HOST: redis
       # MinIO
       MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-${MINIO_ACCESS_KEY:-minioadmin}}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-${MINIO_SECRET_KEY:-minioadmin}}
       MINIO_SECURE: "false"
       MINIO_BUCKET: documents
       MINIO_EXTERNAL_BASE_URL: /files
@@ -603,8 +603,8 @@ services:
       REDIS_CONSUMER_GROUP: workers
       # MinIO
       MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-${MINIO_ACCESS_KEY:-minioadmin}}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-${MINIO_SECRET_KEY:-minioadmin}}
       MINIO_SECURE: "false"
       MINIO_BUCKET: documents
       MINIO_EXTERNAL_BASE_URL: /files
@@ -886,7 +886,7 @@ services:
       AUTH_TOKEN_URL: http://authz-api:8010/oauth/token
       # Deploy API (for MLX auto-start)
       DEPLOY_API_URL: http://deploy-api:8011
-      LLM_BACKEND: ${LLM_BACKEND:-}
+      LLM_BACKEND: ${LLM_BACKEND:-${DETECTED_LLM_BACKEND:-}}
       # Email notifications - uses Bridge API (preferred) or direct SMTP as fallback
       BRIDGE_API_URL: "http://bridge-api:8081"
       SMTP_HOST: ${SMTP_HOST:-}
@@ -1018,8 +1018,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
       POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
       # MinIO credentials passed through so docker compose can use them for spawned services
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-${MINIO_ACCESS_KEY:-minioadmin}}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-${MINIO_SECRET_KEY:-minioadmin}}
       # Container IPs (use Docker service names in local dev)
       APPS_CONTAINER_IP: ${APPS_CONTAINER_IP:-host.docker.internal}
       APPS_CONTAINER_IP_STAGING: ${APPS_CONTAINER_IP_STAGING:-host.docker.internal}
@@ -1052,10 +1052,11 @@ services:
       HOST_AGENT_TOKEN: ${HOST_AGENT_TOKEN:-}
       # LLM Backend - set during install to tell deploy-api what hardware is available on host
       # Values: mlx (Apple Silicon), vllm (NVIDIA GPU), cloud (no local AI)
-      LLM_BACKEND: ${LLM_BACKEND:-}
+      LLM_BACKEND: ${LLM_BACKEND:-${DETECTED_LLM_BACKEND:-}}
       # LLM Services (for LLM chain validation)
       LITELLM_URL: http://litellm:4000
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-${LITELLM_MASTER_KEY:-sk-local-dev-key}}
       # Pass through the same effective key used by LiteLLM so deploy-api
       # starts agent-api with the correct token on first install.
       LITELLM_API_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}

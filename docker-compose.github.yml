@@ -81,6 +81,7 @@ services:
       # Docs API
       DOCS_API_URL: http://docs-api:8004
       # Deployment Service
+      DEPLOY_API_URL: http://deploy-api:8011
       DEPLOYMENT_SERVICE_URL: http://deploy-api:8011/api/v1/deployment
       # Bridge API
       BRIDGE_API_URL: http://bridge-api:8081

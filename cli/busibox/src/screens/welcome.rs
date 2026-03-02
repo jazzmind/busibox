@@ -274,7 +274,6 @@ fn render_status_panel(f: &mut Frame, app: &App, area: Rect) {
                 HealthStatus::Unhealthy => ("●", theme::warning()),
                 HealthStatus::Down => ("○", theme::error()),
                 HealthStatus::Checking => (spinner_char, theme::info()),
-                HealthStatus::Unknown => ("○", theme::dim()),
             };
 
             let count_str = format!("({}/{})", group.healthy, group.total);
@@ -426,13 +425,11 @@ fn handle_action_select(app: &mut App, action: &str) {
             app.pending_resume_install = true;
         }
         "Continue Install (Web)" => {
-            app.admin_login_loading = true;
-            app.admin_login_magic_link = None;
-            app.admin_login_totp_code = None;
-            app.admin_login_verify_url = None;
-            app.admin_login_error = None;
-            app.pending_admin_login = true;
-            app.screen = Screen::AdminLogin;
+            app.set_message(
+                "⠋ Syncing code to remote host...",
+                crate::app::MessageKind::Info,
+            );
+            app.pending_sync_admin_login = true;
         }
         "Clean Install" => {
             app.clean_install = true;

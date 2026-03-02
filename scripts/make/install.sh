@@ -1584,23 +1584,51 @@ EOF
 
 ensure_ssl_certs() {
     local ssl_dir="${REPO_ROOT}/ssl"
-    
+
     if [[ -f "${ssl_dir}/localhost.crt" && -f "${ssl_dir}/localhost.key" ]]; then
         info "SSL certificates already exist"
         return
     fi
-    
-    show_stage 40 "Generating SSL Certificates" "Self-signed certificates for local HTTPS. Your browser will show a warning."
-    
+
+    # Localhost certs are only needed for local Docker installs.
+    # Staging/production use provisioned certificates via Ansible.
+    if [[ "${PLATFORM:-}" != "docker" || "${SITE_DOMAIN:-localhost}" != "localhost" ]]; then
+        return
+    fi
+
+    show_stage 40 "Generating SSL Certificates" "Preparing local HTTPS certificates (mkcert preferred)."
+
     mkdir -p "$ssl_dir"
-    
+
+    # If running inside manager container, queue host-side mkcert setup
+    # because trust stores must be updated on the admin workstation.
+    if [[ -f /.dockerenv ]]; then
+        info "Running in manager container - scheduling host SSL trust setup"
+        touch "${REPO_ROOT}/.ssl-setup-needed"
+        info "Falling back to self-signed cert for this bootstrap run"
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout "${ssl_dir}/localhost.key" \
+            -out "${ssl_dir}/localhost.crt" \
+            -subj "/C=US/ST=Local/L=Local/O=Busibox/CN=localhost" \
+            2>/dev/null
+        success "SSL certificates generated (self-signed fallback)"
+        return
+    fi
+
+    if [[ -f "${REPO_ROOT}/scripts/setup/generate-local-ssl.sh" ]]; then
+        bash "${REPO_ROOT}/scripts/setup/generate-local-ssl.sh"
+        success "SSL certificates generated"
+        return
+    fi
+
+    # Fallback if helper script is unavailable.
     openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
         -keyout "${ssl_dir}/localhost.key" \
         -out "${ssl_dir}/localhost.crt" \
         -subj "/C=US/ST=Local/L=Local/O=Busibox/CN=localhost" \
         2>/dev/null
-    
-    success "SSL certificates generated"
+
+    success "SSL certificates generated (fallback)"
 }
 
 # =============================================================================
@@ -4900,8 +4928,9 @@ main() {
     start_embedding_download_background
     
     # Generate secrets and create .env file
-    # Skip if already done, but restore from vault if resuming
-    if [[ "$current_phase" != "secrets_generated" && "$current_phase" != "bootstrap_started" && "$current_phase" != "bootstrap_complete" ]]; then
+    # IMPORTANT: Resume/continue paths must NEVER regenerate secrets.
+    # Only fresh installs should generate and sync new vault secrets.
+    if [[ "$resuming" != "true" && "$current_phase" != "secrets_generated" && "$current_phase" != "bootstrap_started" && "$current_phase" != "bootstrap_complete" ]]; then
         generate_secrets
         create_env_file
         

@@ -1,4 +1,6 @@
-FROM ghcr.io/berriai/litellm:main-latest
+# Pin to a known stable LiteLLM release.
+# Using `main-latest` can pull breaking runtime changes (e.g. Prisma/query-engine regressions).
+FROM ghcr.io/berriai/litellm:v1.81.12-stable.2
 
 # Upgrade glibc to 2.43 so libopus (dependency of libsndfile) can load.
 # The base image ships glibc 2.42 but the Wolfi libopus package is compiled

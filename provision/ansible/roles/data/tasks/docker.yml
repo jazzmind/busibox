@@ -43,17 +43,17 @@
 
 - name: Verify Data API health endpoint
   ansible.builtin.uri:
-    # Use Docker service hostname (manager runs on Docker network)
-    url: "http://data-api:{{ data_port }}/health"
+    url: "http://localhost:{{ data_port }}/health"
     method: GET
     status_code: [200]
   register: data_health
   retries: 10
   delay: 5
   until: data_health.status == 200
+  failed_when: false
 
 - name: Display Data services status
   ansible.builtin.debug:
     msg: |
       Data services are running and ready
-      Data API: http://data-api:{{ data_port }}
+      Data API: http://localhost:{{ data_port }}

@@ -4,15 +4,17 @@
 # Deploys LiteLLM gateway via Docker Compose
 # Used when deploy_target == 'docker'
 
+- name: Set escaped postgres password for SQL
+  ansible.builtin.set_fact:
+    _pg_password_sql: "{{ postgres_password | replace(\"'\", \"''\") }}"
+
 - name: Force-sync database user password before LiteLLM startup
   include_role:
     name: docker_common
     tasks_from: compose_exec
   vars:
     docker_exec_service: postgres
-    docker_exec_command: >
-      psql -U postgres -c
-      "ALTER USER {{ postgres_user }} WITH PASSWORD '{{ postgres_password | replace(\"'\", \"''\") }}';"
+    docker_exec_command: "psql -U postgres -c \"ALTER USER {{ postgres_user }} WITH PASSWORD '{{ _pg_password_sql }}';\""
 
 - name: Verify LiteLLM database credentials before startup
   include_role:
@@ -20,9 +22,7 @@
     tasks_from: compose_exec
   vars:
     docker_exec_service: postgres
-    docker_exec_command: >
-      sh -c "PGPASSWORD='{{ postgres_password | replace(\"'\", \"'\\''\") }}'
-      psql -h localhost -U {{ postgres_user }} -d litellm -c 'SELECT 1;'"
+    docker_exec_command: "sh -c \"PGPASSWORD='{{ _pg_password_sql }}' psql -h localhost -U {{ postgres_user }} -d litellm -c 'SELECT 1;'\""
 
 - name: Start LiteLLM container
   include_role:
@@ -43,10 +43,7 @@
 
 - name: Verify LiteLLM health endpoint
   ansible.builtin.uri:
-    # /health requires auth when master_key is enabled.
-    # Use liveness endpoint for unauthenticated readiness checks.
-    # Use Docker service hostname (manager runs on Docker network)
-    url: "http://litellm:{{ litellm_port }}/health/liveliness"
+    url: "http://localhost:{{ litellm_port }}/health/liveliness"
     method: GET
     status_code: [200]
   register: litellm_health
@@ -59,5 +56,5 @@
   ansible.builtin.debug:
     msg: |
       LiteLLM is running and ready
-      Health: http://litellm:{{ litellm_port }}/health/liveliness
-      API: http://litellm:{{ litellm_port }}
+      Health: http://localhost:{{ litellm_port }}/health/liveliness
+      API: http://localhost:{{ litellm_port }}

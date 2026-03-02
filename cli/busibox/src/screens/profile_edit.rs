@@ -18,10 +18,11 @@ const FIELD_LABELS: &[&str] = &[
     "Tailscale IP",
     "Model Tier",
     "Admin Email",
+    "Allowed Domains",
     "Frontend Ref",
 ];
 
-const FIELD_COUNT: usize = 10;
+const FIELD_COUNT: usize = 11;
 
 const FIELD_LABEL: usize = 0;
 const FIELD_ENVIRONMENT: usize = 1;
@@ -32,7 +33,8 @@ const FIELD_REMOTE_PATH: usize = 5;
 const FIELD_TAILSCALE_IP: usize = 6;
 const FIELD_MODEL_TIER: usize = 7;
 const FIELD_ADMIN_EMAIL: usize = 8;
-const FIELD_FRONTEND_REF: usize = 9;
+const FIELD_ALLOWED_DOMAINS: usize = 9;
+const FIELD_FRONTEND_REF: usize = 10;
 
 // Default settings use a subset of fields
 const DEFAULTS_FIELD_LABELS: &[&str] = &[
@@ -627,6 +629,7 @@ fn default_profile() -> profile::Profile {
         kubeconfig: None,
         model_tier: None,
         admin_email: None,
+        allowed_email_domains: None,
         frontend_ref: None,
     }
 }
@@ -649,6 +652,10 @@ fn field_value(profile: &profile::Profile, field: usize) -> String {
                 .unwrap_or_else(|| "(auto-detect)".into())
         }
         FIELD_ADMIN_EMAIL => profile.admin_email.clone().unwrap_or_default(),
+        FIELD_ALLOWED_DOMAINS => profile
+            .allowed_email_domains
+            .clone()
+            .unwrap_or_default(),
         FIELD_FRONTEND_REF => profile.frontend_ref.clone().unwrap_or_else(|| "latest".into()),
         _ => String::new(),
     }
@@ -666,6 +673,7 @@ fn field_hint(field: usize, profile: &profile::Profile) -> String {
             hw_tier.unwrap_or_else(|| "←/→ to cycle tiers".into())
         }
         FIELD_ADMIN_EMAIL => "Used for initial login".into(),
+        FIELD_ALLOWED_DOMAINS => "Comma-separated domains; leave blank to allow any domain".into(),
         FIELD_FRONTEND_REF => "Git ref: 'latest' (newest release), 'main' (dev), or tag 'v1.0.0'".into(),
         FIELD_REMOTE_HOST => {
             if profile.remote {
@@ -758,6 +766,13 @@ fn apply_field(app: &mut App, field: usize, value: &str) {
         }
         FIELD_ADMIN_EMAIL => {
             profile.admin_email = if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            };
+        }
+        FIELD_ALLOWED_DOMAINS => {
+            profile.allowed_email_domains = if value.is_empty() {
                 None
             } else {
                 Some(value.to_string())

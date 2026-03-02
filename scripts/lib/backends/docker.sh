@@ -131,24 +131,42 @@ backend_service_action() {
 
     case "$action" in
         start)
-            info "Starting ${service}..."
-            docker start "$container" 2>/dev/null || {
-                warn "Container not found, trying to bring up..."
-                cd "$REPO_ROOT"
-                make docker-up SERVICE="${svc_container}" ENV="$env"
-            }
-            success "Service started"
+            if [[ "$service" == busibox-* && "$svc_container" == "core-apps" ]]; then
+                local app_short="${service#busibox-}"
+                info "Starting ${app_short} inside core-apps..."
+                docker exec "$container" supervisorctl start "busibox-${app_short}" 2>&1 || warn "Failed to start ${app_short}"
+                success "${app_short} started"
+            else
+                info "Starting ${service}..."
+                docker start "$container" 2>/dev/null || {
+                    warn "Container not found, trying to bring up..."
+                    cd "$REPO_ROOT"
+                    make docker-up SERVICE="${svc_container}" ENV="$env"
+                }
+                success "Service started"
+            fi
             ;;
 
         stop)
-            info "Stopping ${service}..."
-            docker stop "$container" 2>/dev/null || warn "Container not running"
-            success "Service stopped"
+            if [[ "$service" == busibox-* && "$svc_container" == "core-apps" ]]; then
+                local app_short="${service#busibox-}"
+                info "Stopping ${app_short} inside core-apps..."
+                docker exec "$container" supervisorctl stop "busibox-${app_short}" 2>&1 || warn "Failed to stop ${app_short}"
+                success "${app_short} stopped"
+            else
+                info "Stopping ${service}..."
+                docker stop "$container" 2>/dev/null || warn "Container not running"
+                success "Service stopped"
+            fi
             ;;
 
         restart)
-            # core-apps mode/source switching support
-            if [[ "$svc_container" == "core-apps" && ( -n "${CORE_APPS_MODE:-}" || -n "${CORE_APPS_SOURCE:-}" ) ]]; then
+            if [[ "$service" == busibox-* && "$svc_container" == "core-apps" ]]; then
+                local app_short="${service#busibox-}"
+                info "Restarting ${app_short} inside core-apps..."
+                docker exec "$container" supervisorctl restart "busibox-${app_short}" 2>&1 || warn "Failed to restart ${app_short}"
+                success "${app_short} restarted"
+            elif [[ "$svc_container" == "core-apps" && ( -n "${CORE_APPS_MODE:-}" || -n "${CORE_APPS_SOURCE:-}" ) ]]; then
                 info "Restarting core-apps (mode=${CORE_APPS_MODE:-auto}, source=${CORE_APPS_SOURCE:-auto})..."
                 cd "$REPO_ROOT"
                 export CORE_APPS_MODE
@@ -156,21 +174,28 @@ backend_service_action() {
                 make docker-up SERVICE="core-apps" ENV="$env"
                 success "core-apps restarted"
                 return $?
+            else
+                info "Restarting ${service}..."
+                docker restart "$container" 2>/dev/null || {
+                    warn "Container not found, trying to bring up..."
+                    cd "$REPO_ROOT"
+                    make docker-up SERVICE="${svc_container}" ENV="$env"
+                }
+                success "Service restarted"
             fi
-
-            info "Restarting ${service}..."
-            docker restart "$container" 2>/dev/null || {
-                warn "Container not found, trying to bring up..."
-                cd "$REPO_ROOT"
-                make docker-up SERVICE="${svc_container}" ENV="$env"
-            }
-            success "Service restarted"
             ;;
 
         logs)
-            info "Showing logs for ${service} (Ctrl+C to exit)..."
-            echo ""
-            docker logs -f "$container" 2>/dev/null || error "No logs available"
+            if [[ "$service" == busibox-* && "$svc_container" == "core-apps" ]]; then
+                local app_short="${service#busibox-}"
+                info "Showing logs for ${app_short} inside core-apps (Ctrl+C to exit)..."
+                echo ""
+                docker exec "$container" supervisorctl tail -f "busibox-${app_short}" 2>/dev/null || error "No logs available"
+            else
+                info "Showing logs for ${service} (Ctrl+C to exit)..."
+                echo ""
+                docker logs -f "$container" 2>/dev/null || error "No logs available"
+            fi
             ;;
 
         status)
@@ -188,6 +213,24 @@ backend_service_action() {
             ;;
 
         redeploy)
+            # Individual frontend app: rebuild inside running core-apps container
+            # without recreating the container (which would kill other apps).
+            if [[ "$service" == busibox-* && "$svc_container" == "core-apps" ]]; then
+                local app_short_name="${service#busibox-}"
+                info "Redeploying ${app_short_name} inside core-apps container..."
+                if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+                    error "core-apps container (${container}) is not running"
+                    return 1
+                fi
+                if docker exec "$container" /usr/local/bin/entrypoint.sh deploy "${app_short_name}"; then
+                    success "${app_short_name} redeployed"
+                else
+                    error "Failed to redeploy ${app_short_name}"
+                    return 1
+                fi
+                return 0
+            fi
+
             if [[ "$svc_container" == "core-apps" && ( -n "${CORE_APPS_MODE:-}" || -n "${CORE_APPS_SOURCE:-}" ) ]]; then
                 info "Rebuilding core-apps (mode=${CORE_APPS_MODE:-auto}, source=${CORE_APPS_SOURCE:-auto})..."
                 cd "$REPO_ROOT"
@@ -239,19 +282,64 @@ backend_service_action() {
             export CONTAINER_PREFIX="$prefix"
             export COMPOSE_PROJECT_NAME="${prefix}-busibox"
             export BUSIBOX_ENV="$env"
+            # Ensure LLM backend context is available to Ansible/docker compose.
+            # Use explicit env first, then fall back to persisted install/profile state.
+            local llm_backend llm_tier env_file
+            llm_backend="${LLM_BACKEND:-$(get_state "LLM_BACKEND" "" 2>/dev/null || echo "")}"
+            llm_tier="${LLM_TIER:-$(get_state "LLM_TIER" "" 2>/dev/null || echo "")}"
+            if [[ -z "$llm_backend" ]] && type profile_get_active &>/dev/null && type profile_get &>/dev/null; then
+                local active_profile profile_llm_backend profile_model_tier profile_memory_tier
+                active_profile="$(profile_get_active 2>/dev/null || echo "")"
+                if [[ -n "$active_profile" ]]; then
+                    profile_llm_backend="$(profile_get "$active_profile" "hardware.llm_backend" 2>/dev/null || echo "")"
+                    profile_model_tier="$(profile_get "$active_profile" "model_tier" 2>/dev/null || echo "")"
+                    profile_memory_tier="$(profile_get "$active_profile" "hardware.memory_tier" 2>/dev/null || echo "")"
+                    if [[ -n "$profile_llm_backend" ]]; then
+                        llm_backend="$profile_llm_backend"
+                    fi
+                    if [[ -z "$llm_tier" ]]; then
+                        llm_tier="${profile_model_tier:-$profile_memory_tier}"
+                    fi
+                fi
+            fi
+            if [[ -z "$llm_backend" || -z "$llm_tier" ]]; then
+                env_file="$(get_env_file_path 2>/dev/null || echo "${REPO_ROOT}/.env.${prefix}")"
+                if [[ -f "$env_file" ]]; then
+                    if [[ -z "$llm_backend" ]]; then
+                        llm_backend="$(awk -F= '/^LLM_BACKEND=/{print $2; exit}' "$env_file" | tr -d '"' || true)"
+                    fi
+                    if [[ -z "$llm_tier" ]]; then
+                        llm_tier="$(awk -F= '/^LLM_TIER=/{print $2; exit}' "$env_file" | tr -d '"' || true)"
+                    fi
+                fi
+            fi
+            if [[ -n "$llm_backend" ]]; then
+                export LLM_BACKEND="$llm_backend"
+                export DETECTED_LLM_BACKEND="$llm_backend"
+            fi
+            if [[ -n "$llm_tier" ]]; then
+                export LLM_TIER="$llm_tier"
+            fi
 
             if [[ "$prefix" != "dev" ]]; then
                 export DOCKER_DEV_MODE="github"
             fi
 
-            local cmd="ansible-playbook -i ${inventory} ${playbook} --tags ${tag}"
+            local cmd="ansible-playbook -i ${inventory} ${playbook} --tags ${tag} -e docker_force_recreate=true"
 
             local _vpd="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}"
             local vault_pass_file="${_vpd}/.busibox-vault-pass-${prefix}"
             if [[ ! -f "$vault_pass_file" ]]; then
                 vault_pass_file="$HOME/.busibox-vault-pass-${prefix}"
             fi
-            if [[ -f "$vault_pass_file" ]]; then
+
+            # Prefer env-injected vault password (used by CLI/TUI manage flows).
+            # This avoids requiring plaintext vault password files on disk.
+            local env_script="${REPO_ROOT}/scripts/lib/vault-pass-from-env.sh"
+            if [[ -n "${ANSIBLE_VAULT_PASSWORD:-}" && -f "$env_script" ]]; then
+                [[ -x "$env_script" ]] || chmod +x "$env_script"
+                cmd="${cmd} --vault-password-file ${env_script}"
+            elif [[ -f "$vault_pass_file" ]]; then
                 cmd="${cmd} --vault-password-file ${vault_pass_file}"
             elif [[ -f "$HOME/.vault_pass" ]]; then
                 cmd="${cmd} --vault-password-file $HOME/.vault_pass"

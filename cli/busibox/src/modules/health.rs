@@ -8,19 +8,6 @@ pub enum HealthStatus {
     Unhealthy,
     Down,
     Checking,
-    Unknown,
-}
-
-impl HealthStatus {
-    pub fn label(&self) -> &'static str {
-        match self {
-            HealthStatus::Healthy => "healthy",
-            HealthStatus::Unhealthy => "unhealthy",
-            HealthStatus::Down => "down",
-            HealthStatus::Checking => "checking...",
-            HealthStatus::Unknown => "unknown",
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -90,9 +77,8 @@ const CORE_SERVICES: &[ServiceHealthDef] = &[
     ServiceHealthDef {
         name: "neo4j",
         group: "Core Services",
-        check: CheckMethod::Http {
-            path: "/",
-            port: 7474,
+        check: CheckMethod::Cli {
+            command: "docker exec {PREFIX}-neo4j wget -q --spider http://localhost:7474 2>/dev/null && echo ok",
         },
     },
 ];
@@ -126,7 +112,7 @@ const API_SERVICES: &[ServiceHealthDef] = &[
         name: "data-worker",
         group: "APIs",
         check: CheckMethod::Cli {
-            command: "docker exec {PREFIX}-data-worker pgrep -f worker 2>/dev/null",
+            command: "docker ps --filter name=^{PREFIX}-data-worker$ --filter status=running --format '{{.Names}}' 2>/dev/null",
         },
     },
     ServiceHealthDef {
@@ -210,17 +196,50 @@ const APP_SERVICES: &[ServiceHealthDef] = &[
     ServiceHealthDef {
         name: "portal",
         group: "Apps",
-        check: CheckMethod::Http {
-            path: "/portal/api/health",
-            port: 3000,
+        check: CheckMethod::Cli {
+            command: "docker exec {PREFIX}-core-apps curl -sf -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:3000/portal/api/health 2>/dev/null",
         },
     },
     ServiceHealthDef {
         name: "admin",
         group: "Apps",
-        check: CheckMethod::Http {
-            path: "/admin/api/health",
-            port: 3002,
+        check: CheckMethod::Cli {
+            command: "docker exec {PREFIX}-core-apps curl -sf -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:3002/admin/api/health 2>/dev/null",
+        },
+    },
+    ServiceHealthDef {
+        name: "agents",
+        group: "Apps",
+        check: CheckMethod::Cli {
+            command: "docker exec {PREFIX}-core-apps curl -sf -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:3001/agents/api/health 2>/dev/null",
+        },
+    },
+    ServiceHealthDef {
+        name: "chat",
+        group: "Apps",
+        check: CheckMethod::Cli {
+            command: "docker exec {PREFIX}-core-apps curl -sf -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:3003/chat/api/health 2>/dev/null",
+        },
+    },
+    ServiceHealthDef {
+        name: "appbuilder",
+        group: "Apps",
+        check: CheckMethod::Cli {
+            command: "docker exec {PREFIX}-core-apps curl -sf -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:3004/builder/api/health 2>/dev/null",
+        },
+    },
+    ServiceHealthDef {
+        name: "media",
+        group: "Apps",
+        check: CheckMethod::Cli {
+            command: "docker exec {PREFIX}-core-apps curl -sf -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:3005/media/api/health 2>/dev/null",
+        },
+    },
+    ServiceHealthDef {
+        name: "documents",
+        group: "Apps",
+        check: CheckMethod::Cli {
+            command: "docker exec {PREFIX}-core-apps curl -sf -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:3006/documents/api/health 2>/dev/null",
         },
     },
 ];

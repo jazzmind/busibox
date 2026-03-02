@@ -206,7 +206,6 @@ fn main() -> Result<()> {
                         app::MessageKind::Error,
                     );
                 }
-                screens::manage::load_service_status(&mut app);
             }
         }
 
@@ -215,6 +214,12 @@ fn main() -> Result<()> {
             app.pending_resume_install = false;
             perform_resume_install(&mut app);
             trigger_side_effects(&mut app);
+        }
+
+        // Handle deferred "Continue Install (Web)" sync + admin login flow.
+        if app.pending_sync_admin_login {
+            app.pending_sync_admin_login = false;
+            perform_sync_then_admin_login(&mut app);
         }
 
         if event::poll(Duration::from_millis(100))? {
@@ -404,6 +409,9 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
     // 'q' during log viewer: close log viewer and return to manage screen
     if key.code == KeyCode::Char('q') && app.manage_log_visible {
         app.manage_log_visible = false;
+        if !app.manage_action_running {
+            screens::manage::load_service_status(app);
+        }
         return;
     }
 
@@ -532,6 +540,77 @@ fn perform_resume_install(app: &mut App) {
     app.clear_message();
     app.screen = Screen::Install;
     app.menu_selected = 0;
+}
+
+fn perform_sync_then_admin_login(app: &mut App) {
+    use crate::app::{MessageKind, SetupTarget};
+
+    if let Some((_, profile)) = app.active_profile() {
+        let profile = profile.clone();
+        if profile.remote {
+            app.setup_target = SetupTarget::Remote;
+            if let Some(host) = &profile.remote_host {
+                app.remote_host_input = host.clone();
+            }
+            if let Some(user) = &profile.remote_user {
+                app.remote_user_input = user.clone();
+            }
+            if let Some(path) = &profile.remote_busibox_path {
+                app.remote_path_input = path.clone();
+            }
+
+            // Ensure SSH connection is available and valid.
+            if app.ssh_connection.is_none() {
+                if let (Some(host), Some(key)) = (&profile.remote_host, &profile.remote_ssh_key) {
+                    let user = profile.remote_user.as_deref().unwrap_or("root");
+                    let conn = crate::modules::ssh::SshConnection::new(host, user, key);
+                    if conn.test_connection() {
+                        app.ssh_connection = Some(conn);
+                    } else {
+                        app.set_message(
+                            "SSH connection failed — cannot sync remote code",
+                            MessageKind::Error,
+                        );
+                        return;
+                    }
+                } else {
+                    app.set_message(
+                        "No SSH credentials configured in profile",
+                        MessageKind::Error,
+                    );
+                    return;
+                }
+            }
+
+            let host = profile.effective_host().unwrap_or("localhost");
+            let user = profile.effective_user();
+            let key = profile.effective_ssh_key();
+            let remote_path = profile.effective_remote_path();
+
+            match remote::sync(&app.repo_root, host, user, key, remote_path) {
+                Ok(()) => {
+                    app.set_message("✓ Files synced", MessageKind::Success);
+                }
+                Err(e) => {
+                    app.set_message(
+                        &format!("Remote sync failed: {e}"),
+                        MessageKind::Error,
+                    );
+                    return;
+                }
+            }
+        } else {
+            app.setup_target = SetupTarget::Local;
+        }
+    }
+
+    app.admin_login_loading = true;
+    app.admin_login_magic_link = None;
+    app.admin_login_totp_code = None;
+    app.admin_login_verify_url = None;
+    app.admin_login_error = None;
+    app.pending_admin_login = true;
+    app.screen = Screen::AdminLogin;
 }
 
 /// Generate admin login credentials by running `make login --json` and parsing output.

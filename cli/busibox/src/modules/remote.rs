@@ -93,19 +93,6 @@ pub fn exec_make(
     Ok(status.code().unwrap_or(1))
 }
 
-/// Execute a make command on the remote host and capture stdout.
-pub fn exec_make_capture(
-    ssh: &SshConnection,
-    remote_path: &str,
-    make_args: &str,
-) -> Result<String> {
-    let cmd = format!(
-        "{SHELL_PATH_PREAMBLE}\
-         cd {remote_path} && USE_MANAGER=0 make {make_args} 2>&1"
-    );
-    ssh.run(&cmd).map(|s| strip_ansi(&s))
-}
-
 /// Run a local make command interactively (for long-running commands like logs).
 /// Caller must suspend the TUI first with tui::suspend().
 pub fn run_local_make_interactive(repo_root: &Path, args: &str) -> Result<i32> {
@@ -124,21 +111,6 @@ pub fn run_local_make(repo_root: &Path, args: &str) -> Result<i32> {
         .stderr(Stdio::inherit())
         .status()?;
     Ok(status.code().unwrap_or(1))
-}
-
-/// Run a local make command with USE_MANAGER=0 and capture stdout.
-pub fn run_local_make_capture(repo_root: &Path, args: &str) -> Result<String> {
-    let output = Command::new("make")
-        .args(args.split_whitespace())
-        .env("USE_MANAGER", "0")
-        .current_dir(repo_root)
-        .output()?;
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Ok(strip_ansi(&combined))
 }
 
 /// Run a local make command with USE_MANAGER=0, capture all output, return (exit_code, output).

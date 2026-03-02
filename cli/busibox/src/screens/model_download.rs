@@ -361,6 +361,7 @@ fn save_profile_and_continue(app: &mut App) {
         kubeconfig: None,
         model_tier: None,
         admin_email: None,
+        allowed_email_domains: None,
         frontend_ref: None,
     };
 

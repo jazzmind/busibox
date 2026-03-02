@@ -83,6 +83,8 @@ services:
       # because both apps run in the same container but need different values
       # Backend service URLs (for server-side API calls)
       AGENT_API_URL: http://agent-api:8000
+      DATA_API_URL: http://data-api:8002
+      SEARCH_API_URL: http://search-api:8003
       DATA_API_HOST: data-api
       DATA_API_PORT: "8002"
       SEARCH_API_HOST: search-api
@@ -187,9 +189,13 @@ services:
       busibox-net:
         aliases:
           - core-apps
-          - busibox-portal      # For backward compatibility
-          - busibox-agents  # For backward compatibility
-          - busibox-appbuilder  # For backward compatibility
+          - busibox-portal
+          - busibox-admin
+          - busibox-agents
+          - busibox-chat
+          - busibox-appbuilder
+          - busibox-media
+          - busibox-documents
 
   # User Apps - Development Mode
   # Mount dev-apps directory for local app development with hot-reload

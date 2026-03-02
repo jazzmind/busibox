@@ -391,23 +391,32 @@ case "${1:-start}" in
             clone_monorepo
             install_deps
             build_shared
+        else
+            # Pull latest code before rebuilding
+            if update_monorepo; then
+                log_info "Code updated, reinstalling dependencies..."
+                install_deps
+                build_shared
+            fi
         fi
 
-        # Stop the app
-        supervisorctl stop "busibox-${APP_NAME}" 2>/dev/null || true
+        deploy_app="${APP_NAME}"
 
-        # Rebuild
-        build_app "${APP_NAME}"
+        # Stop the app
+        supervisorctl stop "busibox-${deploy_app}" 2>/dev/null || true
+
+        # Rebuild (build_app may export APP_NAME for Next.js, so use local copy)
+        build_app "${deploy_app}"
 
         # Run migrations if portal
-        if [ "${APP_NAME}" = "portal" ]; then
+        if [ "${deploy_app}" = "portal" ]; then
             run_migrations
         fi
 
         # Restart
-        supervisorctl start "busibox-${APP_NAME}" 2>&1 || true
+        supervisorctl start "busibox-${deploy_app}" 2>&1 || true
 
-        log_success "${APP_NAME} redeployed"
+        log_success "${deploy_app} redeployed"
         ;;
 
     status)

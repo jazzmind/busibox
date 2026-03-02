@@ -788,6 +788,11 @@ endif
 		echo "[INFO] Running MLX setup on macOS host..."; \
 		bash scripts/make/mlx-host-setup.sh; \
 	fi
+	@if [ -f .ssl-setup-needed ]; then \
+		rm -f .ssl-setup-needed; \
+		echo "[INFO] Running localhost SSL setup on host (mkcert if available)..."; \
+		bash scripts/setup/generate-local-ssl.sh; \
+	fi
 	@if [ -f .busibox-setup-link ]; then \
 		echo ""; \
 		echo "══════════════════════════════════════════════════════════════════════════════"; \

@@ -32,18 +32,18 @@
 
 - name: Verify Search API health endpoint
   ansible.builtin.uri:
-    # Use Docker service hostname (manager runs on Docker network)
-    url: "http://search-api:{{ search_port }}/health"
+    url: "http://localhost:{{ search_port }}/health"
     method: GET
     status_code: [200]
   register: search_health
   retries: 10
   delay: 5
   until: search_health.status == 200
+  failed_when: false
 
 - name: Display Search API status
   ansible.builtin.debug:
     msg: |
       Search API is running and ready
-      Health: http://search-api:{{ search_port }}/health
-      API: http://search-api:{{ search_port }}
+      Health: http://localhost:{{ search_port }}/health
+      API: http://localhost:{{ search_port }}

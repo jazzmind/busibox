@@ -13,6 +13,11 @@ fn service_to_make_name(display_name: &str) -> &str {
     match display_name {
         "portal" => "busibox-portal",
         "admin" => "busibox-admin",
+        "agents" => "busibox-agents",
+        "chat" => "busibox-chat",
+        "appbuilder" => "busibox-appbuilder",
+        "media" => "busibox-media",
+        "documents" => "busibox-documents",
         other => other,
     }
 }
@@ -61,6 +66,11 @@ fn get_all_services(app: &App) -> Vec<(&'static str, String)> {
     services.push(("Frontend", "proxy".to_string()));
     services.push(("Frontend", "portal".to_string()));
     services.push(("Frontend", "admin".to_string()));
+    services.push(("Frontend", "agents".to_string()));
+    services.push(("Frontend", "chat".to_string()));
+    services.push(("Frontend", "appbuilder".to_string()));
+    services.push(("Frontend", "media".to_string()));
+    services.push(("Frontend", "documents".to_string()));
     services
 }
 
@@ -378,6 +388,7 @@ fn handle_log_viewer_key(app: &mut App, key: KeyEvent) {
         KeyCode::Esc | KeyCode::Char('l') => {
             if !app.manage_action_running {
                 app.manage_log_visible = false;
+                load_service_status(app);
             }
         }
         KeyCode::Up | KeyCode::Char('k') => {
@@ -488,7 +499,6 @@ pub fn load_service_status(app: &mut App) {
                         HealthStatus::Unhealthy => "unhealthy".to_string(),
                         HealthStatus::Down => "down".to_string(),
                         HealthStatus::Checking => "checking...".to_string(),
-                        HealthStatus::Unknown => "unknown".to_string(),
                     }
                 } else {
                     "unknown".to_string()

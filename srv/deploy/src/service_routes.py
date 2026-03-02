@@ -301,6 +301,18 @@ def get_docker_compose_base_cmd(busibox_host_path: str) -> list:
         '-f', f'{busibox_host_path}/docker-compose.local-dev.yml'
     ]
 
+
+def _required_env_for_service(service: str) -> list[str]:
+    """Required env vars that must be present to avoid compose fallback defaults."""
+    logical = service
+    if service in {"busibox-portal", "busibox-agents", "busibox-appbuilder"}:
+        logical = "core-apps"
+    required = {
+        "litellm": ["POSTGRES_PASSWORD", "LITELLM_MASTER_KEY", "LITELLM_SALT_KEY"],
+        "core-apps": ["GITHUB_AUTH_TOKEN"],
+    }
+    return required.get(logical, [])
+
 # Host Agent configuration (for MLX control on Apple Silicon)
 # The host-agent runs on the host machine and is accessible via host.docker.internal
 HOST_AGENT_URL = os.getenv("HOST_AGENT_URL", "http://host.docker.internal:8089")
@@ -482,9 +494,41 @@ async def start_service(
                 'data-api': ['data-api', 'data-worker'],  # Data needs both API and worker
             }
             services_to_start = service_groups.get(service, [service])
+            required_env = _required_env_for_service(service)
+            missing = [k for k in required_env if not os.environ.get(k)]
+            if missing:
+                missing_str = ", ".join(missing)
+                logger.error(f"Refusing to start {service}: missing required env vars: {missing_str}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        f"Missing required deploy-api environment variables for {service}: {missing_str}. "
+                        "Refusing to use docker-compose fallback defaults."
+                    ),
+                )
             
-            # --no-deps: don't restart dependent services (avoids breaking already-running services)
-            cmd.extend(['up', '-d', '--no-deps'] + services_to_start)
+            # Check if container already exists so we force-recreate with current env
+            container_prefix = os.getenv('CONTAINER_PREFIX', 'dev')
+            force_recreate = False
+            for svc_name in services_to_start:
+                cname = f"{container_prefix}-{svc_name}"
+                try:
+                    chk = subprocess.run(
+                        ['docker', 'inspect', '--format', '{{.State.Status}}', cname],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    if chk.returncode == 0 and chk.stdout.strip() in ('running', 'created', 'exited', 'paused'):
+                        force_recreate = True
+                        break
+                except Exception:
+                    pass
+
+            up_args = ['up', '-d']
+            if force_recreate:
+                up_args.append('--force-recreate')
+            up_args.append('--no-deps')
+            up_args.extend(services_to_start)
+            cmd.extend(up_args)
             logger.info(f"Running command: {' '.join(cmd)}")
             
             env = os.environ.copy()
@@ -589,9 +633,13 @@ async def check_service_health(
     # These are Next.js apps running in the core-apps container or separately
     # They don't have their own containers, so we check them via nginx BEFORE container check
     nginx_apps = {
-        'busibox-agents': {'path': '/agents', 'health_endpoint': '/api/health'},
         'busibox-portal': {'path': '/portal', 'health_endpoint': '/api/health'},
+        'busibox-admin': {'path': '/admin', 'health_endpoint': '/api/health'},
+        'busibox-agents': {'path': '/agents', 'health_endpoint': '/api/health'},
+        'busibox-chat': {'path': '/chat', 'health_endpoint': '/api/health'},
         'busibox-appbuilder': {'path': '/builder', 'health_endpoint': '/api/health'},
+        'busibox-media': {'path': '/media', 'health_endpoint': '/api/health'},
+        'busibox-documents': {'path': '/documents', 'health_endpoint': '/api/health'},
     }
     
     # Check nginx apps first (they don't have their own containers)
@@ -1166,8 +1214,12 @@ async def start_service_sse(
                         'bridge-api': ('bridge-api', 'bridge'),  # bridge-lxc
                         'bridge': ('bridge-api', 'bridge'),  # alias
                         'busibox-portal': ('core-apps', 'busibox-portal'),  # apps-lxc
+                        'busibox-admin': ('core-apps', 'busibox-admin'),  # apps-lxc
                         'busibox-agents': ('core-apps', 'busibox-agents'),  # apps-lxc
+                        'busibox-chat': ('core-apps', 'busibox-chat'),  # apps-lxc
                         'busibox-appbuilder': ('core-apps', 'busibox-appbuilder'),  # apps-lxc
+                        'busibox-media': ('core-apps', 'busibox-media'),  # apps-lxc
+                        'busibox-documents': ('core-apps', 'busibox-documents'),  # apps-lxc
                     }
                     
                     if service not in proxmox_service_map:
@@ -1263,12 +1315,119 @@ async def start_service_sse(
                 # Map logical service names to actual container(s) to start
                 service_groups = {
                     'data-api': ['data-api', 'data-worker'],  # Data needs both API and worker
-                    # Frontend apps run inside the shared core-apps service
+                    # Frontend apps run inside the shared core-apps service.
+                    # portal+admin are pre-built; others are built on demand via docker exec.
                     'busibox-portal': ['core-apps'],
+                    'busibox-admin': ['core-apps'],
                     'busibox-agents': ['core-apps'],
+                    'busibox-chat': ['core-apps'],
                     'busibox-appbuilder': ['core-apps'],
+                    'busibox-media': ['core-apps'],
+                    'busibox-documents': ['core-apps'],
                 }
                 services_to_start = service_groups.get(service, [service])
+                required_env = _required_env_for_service(service)
+                missing = [k for k in required_env if not env.get(k)]
+                if missing:
+                    missing_str = ", ".join(missing)
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'Missing required deploy-api env vars for {service}: {missing_str}. Refusing to use compose defaults.', 'done': True})}\n\n"
+                    return
+                
+                # Core apps (busibox-*) run inside a shared core-apps container.
+                # portal+admin are pre-built at initial container start.
+                # Other apps (agents, chat, documents, media, appbuilder) are
+                # built on demand via `docker exec` into the running container.
+                core_app_names = {
+                    'busibox-portal', 'busibox-admin', 'busibox-agents',
+                    'busibox-chat', 'busibox-appbuilder', 'busibox-media',
+                    'busibox-documents',
+                }
+                if service in core_app_names:
+                    container_prefix = os.getenv('CONTAINER_PREFIX', 'dev')
+                    core_container = f"{container_prefix}-core-apps"
+                    short_name = service.replace('busibox-', '')
+                    
+                    # Check if core-apps container is running
+                    try:
+                        chk = await asyncio.create_subprocess_exec(
+                            'docker', 'inspect', '--format', '{{.State.Status}}', core_container,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        chk_out, _ = await chk.communicate()
+                        core_running = chk.returncode == 0 and chk_out.decode().strip() == 'running'
+                    except Exception:
+                        core_running = False
+                    
+                    if core_running:
+                        yield f"data: {json.dumps({'type': 'info', 'message': f'Building and starting {short_name} inside core-apps container...'})}\n\n"
+                        
+                        # Runtime image uses entrypoint.sh deploy <name> (supervisord).
+                        # Dev image uses the app-manager API on port 9999.
+                        # Try runtime entrypoint first; if it doesn't exist, use app-manager.
+                        deploy_cmd = [
+                            'docker', 'exec', core_container,
+                            'bash', '-c',
+                            f'if [ -x /usr/local/bin/entrypoint.sh ]; then '
+                            f'/usr/local/bin/entrypoint.sh deploy {short_name}; '
+                            f'else '
+                            f'cd /srv/busibox-frontend && '
+                            f'pnpm --filter @jazzmind/busibox-app build && '
+                            f'cd apps/{short_name} && rm -rf .next 2>/dev/null; '
+                            f'NODE_ENV=production pnpm run build && '
+                            f'curl -sf -X POST http://localhost:9999/restart '
+                            f'-H "Content-Type: application/json" '
+                            f'-d \'{{"app":"{short_name}"}}\'; fi',
+                        ]
+                        
+                        deploy_process = await asyncio.create_subprocess_exec(
+                            *deploy_cmd,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        
+                        deploy_queue = asyncio.Queue()
+                        
+                        async def read_deploy_stream(stream, stream_type):
+                            while True:
+                                line = await stream.readline()
+                                if not line:
+                                    break
+                                message = line.decode('utf-8', errors='replace').rstrip()
+                                if message:
+                                    await deploy_queue.put({
+                                        'type': 'log',
+                                        'stream': stream_type,
+                                        'message': message
+                                    })
+                            await deploy_queue.put(None)
+                        
+                        deploy_stdout_task = asyncio.create_task(read_deploy_stream(deploy_process.stdout, "stdout"))
+                        deploy_stderr_task = asyncio.create_task(read_deploy_stream(deploy_process.stderr, "stderr"))
+                        
+                        deploy_done_count = 0
+                        while deploy_done_count < 2:
+                            try:
+                                msg = await asyncio.wait_for(deploy_queue.get(), timeout=0.1)
+                                if msg is None:
+                                    deploy_done_count += 1
+                                else:
+                                    yield f"data: {json.dumps(msg)}\n\n"
+                            except asyncio.TimeoutError:
+                                if deploy_stdout_task.done() and deploy_stderr_task.done():
+                                    break
+                                continue
+                        
+                        deploy_returncode = await deploy_process.wait()
+                        
+                        if deploy_returncode == 0:
+                            yield f"data: {json.dumps({'type': 'success', 'message': f'{service} built and started successfully', 'done': True})}\n\n"
+                        else:
+                            yield f"data: {json.dumps({'type': 'error', 'message': f'{service} deploy failed (exit code {deploy_returncode})', 'done': True})}\n\n"
+                        return
+                    
+                    # core-apps not running yet - fall through to docker compose up
+                    yield f"data: {json.dumps({'type': 'info', 'message': 'core-apps container not running, starting via docker compose...'})}\n\n"
                 
                 # If rebuild requested, build the container(s) first
                 if rebuild:
@@ -1329,12 +1488,39 @@ async def start_service_sse(
                     
                     yield f"data: {json.dumps({'type': 'success', 'message': 'Build completed successfully'})}\n\n"
                 
+                # Check if the container is already running so we can force-recreate
+                # to ensure it picks up current env vars (secrets).
+                container_prefix = os.getenv('CONTAINER_PREFIX', 'dev')
+                existing_containers = set()
+                for svc_name in services_to_start:
+                    cname = f"{container_prefix}-{svc_name}"
+                    try:
+                        check = await asyncio.create_subprocess_exec(
+                            'docker', 'inspect', '--format', '{{.State.Status}}', cname,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        stdout_bytes, _ = await check.communicate()
+                        if check.returncode == 0 and stdout_bytes.decode().strip() in ('running', 'created', 'exited', 'paused'):
+                            existing_containers.add(svc_name)
+                    except Exception:
+                        pass
+
+                force_recreate = len(existing_containers) > 0
+
+                if force_recreate:
+                    existing_str = ', '.join(existing_containers)
+                    yield f"data: {json.dumps({'type': 'info', 'message': f'Recreating existing container(s): {existing_str} to sync env vars'})}\n\n"
+
                 # For services with infra deps, let docker compose start dependencies
                 # For API services, use --no-deps to avoid restarting already-running services
-                if service in services_with_infra_deps:
-                    compose_cmd.extend(['up', '-d'] + services_to_start)
-                else:
-                    compose_cmd.extend(['up', '-d', '--no-deps'] + services_to_start)
+                up_args = ['up', '-d']
+                if force_recreate:
+                    up_args.append('--force-recreate')
+                if service not in services_with_infra_deps:
+                    up_args.append('--no-deps')
+                up_args.extend(services_to_start)
+                compose_cmd.extend(up_args)
                 
                 process = await asyncio.create_subprocess_exec(
                     *compose_cmd,
@@ -1435,12 +1621,10 @@ async def start_service_sse(
                         yield f"data: {json.dumps({'type': 'info', 'message': f'Starting init container {init_service}...'})}\n\n"
                         
                         # Remove existing init container if it exists (to avoid name conflicts)
+                        rm_cmd = get_docker_compose_base_cmd(busibox_host_path)
+                        rm_cmd.extend(['rm', '-f', init_service])
                         rm_process = await asyncio.create_subprocess_exec(
-                            'docker', 'compose', 
-                            '-p', COMPOSE_PROJECT_NAME,
-                            '-f', f'{busibox_host_path}/docker-compose.yml',
-                            '-f', f'{busibox_host_path}/docker-compose.local-dev.yml',
-                            'rm', '-f', init_service,
+                            *rm_cmd,
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.PIPE,
                             env=env,
@@ -1450,12 +1634,10 @@ async def start_service_sse(
                         
                         # Start init container (depends_on will ensure service is healthy first)
                         # Use --force-recreate to ensure we get a fresh container
+                        init_cmd = get_docker_compose_base_cmd(busibox_host_path)
+                        init_cmd.extend(['up', '--no-deps', '--force-recreate', init_service])
                         init_process = await asyncio.create_subprocess_exec(
-                            'docker', 'compose',
-                            '-p', COMPOSE_PROJECT_NAME,
-                            '-f', f'{busibox_host_path}/docker-compose.yml',
-                            '-f', f'{busibox_host_path}/docker-compose.local-dev.yml',
-                            'up', '--no-deps', '--force-recreate', init_service,
+                            *init_cmd,
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.PIPE,
                             env=env,

@@ -476,6 +476,7 @@ show_main_menu() {
         box_line "  ${DIM}5) Login (requires installation)${NC}"
         box_line "  ${BOLD}6)${NC} Build App"
         box_line "  ${BOLD}7)${NC} Install MCP locally"
+        box_line "  ${BOLD}c)${NC} HTTPS Certificate Setup"
     else
         box_line "  ${BOLD}1)${NC} Uninstall / Reinstall"
         box_line "  ${BOLD}2)${NC} Manage"
@@ -498,9 +499,11 @@ show_main_menu() {
             fi
             box_line "  ${BOLD}7)${NC} Build App"
             box_line "  ${BOLD}8)${NC} Install MCP locally"
+            box_line "  ${BOLD}c)${NC} HTTPS Certificate Setup"
         else
             box_line "  ${BOLD}6)${NC} Build App"
             box_line "  ${BOLD}7)${NC} Install MCP locally"
+            box_line "  ${BOLD}c)${NC} HTTPS Certificate Setup"
         fi
     fi
     
@@ -723,6 +726,9 @@ show_help() {
     box_empty
     box_line "  ${BOLD}Login${NC}"
     box_line "    ${CYAN}make login${NC}    Generate admin magic link and open browser"
+    box_empty
+    box_line "  ${BOLD}HTTPS Certificate${NC}"
+    box_line "    ${CYAN}c${NC}             Open cert setup menu (local/target/both)"
     box_empty
     box_line "  ${BOLD}Update${NC}"
     box_line "    ${CYAN}make update${NC}   Update APIs + selected core apps"
@@ -985,6 +991,19 @@ handle_build_app() {
     read -n 1 -s -r -p "Press any key to continue..."
 }
 
+handle_cert_setup() {
+    local env backend
+    if [[ -n "${_active_profile:-}" ]]; then
+        env=$(profile_get "$_active_profile" "environment")
+        backend=$(profile_get "$_active_profile" "backend")
+    else
+        env=$(get_state "ENVIRONMENT" || echo "development")
+        backend=$(get_current_backend "$env")
+    fi
+
+    bash "${SCRIPT_DIR}/cert-setup.sh" --env "${env}" --backend "${backend}"
+}
+
 # ============================================================================
 # Main Loop
 # ============================================================================
@@ -1122,6 +1141,9 @@ main() {
                 if [[ "$active_backend" == "k8s" ]]; then
                     handle_mcp_install
                 fi
+                ;;
+            c|C)
+                handle_cert_setup
                 ;;
             p|P)
                 select_profile

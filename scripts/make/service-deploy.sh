@@ -275,7 +275,13 @@ deploy_service() {
     fi
     
     # Build ansible-playbook command
+    # Always force-recreate on Docker so containers pick up fresh vault secrets.
+    # Without this, `docker compose up` sees no config change and leaves existing
+    # containers running with stale/placeholder env vars.
     local cmd="ansible-playbook -i ${inventory} ${playbook} --tags ${tag}"
+    if [[ "$backend" == "docker" ]]; then
+        cmd="${cmd} -e docker_force_recreate=true"
+    fi
     
     # Vault password: use vault-pass-from-env.sh when ANSIBLE_VAULT_PASSWORD is set.
     # This is the primary mechanism — the CLI injects the env var, and the script echoes it.

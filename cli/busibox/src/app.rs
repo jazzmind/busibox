@@ -182,6 +182,8 @@ pub struct App {
 
     // Pending admin login generation
     pub pending_admin_login: bool,
+    // Pending "Continue Install (Web)" flow: sync remote repo first, then run admin login.
+    pub pending_sync_admin_login: bool,
 
     pub ssh_tunnel_process: Option<std::process::Child>,
 }
@@ -429,6 +431,7 @@ impl App {
             admin_login_error: None,
             admin_login_loading: false,
             pending_admin_login: false,
+            pending_sync_admin_login: false,
             ssh_tunnel_process: None,
         }
     }
@@ -467,23 +470,6 @@ impl App {
 
     pub fn env_choices(&self) -> &[&str] {
         &["staging", "production"]
-    }
-
-    /// Get the LLM service names based on detected hardware.
-    /// Returns ("litellm", "vllm") or ("litellm", "mlx") depending on backend.
-    /// Falls back to ("litellm", "vllm") if no hardware detected.
-    pub fn llm_services(&self) -> Vec<&str> {
-        use crate::modules::hardware::LlmBackend;
-        let hw = if self.setup_target == SetupTarget::Remote {
-            self.remote_hardware.as_ref()
-        } else {
-            self.local_hardware.as_ref()
-        };
-        match hw.map(|h| &h.llm_backend) {
-            Some(LlmBackend::Mlx) => vec!["litellm", "mlx"],
-            Some(LlmBackend::Cloud) => vec!["litellm"],
-            _ => vec!["litellm", "vllm"],
-        }
     }
 
     #[allow(dead_code)]

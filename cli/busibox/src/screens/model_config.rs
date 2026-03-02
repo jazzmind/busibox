@@ -412,6 +412,7 @@ fn save_profile_and_continue(app: &mut App) {
         } else {
             Some(app.admin_email_input.trim().to_string())
         },
+        allowed_email_domains: None,
         frontend_ref: None,
     };
 

@@ -54,6 +54,8 @@ pub struct Profile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admin_email: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_email_domains: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frontend_ref: Option<String>,
 }
 
@@ -192,6 +194,7 @@ pub fn write_profile_state(repo_root: &Path, profile_id: &str, profile: &Profile
         .lines()
         .filter(|l| {
             !l.starts_with("ADMIN_EMAIL=")
+                && !l.starts_with("ALLOWED_DOMAINS=")
                 && !l.starts_with("MODEL_TIER=")
                 && !l.starts_with("LLM_BACKEND=")
         })
@@ -200,6 +203,9 @@ pub fn write_profile_state(repo_root: &Path, profile_id: &str, profile: &Profile
 
     if let Some(ref email) = profile.admin_email {
         lines.push(format!("ADMIN_EMAIL={email}"));
+    }
+    if let Some(ref domains) = profile.allowed_email_domains {
+        lines.push(format!("ALLOWED_DOMAINS={domains}"));
     }
     if let Some(tier) = profile.effective_model_tier() {
         lines.push(format!("MODEL_TIER={}", tier.name()));

@@ -1016,6 +1016,9 @@ fn spawn_install_worker(app: &mut App) {
     let admin_email: Option<String> = app
         .active_profile()
         .and_then(|(_, p)| p.admin_email.clone());
+    let allowed_email_domains: Option<String> = app
+        .active_profile()
+        .and_then(|(_, p)| p.allowed_email_domains.clone());
     let frontend_ref: Option<String> = app
         .active_profile()
         .and_then(|(_, p)| p.frontend_ref.clone());
@@ -1408,6 +1411,10 @@ fn spawn_install_worker(app: &mut App) {
                 .filter(|e| !e.is_empty())
                 .map(|email| format!("sed -i.bak \"s/CHANGE_ME_ADMIN_EMAILS/{email}/g\" \"$VAULT_FILE\" && rm -f \"${{VAULT_FILE}}.bak\"\n"))
                 .unwrap_or_default();
+            let allowed_domains_sed = allowed_email_domains
+                .as_deref()
+                .map(|domains| format!("sed -i.bak \"s/CHANGE_ME_ALLOWED_EMAIL_DOMAINS/{domains}/g\" \"$VAULT_FILE\" && rm -f \"${{VAULT_FILE}}.bak\"\n"))
+                .unwrap_or_else(|| "sed -i.bak \"s/CHANGE_ME_ALLOWED_EMAIL_DOMAINS//g\" \"$VAULT_FILE\" && rm -f \"${VAULT_FILE}.bak\"\n".to_string());
 
             // Replace GitHub token placeholder in vault
             // Try: token from local ~/.gittoken (baked in), then remote ~/.gittoken
@@ -1483,6 +1490,7 @@ sed -i.bak \
   "$VAULT_FILE"
 rm -f "${{VAULT_FILE}}.bak"
 {admin_email_sed}
+{allowed_domains_sed}
 {github_token_sed}
 REMAINING=$(grep -c 'CHANGE_ME' "$VAULT_FILE" 2>/dev/null || echo 0)
 
@@ -1501,6 +1509,7 @@ echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain
 "#,
                 vault_rel = vault_rel,
                 admin_email_sed = admin_email_sed,
+                allowed_domains_sed = allowed_domains_sed,
                 github_token_sed = github_token_sed,
             );
 
@@ -1638,11 +1647,17 @@ fi
         let mut any_failed = false;
         for (stage_name, _description, services) in &stages {
             // Skip stages where all services are already healthy
-            let stage_services_to_deploy: Vec<String> = services
-                .iter()
-                .filter(|s| !already_healthy.contains(*s))
-                .cloned()
-                .collect();
+            let force_stage_run =
+                clean_install && services.iter().any(|s| s.as_str() == "_docker_cleanup");
+            let stage_services_to_deploy: Vec<String> = if force_stage_run {
+                services.clone()
+            } else {
+                services
+                    .iter()
+                    .filter(|s| !already_healthy.contains(*s))
+                    .cloned()
+                    .collect()
+            };
             if stage_services_to_deploy.is_empty() {
                 let _ = tx.send(InstallUpdate::Log(format!(
                     "✓ {stage_name} already installed, skipping"
@@ -2225,6 +2240,10 @@ fi
                             .filter(|e| !e.is_empty())
                             .map(|email| format!("sed -i.bak \"s/CHANGE_ME_ADMIN_EMAILS/{email}/g\" \"$VAULT_FILE\" && rm -f \"${{VAULT_FILE}}.bak\"\n"))
                             .unwrap_or_default();
+                        let allowed_domains_sed = allowed_email_domains
+                            .as_deref()
+                            .map(|domains| format!("sed -i.bak \"s/CHANGE_ME_ALLOWED_EMAIL_DOMAINS/{domains}/g\" \"$VAULT_FILE\" && rm -f \"${{VAULT_FILE}}.bak\"\n"))
+                            .unwrap_or_else(|| "sed -i.bak \"s/CHANGE_ME_ALLOWED_EMAIL_DOMAINS//g\" \"$VAULT_FILE\" && rm -f \"${VAULT_FILE}.bak\"\n".to_string());
 
                         let github_token_sed = match github_token.as_deref() {
                             Some(t) => format!(
@@ -2298,6 +2317,7 @@ sed -i.bak \
   "$VAULT_FILE"
 rm -f "${{VAULT_FILE}}.bak"
 {admin_email_sed}
+{allowed_domains_sed}
 {github_token_sed}
 REMAINING=$(grep -c 'CHANGE_ME' "$VAULT_FILE" 2>/dev/null || echo 0)
 
@@ -2316,6 +2336,7 @@ echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain
 "#,
                             vault_rel = vault_rel,
                             admin_email_sed = admin_email_sed,
+                            allowed_domains_sed = allowed_domains_sed,
                             github_token_sed = github_token_sed,
                         );
 
@@ -2577,7 +2598,7 @@ fi
                             docker compose -p "$project" down --remove-orphans 2>&1 || true
                         done
                         # Also clean up any orphaned busibox containers
-                        ORPHANS=$(docker ps -a --filter "name=.*busibox.*\|.*-postgres\|.*-redis\|.*-minio\|.*-milvus\|.*-authz\|.*-agent\|.*-litellm" --format '{{{{.Names}}}}' 2>/dev/null | grep -E "(dev|staging|prod|demo)-" || true)
+                        ORPHANS=$(docker ps -a --format '{{{{.Names}}}}' 2>/dev/null | grep -E "^(dev|staging|prod|demo)-(postgres|redis|minio|minio-init|milvus|milvus-etcd|milvus-minio|milvus-init|neo4j|authz|agent|data-api|data-worker|search-api|deploy-api|docs-api|embedding-api|litellm|proxy|core-apps|admin|portal|chat|documents|media|appbuilder|busibox)" || true)
                         if [ -n "$ORPHANS" ]; then
                             echo "  Removing orphaned containers: $ORPHANS"
                             echo "$ORPHANS" | xargs docker rm -f 2>/dev/null || true

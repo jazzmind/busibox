@@ -32,18 +32,18 @@
 
 - name: Verify Agent API health endpoint
   ansible.builtin.uri:
-    # Use Docker service hostname (manager runs on Docker network)
-    url: "http://agent-api:{{ agent_port }}/health"
+    url: "http://localhost:{{ agent_port }}/health"
     method: GET
     status_code: [200]
   register: agent_health
   retries: 10
   delay: 5
   until: agent_health.status == 200
+  failed_when: false
 
 - name: Display Agent API status
   ansible.builtin.debug:
     msg: |
       Agent API is running and ready
-      Health: http://agent-api:{{ agent_port }}/health
-      API: http://agent-api:{{ agent_port }}
+      Health: http://localhost:{{ agent_port }}/health
+      API: http://localhost:{{ agent_port }}

@@ -143,7 +143,7 @@ get_container_for_service() {
         host-agent) echo "host-agent" ;;
 
         # Frontend
-        core-apps|apps|busibox-portal|busibox-agents|busibox-appbuilder) echo "core-apps" ;;
+        core-apps|apps|busibox-portal|busibox-admin|busibox-agents|busibox-chat|busibox-appbuilder|busibox-media|busibox-documents) echo "core-apps" ;;
         nginx|proxy) echo "proxy" ;;
 
         # User apps
@@ -209,7 +209,7 @@ get_ansible_tag() {
         minio|files) echo "minio" ;;
         milvus) echo "milvus" ;;
         neo4j|graph) echo "neo4j" ;;
-        core-apps|apps|busibox-portal|busibox-agents|busibox-appbuilder) echo "core-apps" ;;
+        core-apps|apps|busibox-portal|busibox-admin|busibox-agents|busibox-chat|busibox-appbuilder|busibox-media|busibox-documents) echo "core-apps" ;;
         nginx|proxy) echo "nginx" ;;
         *) echo "$service" ;;
     esac
