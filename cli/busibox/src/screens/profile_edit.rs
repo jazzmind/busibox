@@ -46,6 +46,14 @@ const FIELD_FRONTEND_REF: usize = 12;
 const FIELD_SITE_DOMAIN: usize = 13;
 const FIELD_SSL_CERT_NAME: usize = 14;
 
+fn visible_fields(profile: &profile::Profile) -> Vec<usize> {
+    let mut fields: Vec<usize> = (0..FIELD_COUNT).collect();
+    if profile.environment == "production" {
+        fields.retain(|&f| f != FIELD_USE_PROD_VLLM);
+    }
+    fields
+}
+
 // Default settings use a subset of fields
 const DEFAULTS_FIELD_LABELS: &[&str] = &[
     "Admin Email",
@@ -119,8 +127,10 @@ pub fn render(f: &mut Frame, app: &App) {
         }
     } else {
         let profile = get_editing_profile(app);
+        let vis = visible_fields(&profile);
 
-        for (i, label) in FIELD_LABELS.iter().enumerate() {
+        for &i in &vis {
+            let label = FIELD_LABELS[i];
             let value = if app.profile_editing && i == app.profile_edit_field {
                 format!("{}▎", app.profile_edit_buffer)
             } else {
@@ -428,18 +438,33 @@ fn handle_nav_mode(app: &mut App, key: KeyEvent) {
             app.input_mode = InputMode::Normal;
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            if app.profile_edit_field > 0 {
-                app.profile_edit_field -= 1;
+            if app.profile_edit_id.as_deref() == Some("__defaults__") {
+                if app.profile_edit_field > 0 {
+                    app.profile_edit_field -= 1;
+                }
+            } else {
+                let profile = get_editing_profile(app);
+                let vis = visible_fields(&profile);
+                if let Some(pos) = vis.iter().position(|&f| f == app.profile_edit_field) {
+                    if pos > 0 {
+                        app.profile_edit_field = vis[pos - 1];
+                    }
+                }
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            let max_field = if app.profile_edit_id.as_deref() == Some("__defaults__") {
-                DEFAULTS_FIELD_COUNT - 1
+            if app.profile_edit_id.as_deref() == Some("__defaults__") {
+                if app.profile_edit_field < DEFAULTS_FIELD_COUNT - 1 {
+                    app.profile_edit_field += 1;
+                }
             } else {
-                FIELD_COUNT - 1
-            };
-            if app.profile_edit_field < max_field {
-                app.profile_edit_field += 1;
+                let profile = get_editing_profile(app);
+                let vis = visible_fields(&profile);
+                if let Some(pos) = vis.iter().position(|&f| f == app.profile_edit_field) {
+                    if pos < vis.len() - 1 {
+                        app.profile_edit_field = vis[pos + 1];
+                    }
+                }
             }
         }
         KeyCode::Enter => {
@@ -975,6 +1000,16 @@ fn save_profile(app: &mut App) {
             }
         }
         return;
+    }
+
+    if let Some(profiles) = &mut app.profiles {
+        if let Some(ref id) = app.profile_edit_id {
+            if let Some(p) = profiles.profiles.get_mut(id) {
+                if p.environment == "production" && p.use_production_vllm.is_some() {
+                    p.use_production_vllm = None;
+                }
+            }
+        }
     }
 
     if let Some(profiles) = &app.profiles {

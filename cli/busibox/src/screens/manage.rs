@@ -741,6 +741,7 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
         }
 
         // For litellm redeploy/restart, regenerate model_config.yml (with keep/overwrite prompt)
+        let mut model_config_regenerated = false;
         if (service == "litellm") && (action == "redeploy" || action == "restart") && is_remote {
             if let Some((ref host, ref user, ref key)) = ssh_details {
                 let display_host = profile_host.as_deref().unwrap_or(host);
@@ -858,6 +859,7 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
                             )));
                         }
                     }
+                    model_config_regenerated = true;
                 } else {
                     let _ = tx.send(ManageUpdate::Log(
                         "Keeping existing model_config.yml".into(),
@@ -905,6 +907,77 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
                 let _ = tx.send(ManageUpdate::Log(format!(
                     "✓ {action} {service} successful"
                 )));
+
+                // After litellm redeploy with regenerated model config, offer vLLM redeploy
+                if model_config_regenerated && service == "litellm" && is_remote {
+                    let (confirm_tx, confirm_rx) = std::sync::mpsc::channel::<bool>();
+                    let _ = tx.send(ManageUpdate::WaitForConfirm {
+                        prompt: "Also redeploy vllm to apply model changes?".to_string(),
+                        response: confirm_tx,
+                    });
+                    let do_vllm = confirm_rx.recv().unwrap_or(false);
+                    if do_vllm {
+                        let _ = tx.send(ManageUpdate::Log(
+                            "Redeploying vllm...".into(),
+                        ));
+                        let env_val = profile_env.as_deref().unwrap_or("development");
+                        let backend_val = profile_backend.as_deref().unwrap_or("docker");
+                        let vllm_args = format!(
+                            "manage SERVICE=vllm ACTION=redeploy BUSIBOX_ENV={env_val} BUSIBOX_BACKEND={backend_val}"
+                        );
+                        let _ = tx.send(ManageUpdate::Log(format!("Running: make {vllm_args}")));
+
+                        let vllm_result: color_eyre::Result<(i32, String)> = if let Some((ref host, ref user, ref key)) = ssh_details {
+                            let ssh = crate::modules::ssh::SshConnection::new(
+                                profile_host.as_deref().unwrap_or(host),
+                                user,
+                                key,
+                            );
+                            if let Some(ref vp) = vault_password {
+                                remote::exec_make_quiet_with_vault(&ssh, &remote_path, &vllm_args, vp)
+                            } else {
+                                remote::exec_make_quiet(&ssh, &remote_path, &vllm_args)
+                            }
+                        } else {
+                            Err(color_eyre::eyre::eyre!("No SSH connection"))
+                        };
+
+                        match vllm_result {
+                            Ok((0, vllm_out)) => {
+                                for line in vllm_out.lines() {
+                                    let trimmed = line.trim();
+                                    if !trimmed.is_empty() {
+                                        let _ = tx.send(ManageUpdate::Log(format!("  {trimmed}")));
+                                    }
+                                }
+                                let _ = tx.send(ManageUpdate::Log(
+                                    "✓ vllm redeploy successful".into(),
+                                ));
+                            }
+                            Ok((code, vllm_out)) => {
+                                for line in vllm_out.lines() {
+                                    let trimmed = line.trim();
+                                    if !trimmed.is_empty() {
+                                        let _ = tx.send(ManageUpdate::Log(format!("  {trimmed}")));
+                                    }
+                                }
+                                let _ = tx.send(ManageUpdate::Log(format!(
+                                    "WARNING: vllm redeploy failed (exit code {code})"
+                                )));
+                            }
+                            Err(e) => {
+                                let _ = tx.send(ManageUpdate::Log(format!(
+                                    "WARNING: vllm redeploy error: {e}"
+                                )));
+                            }
+                        }
+                    } else {
+                        let _ = tx.send(ManageUpdate::Log(
+                            "Skipping vLLM redeploy".into(),
+                        ));
+                    }
+                }
+
                 let _ = tx.send(ManageUpdate::Complete { success: true });
             }
             Ok((code, output)) => {
