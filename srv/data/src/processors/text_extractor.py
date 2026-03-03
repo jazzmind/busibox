@@ -1252,6 +1252,62 @@ class TextExtractor:
             )
             return self._extract_all_pages_pdfplumber(file_path)
     
+    def extract_pages_fast(self, file_path: str, page_numbers: List[int]) -> List[str]:
+        """
+        Fast extraction of a subset of pages using pymupdf4llm.
+
+        Args:
+            file_path: Path to the PDF file
+            page_numbers: List of 1-based page numbers to extract
+
+        Returns:
+            List of per-page markdown strings in the same order as page_numbers.
+        """
+        if not page_numbers:
+            return []
+
+        zero_based = [p - 1 for p in page_numbers]
+        try:
+            import pymupdf.layout  # noqa: F401 -- activates layout mode
+            import pymupdf4llm
+            chunks = pymupdf4llm.to_markdown(
+                file_path, pages=zero_based, page_chunks=True,
+            )
+            page_texts = [chunk.get("text", "") for chunk in chunks]
+
+            logger.info(
+                "Partial fast extraction complete (pymupdf4llm + layout)",
+                file_path=file_path,
+                requested_pages=len(page_numbers),
+                returned_pages=len(page_texts),
+                total_chars=sum(len(t) for t in page_texts),
+            )
+            return page_texts
+        except Exception as e:
+            logger.warning(
+                "pymupdf4llm partial extraction failed, falling back to pdfplumber",
+                file_path=file_path,
+                pages=page_numbers,
+                error=str(e),
+            )
+            return [self._extract_page_pdfplumber(file_path, p) for p in page_numbers]
+
+    def get_page_count(self, file_path: str) -> int:
+        """Get the total number of pages in a PDF without extracting text."""
+        try:
+            import pymupdf
+            doc = pymupdf.open(file_path)
+            count = len(doc)
+            doc.close()
+            return count
+        except Exception:
+            try:
+                with pdfplumber.open(file_path) as pdf:
+                    return len(pdf.pages)
+            except Exception as e:
+                logger.error("Failed to get page count", file_path=file_path, error=str(e))
+                return 0
+
     def _extract_page_pdfplumber(self, file_path: str, page_number: int) -> str:
         """Fallback per-page extraction using pdfplumber (raw text, no markdown)."""
         try:

@@ -40,28 +40,26 @@ def mock_config_disabled():
 
 @pytest.fixture
 def mock_registry():
-    """Mock model registry - returns cleanup model (phi-4) from registry."""
+    """Mock model registry - returns cleanup model (qwen3.5-35b-multi) from registry."""
     registry = Mock()
-    # Model registry returns "phi-4" for cleanup purpose (from model_registry.yml)
-    # get_model("cleanup") should return "phi-4"
     registry.get_model = Mock(side_effect=lambda purpose: {
-        "cleanup": "phi-4",
-        "parsing": "phi-4",
+        "cleanup": "qwen3.5-35b-multi",
+        "parsing": "qwen3.5-35b-multi",
     }.get(purpose, ValueError(f"Unknown purpose: {purpose}")))
     
     # get_config("cleanup") should return full config
     registry.get_config = Mock(side_effect=lambda purpose: {
         "cleanup": {
-            "model": "phi-4",
-            "model_name": "microsoft/Phi-4-multimodal-instruct",
+            "model": "qwen3.5-35b-a3b-awq-4bit-multi",
+            "model_name": "cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit",
             "temperature": 0.1,
             "max_tokens": 32768,
             "provider": "litellm",
             "endpoint": "/chat/completions",
         },
         "parsing": {
-            "model": "phi-4",
-            "model_name": "microsoft/Phi-4-multimodal-instruct",
+            "model": "qwen3.5-35b-a3b-awq-4bit-multi",
+            "model_name": "cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit",
             "temperature": 0.1,
             "max_tokens": 8192,
             "provider": "litellm",

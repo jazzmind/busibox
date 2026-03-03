@@ -288,11 +288,67 @@ class MarkdownGenerator:
 
     def _normalize_tables(self, markdown: str) -> str:
         """
-        Ensure markdown tables are properly formatted.
+        Detect and repair markdown tables: ensure consistent column counts,
+        add missing separator rows, and trim cell whitespace.
         """
-        # Tables in markdown use | separators
-        # This is a placeholder for more sophisticated table normalization
-        return markdown
+        lines = markdown.split('\n')
+        result: list = []
+        table_block: list = []
+
+        def _flush_table(block: list) -> list:
+            if len(block) < 2:
+                return block
+
+            parsed_rows = []
+            for line in block:
+                cells = [c.strip() for c in line.strip().strip('|').split('|')]
+                parsed_rows.append(cells)
+
+            target_cols = max(len(r) for r in parsed_rows)
+
+            has_sep = False
+            sep_idx = -1
+            for i, cells in enumerate(parsed_rows):
+                if all(re.match(r'^:?-{2,}:?$', c.strip()) for c in cells if c.strip()):
+                    has_sep = True
+                    sep_idx = i
+                    break
+
+            normalized: list = []
+            for i, cells in enumerate(parsed_rows):
+                is_sep = (i == sep_idx) if has_sep else False
+                if is_sep:
+                    sep_cells = []
+                    for _ in range(target_cols):
+                        sep_cells.append('---')
+                    normalized.append('| ' + ' | '.join(sep_cells) + ' |')
+                    continue
+                while len(cells) < target_cols:
+                    cells.append('')
+                cells = cells[:target_cols]
+                normalized.append('| ' + ' | '.join(cells) + ' |')
+
+            if not has_sep and len(normalized) >= 1:
+                sep_cells = ['---'] * target_cols
+                sep_line = '| ' + ' | '.join(sep_cells) + ' |'
+                normalized.insert(1, sep_line)
+
+            return normalized
+
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith('|') and stripped.endswith('|') and '|' in stripped[1:-1]:
+                table_block.append(line)
+            else:
+                if table_block:
+                    result.extend(_flush_table(table_block))
+                    table_block = []
+                result.append(line)
+
+        if table_block:
+            result.extend(_flush_table(table_block))
+
+        return '\n'.join(result)
 
     def _extract_metadata(self, markdown: str) -> dict:
         """

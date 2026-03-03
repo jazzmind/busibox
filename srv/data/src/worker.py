@@ -233,12 +233,15 @@ class IngestWorker(PipelineMixin, TriggerMixin):
         self.image_extractor = ImageExtractor()
         
         from processors.progressive_pipeline import ProgressivePipeline
+        from processors.vision_extractor import VisionExtractor
+        self.vision_extractor = VisionExtractor(config=self.config)
         self.progressive_pipeline = ProgressivePipeline(
             text_extractor=self.text_extractor,
             chunker=self.chunker,
             llm_cleanup=self.llm_cleanup,
             markdown_generator=self.markdown_generator,
             config=self.config,
+            vision_extractor=self.vision_extractor,
         )
         
         logger.info("All services connected")

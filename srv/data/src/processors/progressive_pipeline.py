@@ -28,6 +28,7 @@ from processors.text_extractor import TextExtractor
 from processors.chunker import Chunker, Chunk
 from processors.llm_cleanup import LLMCleanup, CleanupAssessment
 from processors.markdown_generator import MarkdownGenerator
+from processors.vision_extractor import VisionExtractor
 
 logger = structlog.get_logger()
 
@@ -51,6 +52,7 @@ class PageText:
     source_pass: int
     needs_marker: bool = False
     marker_reason: str = ""
+    flags: set = field(default_factory=set)
 
     @staticmethod
     def compute_hash(text: str) -> str:
@@ -107,12 +109,14 @@ class ProgressivePipeline:
         llm_cleanup: LLMCleanup,
         markdown_generator: MarkdownGenerator,
         config: dict,
+        vision_extractor: Optional[VisionExtractor] = None,
     ):
         self.text_extractor = text_extractor
         self.chunker = chunker
         self.llm_cleanup = llm_cleanup
         self.markdown_generator = markdown_generator
         self.config = config
+        self.vision_extractor = vision_extractor
 
     # =========================================================================
     # Pass 1: Fast Extract (pdfplumber)
@@ -186,6 +190,124 @@ class ProgressivePipeline:
         )
 
     # =========================================================================
+    # Pass 1 Batch: extract a page range for incremental availability
+    # =========================================================================
+
+    def run_pass1_batch(
+        self,
+        ctx: ProgressiveContext,
+        start_page: int,
+        end_page: int,
+        progress_callback: Optional[Callable[[str, int, str], None]] = None,
+    ) -> Tuple[List[PageText], str]:
+        """
+        Extract a range of pages (1-based inclusive) and return PageText objects.
+
+        Does NOT modify ctx.page_texts -- the caller accumulates batches into
+        ctx and decides when to set ctx.pass1_texts.
+
+        Returns:
+            (batch_page_texts, combined_text_for_batch)
+        """
+        page_numbers = list(range(start_page, end_page + 1))
+        page_texts_raw = self.text_extractor.extract_pages_fast(
+            ctx.file_path, page_numbers,
+        )
+
+        batch_page_texts: List[PageText] = []
+        for i, text in enumerate(page_texts_raw):
+            page_num = start_page + i
+            flags = self._detect_page_flags(text)
+            pt = PageText(
+                page_number=page_num,
+                text=text,
+                text_hash=PageText.compute_hash(text),
+                source_pass=1,
+                flags=flags,
+            )
+            batch_page_texts.append(pt)
+
+            if progress_callback and ctx.page_count > 0:
+                pct = 5 + int(25 * page_num / ctx.page_count)
+                progress_callback(
+                    "parsing", pct,
+                    f"Pass 1: Extracted page {page_num}/{ctx.page_count}",
+                )
+
+        combined = self._combine_page_texts(batch_page_texts)
+        return batch_page_texts, combined
+
+    def chunk_text_for_batch(
+        self,
+        batch_page_texts: List[PageText],
+        overlap_page_texts: List[PageText],
+        chunk_index_offset: int,
+    ) -> List[Chunk]:
+        """
+        Chunk a page batch with overlap context from the previous batch.
+
+        Prepends overlap_page_texts so the chunker sees continuous text across
+        the boundary, then discards chunks whose char_offset falls within the
+        overlap region and re-indexes starting from chunk_index_offset.
+        """
+        all_page_texts = overlap_page_texts + batch_page_texts
+        combined = self._combine_page_texts(all_page_texts)
+        if not combined.strip():
+            return []
+
+        chunks = self.chunker.chunk(combined)
+
+        page_boundaries = self._build_page_boundaries(all_page_texts)
+        for chunk in chunks:
+            if chunk.char_offset is not None:
+                chunk.page_number = self._page_for_offset(
+                    chunk.char_offset, page_boundaries
+                )
+
+        if overlap_page_texts:
+            overlap_combined = self._combine_page_texts(overlap_page_texts)
+            overlap_len = len(overlap_combined) + len("\n\n---\n\n")
+            chunks = [c for c in chunks if c.char_offset is None or c.char_offset >= overlap_len]
+
+        for i, chunk in enumerate(chunks):
+            chunk.chunk_index = chunk_index_offset + i
+
+        return chunks
+
+    @staticmethod
+    def _detect_page_flags(text: str) -> set:
+        """Detect quality flags for a page based on its extracted text."""
+        flags: set = set()
+        stripped = text.strip()
+
+        if len(stripped) < 50:
+            flags.add("low_text")
+
+        placeholder_pattern = re.compile(
+            r'==>.*?picture.*?intentionally\s+omitted\s*<==', re.IGNORECASE
+        )
+        placeholder_count = len(placeholder_pattern.findall(text))
+        if placeholder_count > 0:
+            flags.add("has_images")
+
+        chart_keywords = re.compile(
+            r'\b(Figure|Chart|Graph|Exhibit)\b', re.IGNORECASE
+        )
+        if placeholder_count > 0 and chart_keywords.search(text):
+            flags.add("has_chart")
+
+        pipe_lines = [
+            ln for ln in text.split('\n')
+            if ln.strip().startswith('|') and ln.strip().endswith('|')
+        ]
+        if len(pipe_lines) >= 2:
+            col_counts = [ln.count('|') - 1 for ln in pipe_lines]
+            if len(set(col_counts)) > 1:
+                flags.add("garbled_table")
+
+        return flags
+
+    # =========================================================================
     # Pass 2: OCR Enhancement (Surya)
     # =========================================================================
 
@@ -195,44 +317,120 @@ class ProgressivePipeline:
         progress_callback: Optional[Callable[[str, int, str], None]] = None,
     ) -> PassResult:
         """
-        Pass 2: Tesseract OCR per-page, only update pages where OCR improves text.
-        Tesseract is fast on CPU with no heavy model loading required.
+        Pass 2: Flag-based OCR + vision enhancement.
+
+        Only processes pages that were flagged during Pass 1. Dispatch:
+          - low_text: Tesseract first, vision OCR if still poor
+          - has_chart / has_images: vision describe/chart (skip Tesseract)
+          - garbled_table: vision table extraction
+          - No flags: skip entirely
         """
         start = time.time()
         if progress_callback:
-            progress_callback("available", 30, "Pass 2: OCR enhancement")
+            progress_callback("available", 30, "Pass 2: OCR + vision enhancement")
 
-        ocr_texts = self.text_extractor.ocr_all_pages_tesseract(
-            ctx.file_path, ctx.page_count
+        flagged_indices = [
+            i for i, pt in enumerate(ctx.page_texts) if pt.flags
+        ]
+
+        if not flagged_indices:
+            logger.info("Pass 2: No flagged pages, skipping", file_id=ctx.file_id)
+            combined = self._combine_page_texts(ctx.page_texts)
+            ctx.pass_metadata["pass2"] = {
+                "pages_changed": 0, "pages_skipped": len(ctx.page_texts),
+                "flagged_pages": 0,
+            }
+            return PassResult(
+                pass_number=2, page_texts=ctx.page_texts,
+                pages_changed=0, pages_skipped=len(ctx.page_texts),
+                combined_text=combined, duration_seconds=time.time() - start,
+            )
+
+        logger.info(
+            "Pass 2: Processing flagged pages",
+            file_id=ctx.file_id,
+            flagged_count=len(flagged_indices),
+            total_pages=ctx.page_count,
         )
 
         pages_changed = 0
         pages_skipped = 0
+        vision_used = 0
 
-        for i, ocr_text in enumerate(ocr_texts):
-            if i >= len(ctx.page_texts):
-                break
+        for progress_idx, i in enumerate(flagged_indices):
+            pt = ctx.page_texts[i]
+            flags = pt.flags
+            improved_text: Optional[str] = None
 
-            existing = ctx.page_texts[i]
-            ocr_hash = PageText.compute_hash(ocr_text)
+            if "has_chart" in flags and self.vision_extractor:
+                result = asyncio.get_event_loop().run_until_complete(
+                    self.vision_extractor.analyse_page(
+                        ctx.file_path, pt.page_number, mode="chart",
+                        existing_text=pt.text,
+                    )
+                )
+                if result.success and result.text:
+                    improved_text = result.text
+                    vision_used += 1
 
-            if self._is_meaningful_improvement(existing.text, ocr_text):
+            elif "garbled_table" in flags and self.vision_extractor:
+                result = asyncio.get_event_loop().run_until_complete(
+                    self.vision_extractor.analyse_page(
+                        ctx.file_path, pt.page_number, mode="table",
+                        existing_text=pt.text,
+                    )
+                )
+                if result.success and result.text:
+                    improved_text = result.text
+                    vision_used += 1
+
+            elif "has_images" in flags and self.vision_extractor:
+                result = asyncio.get_event_loop().run_until_complete(
+                    self.vision_extractor.analyse_page(
+                        ctx.file_path, pt.page_number, mode="describe",
+                        existing_text=pt.text,
+                    )
+                )
+                if result.success and result.text:
+                    improved_text = result.text
+                    vision_used += 1
+
+            elif "low_text" in flags:
+                ocr_texts = self.text_extractor.ocr_all_pages_tesseract(
+                    ctx.file_path, ctx.page_count
+                )
+                ocr_text = ocr_texts[i] if i < len(ocr_texts) else ""
+                if self._is_meaningful_improvement(pt.text, ocr_text):
+                    improved_text = ocr_text
+                elif self.vision_extractor:
+                    result = asyncio.get_event_loop().run_until_complete(
+                        self.vision_extractor.analyse_page(
+                            ctx.file_path, pt.page_number, mode="ocr",
+                            existing_text=pt.text,
+                        )
+                    )
+                    if result.success and result.text:
+                        improved_text = result.text
+                        vision_used += 1
+
+            if improved_text and self._is_meaningful_improvement(pt.text, improved_text):
                 ctx.page_texts[i] = PageText(
-                    page_number=i + 1,
-                    text=ocr_text,
-                    text_hash=ocr_hash,
+                    page_number=pt.page_number,
+                    text=improved_text,
+                    text_hash=PageText.compute_hash(improved_text),
                     source_pass=2,
+                    flags=pt.flags,
                 )
                 pages_changed += 1
             else:
                 pages_skipped += 1
 
-            if progress_callback and ctx.page_count > 0:
-                pct = 30 + int(15 * (i + 1) / ctx.page_count)
+            if progress_callback and flagged_indices:
+                pct = 30 + int(20 * (progress_idx + 1) / len(flagged_indices))
                 progress_callback(
                     "available", pct,
-                    f"Pass 2: OCR page {i+1}/{ctx.page_count} "
-                    f"({pages_changed} improved, {pages_skipped} unchanged)",
+                    f"Pass 2: page {pt.page_number}/{ctx.page_count} "
+                    f"({pages_changed} improved, vision={vision_used})",
                 )
 
         combined = self._combine_page_texts(ctx.page_texts)
@@ -240,6 +438,8 @@ class ProgressivePipeline:
         ctx.pass_metadata["pass2"] = {
             "pages_changed": pages_changed,
             "pages_skipped": pages_skipped,
+            "flagged_pages": len(flagged_indices),
+            "vision_used": vision_used,
             "page_hashes": {pt.page_number: pt.text_hash for pt in ctx.page_texts},
         }
 
@@ -249,6 +449,8 @@ class ProgressivePipeline:
             file_id=ctx.file_id,
             pages_changed=pages_changed,
             pages_skipped=pages_skipped,
+            flagged_pages=len(flagged_indices),
+            vision_used=vision_used,
             duration=f"{duration:.1f}s",
         )
 
@@ -286,13 +488,16 @@ class ProgressivePipeline:
         finally:
             loop.close()
 
-        # Apply LLM cleaned text and identify Marker candidates
-        marker_pages: List[int] = []
+        # Apply LLM cleaned text and collect pages flagged for vision re-extraction
+        # (needs_marker and needs_vision both route to the vision model now)
+        vision_flagged_pages: List[int] = []
         pages_changed = 0
 
         for i, assessment in enumerate(assessments):
             if i >= len(ctx.page_texts):
                 break
+
+            needs_reextract = assessment.needs_marker or assessment.needs_vision
 
             if assessment.changed:
                 ctx.page_texts[i] = PageText(
@@ -300,64 +505,42 @@ class ProgressivePipeline:
                     text=assessment.cleaned_text,
                     text_hash=PageText.compute_hash(assessment.cleaned_text),
                     source_pass=3,
-                    needs_marker=assessment.needs_marker,
-                    marker_reason=assessment.reason if assessment.needs_marker else "",
+                    needs_marker=needs_reextract,
+                    marker_reason=assessment.reason if needs_reextract else "",
                 )
                 pages_changed += 1
-            elif assessment.needs_marker:
+            elif needs_reextract:
                 ctx.page_texts[i].needs_marker = True
                 ctx.page_texts[i].marker_reason = assessment.reason
 
-            if assessment.needs_marker:
-                marker_pages.append(i + 1)  # 1-based
+            if needs_reextract:
+                vision_flagged_pages.append(i + 1)  # 1-based
 
-        # Selective Marker extraction (requires CUDA GPU and 48GB+ RAM)
-        marker_improved = 0
-        cuda_available = False
-        try:
-            import torch
-            cuda_available = torch.cuda.is_available()
-        except ImportError:
-            pass
+        # Vision-based extraction for pages flagged by LLM assessment
+        # Replaces the legacy Marker path — uses the same VisionExtractor as Pass 2
+        vision_improved = 0
 
-        sufficient_ram = True
-        try:
-            total_ram_gb = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1024 ** 3)
-            if total_ram_gb < 48:
-                sufficient_ram = False
-                logger.info(
-                    "Marker gated: insufficient RAM for Pass 3",
-                    file_id=ctx.file_id,
-                    total_ram_gb=round(total_ram_gb, 1),
-                    min_required_gb=48,
-                )
-        except (ValueError, OSError):
-            pass
-
-        if marker_pages and cuda_available and sufficient_ram:
+        if vision_flagged_pages and self.vision_extractor:
             if progress_callback:
                 progress_callback(
                     "available", 65,
-                    f"Pass 3: Running Marker on {len(marker_pages)} pages",
+                    f"Pass 3: Vision extraction on {len(vision_flagged_pages)} flagged pages",
                 )
-            marker_improved = self._run_selective_marker(ctx, marker_pages, progress_callback)
-            pages_changed += marker_improved
-        elif marker_pages:
-            reason = "no CUDA GPU" if not cuda_available else "insufficient RAM (<48GB)"
+            vision_improved = self._run_selective_vision(ctx, vision_flagged_pages, progress_callback)
+            pages_changed += vision_improved
+        elif vision_flagged_pages:
             logger.info(
-                "Skipping Marker extraction",
+                "Skipping vision extraction (no vision extractor configured)",
                 file_id=ctx.file_id,
-                reason=reason,
-                marker_pages_requested=len(marker_pages),
+                flagged_pages=len(vision_flagged_pages),
             )
 
         combined = self._combine_page_texts(ctx.page_texts)
 
         ctx.pass_metadata["pass3"] = {
-            "pages_llm_changed": pages_changed - marker_improved,
-            "marker_pages_requested": len(marker_pages),
-            "marker_pages_improved": marker_improved,
-            "marker_skipped_no_gpu": len(marker_pages) > 0 and not cuda_available,
+            "pages_llm_changed": pages_changed - vision_improved,
+            "vision_pages_requested": len(vision_flagged_pages),
+            "vision_pages_improved": vision_improved,
             "page_hashes": {pt.page_number: pt.text_hash for pt in ctx.page_texts},
         }
 
@@ -703,47 +886,69 @@ class ProgressivePipeline:
         tasks = [assess_page(i) for i in range(len(ctx.page_texts))]
         return await asyncio.gather(*tasks)
 
-    def _run_selective_marker(
+    def _run_selective_vision(
         self,
         ctx: ProgressiveContext,
-        marker_pages: List[int],
+        flagged_pages: List[int],
         progress_callback: Optional[Callable] = None,
     ) -> int:
-        """Run Marker on specific pages, update page_texts if improved."""
+        """Run VisionExtractor on pages flagged by LLM assessment.
+        
+        Picks the best vision mode based on the marker_reason hint left by
+        the LLM assessment (table, formula, OCR artifacts → "table"; default → "ocr").
+        """
         improved = 0
+        loop = asyncio.new_event_loop()
 
-        for idx, page_num in enumerate(marker_pages):
-            try:
-                marker_text = self.text_extractor.extract_page_marker(
-                    ctx.file_path, page_num
-                )
-                if marker_text and self._is_meaningful_improvement(
-                    ctx.page_texts[page_num - 1].text, marker_text
-                ):
-                    ctx.page_texts[page_num - 1] = PageText(
-                        page_number=page_num,
-                        text=marker_text,
-                        text_hash=PageText.compute_hash(marker_text),
-                        source_pass=3,
-                        needs_marker=False,
-                        marker_reason="Marker applied",
-                    )
-                    improved += 1
+        try:
+            for idx, page_num in enumerate(flagged_pages):
+                try:
+                    pt = ctx.page_texts[page_num - 1]
+                    reason = (pt.marker_reason or "").lower()
 
-                if progress_callback:
-                    pct = 65 + int(10 * (idx + 1) / len(marker_pages))
-                    progress_callback(
-                        "available", pct,
-                        f"Pass 3: Marker page {idx+1}/{len(marker_pages)}",
+                    if "table" in reason or "column" in reason:
+                        mode = "table"
+                    elif "formula" in reason or "equation" in reason:
+                        mode = "ocr"
+                    else:
+                        mode = "ocr"
+
+                    result = loop.run_until_complete(
+                        self.vision_extractor.analyse_page(
+                            ctx.file_path, page_num, mode=mode,
+                            existing_text=pt.text,
+                        )
                     )
 
-            except Exception as e:
-                logger.warning(
-                    "Marker extraction failed for page",
-                    file_id=ctx.file_id,
-                    page=page_num,
-                    error=str(e),
-                )
+                    if result.success and result.text and self._is_meaningful_improvement(
+                        pt.text, result.text
+                    ):
+                        ctx.page_texts[page_num - 1] = PageText(
+                            page_number=page_num,
+                            text=result.text,
+                            text_hash=PageText.compute_hash(result.text),
+                            source_pass=3,
+                            needs_marker=False,
+                            marker_reason=f"Vision ({mode}) applied",
+                        )
+                        improved += 1
+
+                    if progress_callback:
+                        pct = 65 + int(10 * (idx + 1) / len(flagged_pages))
+                        progress_callback(
+                            "available", pct,
+                            f"Pass 3: Vision page {idx+1}/{len(flagged_pages)}",
+                        )
+
+                except Exception as e:
+                    logger.warning(
+                        "Vision extraction failed for page",
+                        file_id=ctx.file_id,
+                        page=page_num,
+                        error=str(e),
+                    )
+        finally:
+            loop.close()
 
         return improved
 

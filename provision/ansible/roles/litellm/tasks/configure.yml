@@ -444,7 +444,7 @@
   register: fast_test
   retries: 3
   delay: 2
-  when: litellm_start_service and (model_purposes.fast is defined)
+  when: litellm_start_service and ((default_purposes | default({})) | combine(model_purposes | default({}))).fast is defined
   failed_when: false
   tags: [litellm_configure, litellm_test]
 
@@ -472,7 +472,7 @@
   register: agent_test
   retries: 3
   delay: 2
-  when: litellm_start_service and (model_purposes.agent is defined)
+  when: litellm_start_service and ((default_purposes | default({})) | combine(model_purposes | default({}))).agent is defined
   failed_when: false
   tags: [litellm_configure, litellm_test]
 
@@ -500,7 +500,7 @@
   register: frontier_test
   retries: 3
   delay: 2
-  when: litellm_start_service and (model_purposes.frontier is defined)
+  when: litellm_start_service and ((default_purposes | default({})) | combine(model_purposes | default({}))).frontier is defined
   failed_when: false
   tags: [litellm_configure, litellm_test]
 

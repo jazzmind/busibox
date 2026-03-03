@@ -32,65 +32,66 @@ available_models:
     multimodal: true
     tool_calling: true
   
-  "phi-4":
+
+  # =========================================================================
+  # Qwen3.5 vLLM Models (Production/Staging - 3x RTX 3090)
+  # =========================================================================
+
+  "qwen3.5-35b-vllm":
     provider: "vllm"
-    model: "phi-4"
-    model_name: "microsoft/Phi-4-multimodal-instruct"
-    description: "Fast model for quick operations"
-    # vLLM tuning parameters
-    gpu_memory_utilization: 0.65  # Small model - only needs 60% GPU
-    max_model_len: 16384  # Supports longer context
-    max_num_seqs: 10  # Can handle more concurrent requests
-    cpu_offload_gb: 0  # Moderate CPU offload
-    # Tool calling support
-    tool_calling: false
-    # Multimodal support
-    multimodal: true
-    limit_mm_per_prompt: 
-      image: 4  # Allow up to 4 images per prompt
-    
-  "qwen3-30b":
-    provider: "vllm"
-    model: "qwen3-30b-a3b-instruct-awq-4bit"
-    model_name: "cpatonn/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
-    description: "General purpose agent model"
-    # vLLM tuning parameters
-    gpu_memory_utilization: 0.9  # Large model - needs 80% GPU
-    max_model_len: 32000  # Supports very long context (AWQ quantized)
-    max_num_seqs: 3  # Standard concurrent requests
-    cpu_offload_gb: 0  # Heavy CPU offload for KV cache
-    # Tool calling support
+    model: "qwen3.5-35b-a3b-awq-4bit"
+    model_name: "cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit"
+    description: "Primary agent model — deep research, tool calling, single-user (GPU 1)"
+    gpu_memory_utilization: 0.9
+    max_model_len: 32000  # DeltaNet hybrid attention allows longer ctx than dense models
+    max_num_seqs: 3  # Optimized for deep single-user workloads
+    cpu_offload_gb: 0
     tool_calling: true
-    tool_call_parser: "hermes"  # Qwen3 models use Hermes-style tool calling (Qwen2.5 compatible)
-    multimodal: false
+    tool_call_parser: "qwen3_coder"
+    multimodal: true
+    limit_mm_per_prompt:
+      image: 4
 
-  "qwen3-reranker":
+  "qwen3.5-35b-multi-vllm":
     provider: "vllm"
-    model: "qwen3-reranker-0.6b"
-    model_name: "Qwen/Qwen3-Reranker-0.6B"
-    description: "Search result reranking (GPU, fast)"
-    # vLLM tuning parameters
-    gpu_memory_utilization: 0.2  # Tiny model - only 20% GPU (leave room for overhead)
-    max_model_len: 4096  # Reranker uses short sequences
-    max_num_seqs: 32  # Fewer concurrent requests needed
-    cpu_offload_gb: 0  # Minimal CPU offload
-    # Reranker-specific configuration
-    hf_overrides: '{"architectures": ["Qwen3ForSequenceClassification"], "classifier_from_token": ["no", "yes"], "is_original_qwen3_reranker": true}'
+    model: "qwen3.5-35b-a3b-awq-4bit-multi"
+    model_name: "cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit"
+    description: "Multi-user chat, parsing, vision, cleanup (GPU 2, same weights, different tuning)"
+    gpu_memory_utilization: 0.65  # Share GPU 2 with classify + reranker
+    max_model_len: 16384  # Shorter context for parallel users
+    max_num_seqs: 8  # MoE advantage: 3B active params = high concurrency
+    cpu_offload_gb: 0
+    tool_calling: true
+    tool_call_parser: "qwen3_coder"
+    multimodal: true
+    limit_mm_per_prompt:
+      image: 4
 
-  "qwen3-0.6b-vllm":
+  "qwen3.5-0.8b-vllm":
     provider: "vllm"
-    model: "qwen3-0.6b"
-    model_name: "Qwen/Qwen3-0.6B"
-    description: "Tiny dispatch/classification model on GPU (vLLM)"
-    # vLLM tuning parameters
-    gpu_memory_utilization: 0.3  # ~7GB - plenty for 0.6B weights + KV cache + CUDA overhead
+    model: "qwen3.5-0.8b"
+    model_name: "Qwen/Qwen3.5-0.8B"
+    description: "Tiny dispatch/classification model (GPU 0, multimodal, 262K ctx)"
+    gpu_memory_utilization: 0.15  # ~0.8B params, very small footprint
     max_model_len: 4096  # Routing/classification prompts are short
     max_num_seqs: 32  # High concurrency for dispatch traffic
     cpu_offload_gb: 0
-    tool_calling: false
-    multimodal: false
+    tool_calling: true
+    tool_call_parser: "qwen3_coder"
+    multimodal: true
 
-  "bge-reranker-v2-m3-gpu":
+  "qwen3-reranker-vllm":
+    provider: "vllm"
+    model: "qwen3-reranker-0.6b"
+    model_name: "Qwen/Qwen3-Reranker-0.6B"
+    description: "Search result reranking (GPU 0, fast)"
+    gpu_memory_utilization: 0.1  # Tiny model, share GPU 0 with qwen3.5-0.8b + on-demand media
+    max_model_len: 4096
+    max_num_seqs: 32
+    cpu_offload_gb: 0
+    hf_overrides: '{"architectures": ["Qwen3ForSequenceClassification"], "classifier_from_token": ["no", "yes"], "is_original_qwen3_reranker": true}'
+
+  "bge-reranker-v2-m3-vllm":
     provider: "vllm"
     model: "bge-reranker-v2-m3"
     model_name: "BAAI/bge-reranker-v2-m3"
@@ -138,70 +139,62 @@ available_models:
     matryoshka: true
     matryoshka_dimensions: [64, 128, 256, 512, 768]
 
-  "colpali":
-    provider: "colpali"  # Dedicated ColPali service (not vLLM - LoRA not supported)
-    model: "colpali-v1.3"
-    model_name: "vidore/colpali-v1.3"
-    description: "Visual document embedding (dedicated service)"
-    gpu: "0"  # Reserved for visual embeddings
-    port: 9006  # Dedicated ColPali service port
-    # Note: vLLM 0.11.0 does not support LoRA for PaliGemmaForConditionalGeneration
-    # ColPali uses its own service with custom inference code
 
   # =========================================================================
   # MLX Models (Apple Silicon - Development/Demo)
   # =========================================================================
   # These models run on Apple Silicon Macs via mlx-lm
   # Tiered by RAM: micro (<16GB), standard (16-32GB), pro (>32GB)
+  #
+  # Qwen3.5 dense models: natively multimodal (text+image+video), tool calling,
+  # 262K context, Gated DeltaNet hybrid attention, thinking mode.
+  # No separate VL models needed — all Qwen3.5 models handle vision.
   
-  "qwen3-0.6b":
+  "qwen3.5-0.8b-mlx":
     provider: "mlx"
-    model: "qwen3-0.6b"
-    model_name: "mlx-community/Qwen3-0.6B-4bit"
-    description: "Tiny test model with reasoning (0.6B params, has <think> mode)"
+    model: "qwen3.5-0.8b"
+    model_name: "mlx-community/Qwen3.5-0.8B-4bit"
+    description: "Tiny multimodal model (0.8B, 262K ctx, vision+tools+thinking)"
     tool_calling: true
+    tool_call_parser: "qwen3_coder"
+    multimodal: true
     tier: "micro"
+    memory_estimate_gb: 0.6
 
-
-  "qwen3-4b-instruct-2507":
+  "qwen3.5-4b-mlx":
     provider: "mlx"
-    model: "qwen3-4b-instruct-2507"
-    model_name: "mlx-community/Qwen3-4B-Instruct-2507-4bit"
-    description: "Primary agent/chat/tool-calling model (4B params, 128K ctx, Hermes tools)"
+    model: "qwen3.5-4b"
+    model_name: "mlx-community/Qwen3.5-4B-4bit"
+    description: "Primary dev agent — beats Qwen3-30B on GPQA, 262K ctx, vision+tools"
     tool_calling: true
-    tool_call_parser: "hermes"
-    tier: "standard"
-
-
-  "qwen3-vl-4b":
-    provider: "mlx"
-    model: "qwen3-vl-4b"
-    model_name: "mlx-community/Qwen3-VL-4B-Instruct-4bit"
-    description: "Vision-language model for image understanding (4B params)"
-    tool_calling: false
+    tool_call_parser: "qwen3_coder"
     multimodal: true
     tier: "standard"
+    memory_estimate_gb: 3.0
 
-  "qwen3-30b-mlx":
+  "qwen3.5-35b-mlx":
     provider: "mlx"
-    model: "qwen3-30b-mlx"
-    model_name: "mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit"
-    description: "Large agent/reasoning model for MLX (30B MoE, ~18GB)"
+    model: "qwen3.5-35b-mlx"
+    model_name: "mlx-community/Qwen3.5-35B-A3B-4bit"
+    description: "Large MoE agent for MLX (35B total, 3B active, ~20GB)"
     tool_calling: true
-    tool_call_parser: "hermes"
+    tool_call_parser: "qwen3_coder"
+    multimodal: true
     tier: "standard"
-    memory_estimate_gb: 18.0
+    memory_estimate_gb: 20.0
 
-  "qwen3-80b-mlx":
+  "qwen3.5-27b-mlx":
     provider: "mlx"
-    model: "qwen3-80b-mlx"
-    model_name: "mlx-community/Qwen3-Next-80B-A3B-Instruct-4bit"
-    description: "High-performance reasoning model for MLX (80B MoE, ~45GB)"
+    model: "qwen3.5-27b-mlx"
+    model_name: "mlx-community/Qwen3.5-27B-4bit"
+    description: "Dense 27B reasoning model for MLX (~16GB, frontier-class quality)"
     tool_calling: true
+    tool_call_parser: "qwen3_coder"
+    multimodal: true
     tier: "enhanced"
-    memory_estimate_gb: 45.0
+    memory_estimate_gb: 16.0
 
-  "whisper-tiny":
+  "whisper-tiny-mlx":
     provider: "mlx"
     model: "whisper-tiny"
     model_name: "mlx-community/whisper-tiny-mlx"
@@ -210,7 +203,7 @@ available_models:
     tier: "micro"
     memory_estimate_gb: 0.15  # ~150 MB RAM (tiny 39M param model)
 
-  "whisper-large-v3":
+  "whisper-large-v3-mlx":
     provider: "mlx"
     model: "whisper-large-v3"
     model_name: "mlx-community/whisper-large-v3-mlx"
@@ -219,7 +212,7 @@ available_models:
     tier: "standard"
     memory_estimate_gb: 3.0   # ~3 GB RAM when loaded (fp16 weights + buffers)
 
-  "kokoro-82m":
+  "kokoro-82m-mlx":
     provider: "mlx"
     model: "kokoro-82m"
     model_name: "mlx-community/Kokoro-82M-bf16"
@@ -228,7 +221,7 @@ available_models:
     tier: "micro"
     memory_estimate_gb: 0.2   # ~200 MB RAM (tiny 82M param model)
 
-  "flux2-klein-4b":
+  "flux2-klein-4b-mlx":
     provider: "mlx"
     model: "flux2-klein-4b"
     model_name: "black-forest-labs/FLUX.2-klein-4B"
@@ -238,6 +231,19 @@ available_models:
     memory_estimate_gb: 3.5   # ~3.5 GB RAM (4B params Q4 quantized + VAE/encoder overhead)
 
   # GPU-accelerated media models for Proxmox (on-demand, GPU 0)
+  "whisper-tiny-gpu":
+    provider: "gpu"
+    model: "whisper-tiny-gpu"
+    model_name: "whisper-tiny"
+    description: "GPU-accelerated Whisper STT (faster-whisper, float16, GPU 0)"
+    mode: "audio_transcription"
+    tier: "micro"
+    port: 8004
+    gpu: "0"
+    on_demand: true
+    memory_estimate_gb: 0.15   # ~150 MB VRAM (tiny float16)
+    service_name: "whisper-tiny-gpu"
+
   "whisper-large-v3-gpu":
     provider: "gpu"
     model: "whisper-large-v3-gpu"
@@ -278,76 +284,68 @@ available_models:
     service_name: "flux-gpu"
 
 # =============================================================================
+# Default Model Purposes — base assignments shared by all environments
+# =============================================================================
+# Values are either model keys (from available_models above) or alias strings
+# pointing to another purpose in this same map.
+#
+# Alias resolution: if the value matches another key in this map, the resolver
+# follows the chain until it reaches a concrete model key. Cycles are detected.
+#
+# Environment-specific overrides (model_purposes, model_purposes_dev) only need
+# to list entries that differ from these defaults.
+default_purposes:
+  # --- LLM roles (aliases reduce duplication) ---
+  fast: "qwen3.5-0.8b-mlx"
+  test: "fast"
+  classify: "fast"
+
+  default: "qwen3.5-4b-mlx"
+  chat: "default"
+  agent: "default"
+  research: "default"
+  tool_calling: "default"
+  vision: "default"
+  parsing: "default"
+  cleanup: "default"
+
+  # --- Frontier (cloud) ---
+  frontier: "claude-sonnet-4-5"
+  frontier-fast: "claude-haiku-4-5"
+
+  # --- Media ---
+  image: "flux2-klein-4b-mlx"
+  video: "sora-2"
+  transcribe: "whisper-tiny-mlx"
+  voice: "kokoro-82m-mlx"
+
+  # --- Embeddings & reranking ---
+  embedding: "nomic-embed"
+  reranking: "bge-reranker-v2-m3-cpu"
+
+# =============================================================================
 # Model Purposes - Staging/Production (vLLM + Bedrock)
 # =============================================================================
+# Only overrides that differ from default_purposes.
+#
 # Production GPU strategy (3x RTX 3090, 24GB each):
-# - GPU 0: ingestion stack (Marker/ColPali/embeddings)
-# - GPU 1: qwen3-30b alone for heavy agent/chat/tool-calling workloads
-# - GPU 2: phi-4 + qwen3-0.6b-vllm + qwen3-reranker
-model_purposes:
-  # Primary models
-  default: "qwen3-30b"   # Primary text workhorse
-  frontier: "claude-sonnet-4-5"   # Most capable model (Claude 4.5 Sonnet)
-  frontier-fast: "claude-haiku-4-5"   # Fast frontier model (Claude 4.5 Haiku)
-  
-  # Task-specific
-  research: "qwen3-30b"   # Research and analysis
-  agent: "qwen3-30b"   # Agent model for agentic tasks
-  chat: "qwen3-30b"   # Main chat model
-  vision: "phi-4"   # Vision-language model for image understanding
-  classify: "qwen3-0.6b-vllm"   # Tiny dispatch/classification model on GPU
-  parsing: "phi-4"   # Document parsing and structure extraction
-  cleanup: "phi-4"   # Text cleanup and formatting  
-  fast: "qwen3-0.6b-vllm"   # Tiny always-hot routing model
-  tool_calling: "qwen3-30b"   # Tool calling model for tool calling tasks
-  test: "qwen3-0.6b-vllm"   # Tiny model for validation tests (GPU)
-
-  # Video generation (cloud API)
-  video: "sora-2"   # Video generation model (OpenAI Sora-2)
-  image: "flux2-klein-4b-gpu"   # Image generation model (GPU FLUX.2 Klein, on-demand GPU 0)
-  # GPU media services (on-demand, GPU 0). Override to "whisper-large-v3" / "kokoro-82m" for MLX fallback.
-  transcribe: "whisper-large-v3-gpu"   # GPU STT (faster-whisper, port 8006)
-  voice: "kokoro-82m-gpu"   # GPU TTS (kokoro-fastapi, port 8007)
-
-  # Embeddings (dedicated services)
-  embedding: "nomic-embed"   # Matryoshka embedding (768-d native, truncatable)
-  visual-embedding: "colpali"   # Visual document embedding (dedicated service)
-  reranking: "qwen3-reranker"   # Search result reranking
-  # Note: ColPali uses dedicated service (port 9006, GPU 0) - vLLM doesn't support LoRA for PaliGemma
+# - GPU 0: qwen3.5-0.8b (classify/fast) + qwen3-reranker + on-demand media (whisper/kokoro/flux)
+# - GPU 1: qwen3.5-35b — deep research, agents, tool calling (single-user focus)
+# - GPU 2: qwen3.5-35b-multi — multi-user chat, parsing, vision, cleanup (high concurrency)
+model_purposes: {}  # production uses defaults as-is
 
 # =============================================================================
 # Model Purposes - Development (MLX on Apple Silicon)
 # =============================================================================
-# Uses smaller, locally-cached models for faster iteration and offline dev
-# Maps to models cached by `make warmup` - bge-small and qwen3-0.6b
+# Only entries that differ from default_purposes.
+# Qwen3.5 dense models are all natively multimodal — no separate VL models.
 model_purposes_dev:
-  # Primary models (port 8080 - Qwen3-4B)
-  default: "qwen3-4b-instruct-2507"   # ~70% MMLU, 128K ctx, Hermes tools
-  frontier: "qwen3-4b-instruct-2507"   # 8B: swap into port 8080 on demand
-  frontier-fast: "qwen3-4b-instruct-2507"   # Same as default
-
-  # Task-specific
-  research: "qwen3-4b-instruct-2507"   # 4B handles research with 128K context
-  agent: "qwen3-4b-instruct-2507"   # Primary agent model with tool calling
-  chat: "qwen3-4b-instruct-2507"   # Chat quality is strong at 4B
-  vision: "qwen3-vl-4b"   # Qwen3-VL (swap into port 8080 on demand)
-  classify: "qwen3-0.6b"   # Port 18081 - always loaded, instant
-  parsing: "qwen3-4b-instruct-2507"   # 4B for document structure extraction
-  cleanup: "qwen3-4b-instruct-2507"   # 1.7B (swap into port 18081 on demand)
-  fast: "qwen3-0.6b"   # Port 18081 - always loaded, instant
-  tool_calling: "qwen3-4b-instruct-2507"   # 4B with Hermes-style tool calling
-  test: "qwen3-0.6b"   # Tiny model for validation tests (cached by warmup)
-
-  # Video generation (requires OpenAI API key even in dev)
-  video: "sora-2"   # Video generation model (OpenAI Sora-2)
-  image: "flux2-klein-4b"   # Image generation model (local MLX FLUX.2 Klein 4B Q4)
-  transcribe: "whisper-tiny"   # Speech-to-text (Whisper Tiny ~150 MB for dev)
-  voice: "kokoro-82m"   # Text-to-speech (Kokoro)
-
-  # Embeddings (Matryoshka: nomic-embed at 256-d for dev, 768-d for prod)
-  embedding: "nomic-embed"   # Matryoshka embedding (768-d native, truncated to 256-d for dev)
-  visual-embedding: "colpali"   # Visual document embedding (same as prod)
-  reranking: "bge-reranker-v2-m3-cpu"   # CPU reranking for dev (no GPU needed)
+  fast: "qwen3.5-0.8b-mlx"          # MLX micro model
+  default: "qwen3.5-4b-mlx"         # Beats Qwen3-30B on GPQA, 262K ctx, vision+tools
+  image: "flux2-klein-4b-mlx"       # MLX local FLUX
+  transcribe: "whisper-tiny-mlx"     # Whisper Tiny ~150 MB for dev
+  voice: "kokoro-82m-mlx"           # Kokoro MLX
+  reranking: "bge-reranker-v2-m3-cpu"
 
 # =============================================================================
 # Memory Tiers - Hardware-based model selection for install/download
@@ -362,7 +360,6 @@ model_purposes_dev:
 #   transcribe - Speech-to-text transcription
 #   voice  - Text-to-speech voice generation
 #   image    - Image generation
-#   visual-embedding - Visual document embedding (standard+ only)
 #
 tiers:
   # 16GB - MacBook Air, base MacBook Pro
@@ -372,19 +369,11 @@ tiers:
     max_ram_gb: 23
     description: "Lightweight models for basic use"
     mlx:
-      test: "qwen3-0.6b"
-      fast: "qwen3-0.6b"
-      agent: "qwen3-0.6b"
-      embed: "nomic-embed"
-      transcribe: "whisper-tiny"
-      voice: "kokoro-82m"
+      fast: "qwen3.5-0.8b-mlx"
+      default: "qwen3.5-0.8b-mlx"
     vllm:
-      test: "qwen3-0.6b-vllm"
-      fast: "qwen3-0.6b-vllm"
-      agent: "qwen3-0.6b-vllm"
-      embed: "nomic-embed"
-      transcribe: "whisper-tiny"
-      voice: "kokoro-82m"
+      fast: "qwen3.5-0.8b-vllm"
+      default: "qwen3.5-0.8b-vllm"
   # 24GB - MacBook Pro 14"
   # ~8GB reserved, ~16GB for models
   entry:
@@ -392,21 +381,11 @@ tiers:
     max_ram_gb: 47
     description: "Entry-level performance for most workloads"
     mlx:
-      test: "qwen3-0.6b"
-      fast: "qwen3-0.6b"
-      agent: "qwen3-4b-instruct-2507"
-      embed: "nomic-embed"
-      transcribe: "whisper-tiny"
-      voice: "kokoro-82m"
-      image: "flux2-klein-4b"
+      fast: "qwen3.5-0.8b-mlx"
+      default: "qwen3.5-4b-mlx"
     vllm:
-      test: "qwen3-0.6b-vllm"
-      fast: "qwen3-0.6b-vllm"
-      agent: "phi-4"
-      embed: "nomic-embed"
-      transcribe: "whisper-tiny"
-      voice: "kokoro-82m"
-      image: "flux2-klein-4b"
+      fast: "qwen3.5-0.8b-vllm"
+      default: "qwen3.5-4b-vllm"
   # 48GB - MacBook Pro 16", Mac Mini Pro
   # ~10GB reserved, ~38GB for models
   standard:
@@ -414,23 +393,18 @@ tiers:
     max_ram_gb: 95
     description: "Balanced performance for production workloads"
     mlx:
-      test: "qwen3-0.6b"
-      fast: "qwen3-4b-instruct-2507"
-      agent: "qwen3-30b-mlx"
-      embed: "nomic-embed"
-      transcribe: "whisper-large-v3"
-      voice: "kokoro-82m"
-      image: "flux2-klein-4b"
-      visual-embedding: "colpali"
+      test: "qwen3.5-0.8b-mlx"
+      fast: "qwen3.5-4b-mlx"
+      default: "qwen3.5-35b-mlx"
+      transcribe: "whisper-large-v3-mlx"
     vllm:
-      test: "qwen3-0.6b-vllm"
-      fast: "phi-4"
-      agent: "qwen3-30b"
+      test: "qwen3.5-0.8b-vllm"
+      fast: "qwen3.5-0.8b-vllm"
+      default: "qwen3.5-35b-vllm"
       embed: "nomic-embed"
-      transcribe: "whisper-large-v3"
-      voice: "kokoro-82m"
-      image: "flux2-klein-4b"
-      visual-embedding: "colpali"
+      transcribe: "whisper-large-v3-gpu"
+      voice: "kokoro-82m-gpu"
+      image: "flux2-klein-4b-gpu"
 
   # 96GB+ - Mac Studio, Mac Pro, multi-GPU servers
   # ~12GB reserved, ~84GB+ for models
@@ -439,18 +413,18 @@ tiers:
     max_ram_gb: 9999
     description: "High-performance with large reasoning models"
     mlx:
-      test: "qwen3-0.6b"
-      fast: "qwen3-4b-instruct-2507"
-      agent: "qwen3-80b-mlx"
+      test: "qwen3.5-0.8b-mlx"
+      fast: "qwen3.5-35b-mlx"
+      default: "qwen3.5-27b-mlx"
       embed: "nomic-embed"
-      transcribe: "whisper-large-v3"
-      voice: "kokoro-82m"
-      image: "flux2-klein-4b"
-      visual-embedding: "colpali"
+      transcribe: "whisper-large-v3-mlx"
+      voice: "kokoro-82m-mlx"
+      image: "flux2-klein-4b-mlx"
     vllm:
-      test: "qwen3-0.6b-vllm"
-      fast: "phi-4"
-      agent: "qwen3-30b"
+      test: "qwen3.5-0.8b-vllm"
+      fast: "qwen3.5-0.8b-vllm"
+      default: "qwen3.5-27b-vllm"
       embed: "nomic-embed"
-      visual-embedding: "colpali"
-
+      transcribe: "whisper-large-v3-gpu"
+      voice: "kokoro-82m-gpu"
+      image: "flux2-klein-4b-gpu"

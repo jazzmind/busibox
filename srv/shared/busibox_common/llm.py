@@ -70,6 +70,7 @@ class ModelRegistry:
         "agent": {"model": "agent", "provider": "litellm", "temperature": 0.7},
         "fast": {"model": "fast", "provider": "litellm", "temperature": 0.5},
         "frontier": {"model": "frontier", "provider": "litellm", "temperature": 0.7},
+        "vision": {"model": "vision", "provider": "litellm", "temperature": 0.2, "max_tokens": 4096, "multimodal": True},
     }
     
     def __init__(self, config_path: Optional[str] = None):
@@ -87,13 +88,14 @@ class ModelRegistry:
             try:
                 with open(config_path, 'r') as f:
                     registry_data = json.load(f)
-                    # New structure: JSON has "available_models" and "purposes"
-                    # purposes maps purpose -> model key, available_models has full config
                     available_models = registry_data.get("available_models", {})
                     purposes = registry_data.get("purposes", {})
                     
-                    # Build models dict: purpose -> full model config
-                    for purpose, model_key in purposes.items():
+                    # Resolve aliases: if a purpose value points to another
+                    # purpose key rather than an available_model key, follow the chain.
+                    resolved = self._resolve_aliases(purposes, available_models)
+                    
+                    for purpose, model_key in resolved.items():
                         if model_key in available_models:
                             self.models[purpose] = available_models[model_key].copy()
                         else:
@@ -105,7 +107,7 @@ class ModelRegistry:
                     logger.info(
                         "Loaded model registry from deployed JSON",
                         config_path=config_path,
-                        purposes=list(purposes.keys()),
+                        purposes=list(resolved.keys()),
                         source="ansible_deployment"
                     )
             except Exception as e:
@@ -114,7 +116,6 @@ class ModelRegistry:
                     config_path=config_path,
                     error=str(e)
                 )
-                # Fall back to defaults if JSON load fails
                 self.models = self.DEFAULT_MODELS.copy()
                 logger.warning(
                     "Using fallback model registry (deployed JSON not available)",
@@ -135,6 +136,27 @@ class ModelRegistry:
                     purposes=list(self.models.keys())
                 )
     
+    @staticmethod
+    def _resolve_aliases(
+        purposes: Dict[str, str], available_models: Dict[str, Dict]
+    ) -> Dict[str, str]:
+        """Resolve alias chains in purposes map.
+        
+        If a purpose's value matches another purpose key (and is not a direct
+        model key in available_models), follow the chain until a concrete model
+        key is reached. Detects cycles via a depth limit.
+        """
+        resolved: Dict[str, str] = {}
+        for purpose, value in purposes.items():
+            v = value
+            for _ in range(10):
+                if v in purposes and v not in available_models:
+                    v = purposes[v]
+                else:
+                    break
+            resolved[purpose] = v
+        return resolved
+
     def get_model(self, purpose: str) -> str:
         """
         Get model name for a purpose.
