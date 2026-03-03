@@ -67,6 +67,21 @@ available_models:
     limit_mm_per_prompt:
       image: 4
 
+  "qwen3.5-27b-vllm-cpu":
+    provider: "vllm"
+    model: "qwen3.5-27b"
+    model_name: "Qwen/Qwen3.5-27B"
+    description: "Large deep reasoning agent for vLLM (27B total)"
+    gpu_memory_utilization: 0.9
+    max_model_len: 32000
+    max_num_seqs: 8
+    cpu_offload_gb: 0
+    tool_calling: true
+    tool_call_parser: "qwen3_coder"
+    multimodal: true
+    limit_mm_per_prompt:
+      image: 4
+
   "qwen3.5-0.8b-vllm":
     provider: "vllm"
     model: "qwen3.5-0.8b"
@@ -115,6 +130,7 @@ available_models:
     model_name: "BAAI/bge-large-en-v1.5"
     description: "Text embedding generation (1024-d, production)"
     dimension: 1024
+    device: "cpu"
     
   "bge-base":
     provider: "fastembed"
@@ -122,6 +138,7 @@ available_models:
     model_name: "BAAI/bge-base-en-v1.5"
     description: "Text embedding generation (768-d, balanced)"
     dimension: 768
+    device: "cpu"
     
   "bge-small":
     provider: "fastembed"
@@ -129,8 +146,9 @@ available_models:
     model_name: "BAAI/bge-small-en-v1.5"
     description: "Text embedding generation (384-d, fast/dev)"
     dimension: 384
+    device: "cpu"
     
-  "nomic-embed":
+  "nomic-embed-cpu":
     provider: "fastembed"
     model: "nomic-embed-text-v1.5"
     model_name: "nomic-ai/nomic-embed-text-v1.5"
@@ -138,6 +156,7 @@ available_models:
     dimension: 768
     matryoshka: true
     matryoshka_dimensions: [64, 128, 256, 512, 768]
+    device: "cpu"
 
 
   # =========================================================================
@@ -301,13 +320,13 @@ default_purposes:
   classify: "fast"
 
   default: "qwen3.5-4b-mlx"
-  chat: "default"
-  agent: "default"
-  research: "default"
-  tool_calling: "default"
-  vision: "default"
-  parsing: "default"
-  cleanup: "default"
+  agent: "qwen3.5-4b-mlx"
+  chat: "agent"
+  research: "agent"
+  tool_calling: "agent"
+  vision: "agent"
+  parsing: "agent"
+  cleanup: "agent"
 
   # --- Frontier (cloud) ---
   frontier: "claude-sonnet-4-5"
@@ -320,7 +339,7 @@ default_purposes:
   voice: "kokoro-82m-mlx"
 
   # --- Embeddings & reranking ---
-  embedding: "nomic-embed"
+  embedding: "nomic-embed-cpu"
   reranking: "bge-reranker-v2-m3-cpu"
 
 # =============================================================================
@@ -341,7 +360,7 @@ model_purposes: {}  # production uses defaults as-is
 # Qwen3.5 dense models are all natively multimodal — no separate VL models.
 model_purposes_dev:
   fast: "qwen3.5-0.8b-mlx"          # MLX micro model
-  default: "qwen3.5-4b-mlx"         # Beats Qwen3-30B on GPQA, 262K ctx, vision+tools
+  agent: "qwen3.5-4b-mlx"         # Beats Qwen3-30B on GPQA, 262K ctx, vision+tools
   image: "flux2-klein-4b-mlx"       # MLX local FLUX
   transcribe: "whisper-tiny-mlx"     # Whisper Tiny ~150 MB for dev
   voice: "kokoro-82m-mlx"           # Kokoro MLX
@@ -370,10 +389,10 @@ tiers:
     description: "Lightweight models for basic use"
     mlx:
       fast: "qwen3.5-0.8b-mlx"
-      default: "qwen3.5-0.8b-mlx"
+      agent: "qwen3.5-0.8b-mlx"
     vllm:
       fast: "qwen3.5-0.8b-vllm"
-      default: "qwen3.5-0.8b-vllm"
+      agent: "qwen3.5-0.8b-vllm"
   # 24GB - MacBook Pro 14"
   # ~8GB reserved, ~16GB for models
   entry:
@@ -382,10 +401,10 @@ tiers:
     description: "Entry-level performance for most workloads"
     mlx:
       fast: "qwen3.5-0.8b-mlx"
-      default: "qwen3.5-4b-mlx"
+      agent: "qwen3.5-4b-mlx"
     vllm:
       fast: "qwen3.5-0.8b-vllm"
-      default: "qwen3.5-4b-vllm"
+      agent: "qwen3.5-4b-vllm"
   # 48GB - MacBook Pro 16", Mac Mini Pro
   # ~10GB reserved, ~38GB for models
   standard:
@@ -395,12 +414,12 @@ tiers:
     mlx:
       test: "qwen3.5-0.8b-mlx"
       fast: "qwen3.5-4b-mlx"
-      default: "qwen3.5-35b-mlx"
+      agent: "qwen3.5-35b-mlx"
       transcribe: "whisper-large-v3-mlx"
     vllm:
       test: "qwen3.5-0.8b-vllm"
       fast: "qwen3.5-0.8b-vllm"
-      default: "qwen3.5-35b-vllm"
+      agent: "qwen3.5-35b-vllm"
       embed: "nomic-embed"
       transcribe: "whisper-large-v3-gpu"
       voice: "kokoro-82m-gpu"
@@ -415,15 +434,18 @@ tiers:
     mlx:
       test: "qwen3.5-0.8b-mlx"
       fast: "qwen3.5-35b-mlx"
-      default: "qwen3.5-27b-mlx"
+      agent: "qwen3.5-35b-mlx"
+      research: "qwen3.5-27b-mlx"
       embed: "nomic-embed"
       transcribe: "whisper-large-v3-mlx"
       voice: "kokoro-82m-mlx"
       image: "flux2-klein-4b-mlx"
     vllm:
       test: "qwen3.5-0.8b-vllm"
-      fast: "qwen3.5-0.8b-vllm"
-      default: "qwen3.5-27b-vllm"
+      fast: "qwen3.5-35b-vllm"
+      chat: "qwen3.5-35b-multi-vllm"
+      agent: "qwen3.5-35b-vllm"
+      research: "qwen3.5-27b-vllm"
       embed: "nomic-embed"
       transcribe: "whisper-large-v3-gpu"
       voice: "kokoro-82m-gpu"

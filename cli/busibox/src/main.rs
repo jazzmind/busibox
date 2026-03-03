@@ -5,6 +5,7 @@ mod theme;
 mod tui;
 
 use app::{App, Screen};
+use crate::modules::hardware::MemoryTier;
 use crate::modules::remote;
 use clap::Parser;
 use color_eyre::Result;
@@ -86,6 +87,9 @@ fn main() -> Result<()> {
         }
         if app.screen == Screen::Manage && app.manage_action_running {
             app.manage_tick = app.manage_tick.wrapping_add(1);
+        }
+        if app.screen == Screen::ModelsManage && app.models_manage_action_running {
+            app.models_manage_tick = app.models_manage_tick.wrapping_add(1);
         }
         if app.screen == Screen::Welcome && app.health_check_running {
             app.health_tick = app.health_tick.wrapping_add(1);
@@ -209,6 +213,56 @@ fn main() -> Result<()> {
                         "Action failed — press l to view logs",
                         app::MessageKind::Error,
                     );
+                }
+            }
+        }
+
+        // Drain models manage updates
+        {
+            if let Some(rx) = app.models_manage_rx.take() {
+                use std::sync::mpsc::TryRecvError;
+                let mut put_back = true;
+                loop {
+                    match rx.try_recv() {
+                        Ok(app::ModelsManageUpdate::Log(msg)) => {
+                            let was_at_bottom = app.models_manage_log_scroll
+                                >= app.models_manage_log.len().saturating_sub(1);
+                            app.models_manage_log.push(msg);
+                            if was_at_bottom {
+                                app.models_manage_log_scroll =
+                                    app.models_manage_log.len().saturating_sub(1);
+                            }
+                        }
+                        Ok(app::ModelsManageUpdate::Complete { success }) => {
+                            app.models_manage_action_running = false;
+                            app.models_manage_action_complete = true;
+                            app.models_manage_log_scroll =
+                                app.models_manage_log.len().saturating_sub(1);
+                            if success {
+                                let tier = MemoryTier::all()
+                                    .get(app.models_manage_tier_selected)
+                                    .map(|t| t.name().to_string());
+                                app.models_manage_current_tier = tier;
+                                // Reload profiles to reflect updated tier
+                                if let Ok(profiles) =
+                                    modules::profile::load_profiles(&app.repo_root)
+                                {
+                                    app.profiles = Some(profiles);
+                                }
+                            }
+                            put_back = false;
+                            break;
+                        }
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            app.models_manage_action_running = false;
+                            put_back = false;
+                            break;
+                        }
+                    }
+                }
+                if put_back {
+                    app.models_manage_rx = Some(rx);
                 }
             }
         }
@@ -395,6 +449,7 @@ fn render(app: &App, f: &mut ratatui::Frame) {
         Screen::ModelDownload => screens::model_download::render(f, app),
         Screen::Install => screens::install::render(f, app),
         Screen::Manage => screens::manage::render(f, app),
+        Screen::ModelsManage => screens::models_manage::render(f, app),
         Screen::ProfileSelect => screens::profile_select::render(f, app),
         Screen::ProfileEdit => screens::profile_edit::render(f, app),
         Screen::AdminLogin => screens::admin_login::render(f, app),
@@ -407,6 +462,14 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
     // Force quit on Ctrl+C from any screen, any state
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         app.should_quit = true;
+        return;
+    }
+
+    // 'q' during models manage log viewer: close it
+    if key.code == KeyCode::Char('q') && app.models_manage_log_visible {
+        if !app.models_manage_action_running {
+            app.models_manage_log_visible = false;
+        }
         return;
     }
 
@@ -423,6 +486,7 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
     if key.code == KeyCode::Char('q')
         && app.input_mode != app::InputMode::Editing
         && !app.install_log_visible
+        && !app.models_manage_log_visible
         && !app.profile_editing
         && !app.profile_edit_tier_selecting
         && app.screen != Screen::AdminLogin
@@ -443,6 +507,7 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
         Screen::ModelDownload => screens::model_download::handle_key(app, key),
         Screen::Install => screens::install::handle_key(app, key),
         Screen::Manage => screens::manage::handle_key(app, key),
+        Screen::ModelsManage => screens::models_manage::handle_key(app, key),
         Screen::ProfileSelect => screens::profile_select::handle_key(app, key),
         Screen::ProfileEdit => screens::profile_edit::handle_key(app, key),
         Screen::AdminLogin => screens::admin_login::handle_key(app, key),
@@ -476,6 +541,9 @@ fn trigger_side_effects(app: &mut App) {
             if app.manage_services.is_empty() {
                 screens::manage::load_service_status(app);
             }
+        }
+        Screen::ModelsManage => {
+            screens::models_manage::init_screen(app);
         }
         _ => {}
     }

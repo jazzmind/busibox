@@ -462,7 +462,12 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::Char('m') => {
-            check_model_cache(app);
+            if app.has_profiles() {
+                app.models_manage_loaded = false;
+                app.screen = crate::app::Screen::ModelsManage;
+            } else {
+                app.set_message("No profile configured — set up first", crate::app::MessageKind::Warning);
+            }
         }
         KeyCode::Char('r') => {
             trigger_health_checks(app);
@@ -713,7 +718,6 @@ pub fn check_model_cache(app: &mut App) {
         };
         let user = profile.effective_user().to_string();
         let key = profile.effective_ssh_key().to_string();
-        let remote_path = profile.effective_remote_path().to_string();
 
         let ssh = crate::modules::ssh::SshConnection::new(&host, &user, &key);
 
@@ -724,7 +728,7 @@ pub fn check_model_cache(app: &mut App) {
             .map(|m| (m.name.clone(), m.role.clone()))
             .collect();
 
-        let results = models::check_remote_model_cache(&ssh, &remote_path, &model_list);
+        let results = models::check_remote_model_cache(&ssh, &model_list);
         app.model_cache_status = results
             .into_iter()
             .map(|(name, role, cached)| ModelCacheEntry {

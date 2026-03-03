@@ -358,14 +358,11 @@ fn check_service(
             };
 
             let code = output.trim().parse::<u16>().unwrap_or(0);
-            if (200..300).contains(&code) {
-                HealthStatus::Healthy
-            } else if code == 503 {
-                HealthStatus::Unhealthy
-            } else if code == 0 {
-                HealthStatus::Down
-            } else {
-                HealthStatus::Unhealthy
+            match code {
+                0 => HealthStatus::Down,
+                200..=299 | 301 | 302 | 401 | 403 => HealthStatus::Healthy,
+                500..=599 => HealthStatus::Unhealthy,
+                _ => HealthStatus::Unhealthy,
             }
         }
         CheckMethod::Cli { command } => {

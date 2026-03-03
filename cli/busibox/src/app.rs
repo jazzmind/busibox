@@ -1,6 +1,6 @@
 use crate::modules::hardware::HardwareProfile;
 use crate::modules::health::{GroupHealth, HealthUpdate, ServiceHealthResult};
-use crate::modules::models::ModelRecommendation;
+use crate::modules::models::{ModelRecommendation, TierModelSet};
 use crate::modules::profile::{Profile, ProfilesFile};
 use crate::modules::ssh::SshConnection;
 use crate::modules::tailscale::TailscaleStatus;
@@ -18,6 +18,7 @@ pub enum Screen {
     ModelDownload,
     Install,
     Manage,
+    ModelsManage,
     ProfileSelect,
     ProfileEdit,
     AdminLogin,
@@ -72,6 +73,23 @@ pub struct App {
     pub model_download_progress: Vec<ModelDownloadState>,
     pub model_cache_status: Vec<ModelCacheEntry>,
     pub model_cache_check_state: ModelCacheCheckState,
+
+    // Models manage screen state
+    pub models_manage_tier_selected: usize,
+    pub models_manage_loaded: bool,
+    pub models_manage_current_tier: Option<String>,
+    pub models_manage_model_selected: usize,
+    pub models_manage_focus: ModelsFocus,
+    pub models_manage_gpu_assignments: std::collections::HashMap<String, GpuAssignment>,
+    pub models_manage_gpu_saved: Option<std::collections::HashMap<String, GpuAssignment>>,
+    pub models_manage_tier_models: Option<TierModelSet>,
+    pub models_manage_log: Vec<String>,
+    pub models_manage_log_visible: bool,
+    pub models_manage_log_scroll: usize,
+    pub models_manage_action_running: bool,
+    pub models_manage_action_complete: bool,
+    pub models_manage_tick: usize,
+    pub models_manage_rx: Option<mpsc::Receiver<ModelsManageUpdate>>,
 
     // Install state
     pub install_services: Vec<ServiceInstallState>,
@@ -343,6 +361,60 @@ pub enum ManageUpdate {
     },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModelsFocus {
+    Tiers,
+    Models,
+}
+
+#[derive(Debug, Clone)]
+pub struct GpuAssignment {
+    pub gpus: Vec<usize>,
+    pub tensor_parallel: bool,
+}
+
+impl GpuAssignment {
+    pub fn display(&self) -> String {
+        if self.gpus.is_empty() {
+            return "auto".to_string();
+        }
+        let gpu_str: String = self
+            .gpus
+            .iter()
+            .map(|g| g.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        if self.gpus.len() > 1 {
+            let tp_label = if self.tensor_parallel { "TP" } else { "dup" };
+            format!("{gpu_str} {tp_label}")
+        } else {
+            gpu_str
+        }
+    }
+
+    pub fn env_gpu_value(&self) -> String {
+        self.gpus
+            .iter()
+            .map(|g| g.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    pub fn env_tp_value(&self) -> usize {
+        if self.tensor_parallel {
+            self.gpus.len()
+        } else {
+            1
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ModelsManageUpdate {
+    Log(String),
+    Complete { success: bool },
+}
+
 impl std::fmt::Display for InstallStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -387,6 +459,21 @@ impl App {
             model_download_progress: Vec::new(),
             model_cache_status: Vec::new(),
             model_cache_check_state: ModelCacheCheckState::NotChecked,
+            models_manage_tier_selected: 0,
+            models_manage_loaded: false,
+            models_manage_current_tier: None,
+            models_manage_model_selected: 0,
+            models_manage_focus: ModelsFocus::Tiers,
+            models_manage_gpu_assignments: std::collections::HashMap::new(),
+            models_manage_gpu_saved: None,
+            models_manage_tier_models: None,
+            models_manage_log: Vec::new(),
+            models_manage_log_visible: false,
+            models_manage_log_scroll: 0,
+            models_manage_action_running: false,
+            models_manage_action_complete: false,
+            models_manage_tick: 0,
+            models_manage_rx: None,
             install_services: Vec::new(),
             install_log: Vec::new(),
             install_log_visible: false,

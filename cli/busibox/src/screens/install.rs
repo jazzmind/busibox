@@ -628,29 +628,6 @@ fn parse_model_status_line(app: &mut App, line: &str) {
         return;
     }
 
-    // "All Marker/Surya models cached" or "Marker/Surya models cached"
-    if line.contains("Marker/Surya models cached") {
-        update_model_state(app, "marker", "Marker/Surya", ModelInstallState::Cached);
-        return;
-    }
-
-    // "Marker model download had errors" or "data-worker not running"
-    if line.contains("Marker model download had errors") || line.contains("data-worker not running") {
-        update_model_state(app, "marker", "Marker/Surya", ModelInstallState::Skipped);
-        return;
-    }
-
-    // "Pre-downloading Marker/Surya models..."
-    if line.contains("Pre-downloading Marker") {
-        update_model_state(app, "marker", "Marker/Surya", ModelInstallState::Downloading);
-        return;
-    }
-
-    // "[INFO] Skipping Marker/Surya models..." - tier too low
-    if line.contains("Skipping Marker") {
-        update_model_state(app, "marker", "Marker/Surya", ModelInstallState::Skipped);
-        return;
-    }
 
     // Lines with format: "✓ role: model_name (cached)" or "✓ role: model_name" or "[SUCCESS] role: model_name"
     if let Some(rest) = line.strip_prefix("✓ ").or_else(|| line.strip_prefix("[SUCCESS] ")) {
