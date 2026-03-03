@@ -4,6 +4,7 @@ pub mod install;
 pub mod manage;
 pub mod model_config;
 pub mod model_download;
+pub mod models_manage;
 pub mod profile_edit;
 pub mod profile_select;
 pub mod setup_mode;

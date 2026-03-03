@@ -15,7 +15,6 @@ pub struct ModelRecommendation {
     pub whisper: Option<ModelInfo>,
     pub kokoro: Option<ModelInfo>,
     pub flux: Option<ModelInfo>,
-    pub colpali: Option<ModelInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -23,6 +22,32 @@ pub struct ModelInfo {
     pub name: String,
     pub role: String,
     pub estimated_size_gb: f64,
+}
+
+/// A single unique model that needs to be loaded, with all the roles it serves
+/// and the GPU it's currently assigned to (for vLLM multi-GPU setups).
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct TierModel {
+    pub model_key: String,
+    pub model_name: String,
+    pub roles: Vec<String>,
+    pub estimated_size_gb: f64,
+    pub provider: String,
+    pub gpu: Option<String>,
+    pub description: String,
+    /// Whether this model runs on GPU (vllm/gpu provider) vs CPU (fastembed/local).
+    pub needs_gpu: bool,
+}
+
+/// Full tier breakdown: all unique models for a tier+backend, with GPU info.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct TierModelSet {
+    pub tier: MemoryTier,
+    pub tier_description: String,
+    pub backend: LlmBackend,
+    pub models: Vec<TierModel>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -35,6 +60,9 @@ struct ModelRegistryFile {
 struct AvailableModel {
     model_name: Option<String>,
     memory_estimate_gb: Option<f64>,
+    provider: Option<String>,
+    description: Option<String>,
+    gpu: Option<String>,
     #[serde(flatten)]
     _extra: HashMap<String, serde_yaml::Value>,
 }
@@ -42,10 +70,113 @@ struct AvailableModel {
 #[derive(Debug, Deserialize)]
 struct TierConfig {
     description: Option<String>,
-    mlx: Option<HashMap<String, String>>,
-    vllm: Option<HashMap<String, String>>,
+    mlx: Option<std::collections::BTreeMap<String, String>>,
+    vllm: Option<std::collections::BTreeMap<String, String>>,
     #[serde(flatten)]
     _extra: HashMap<String, serde_yaml::Value>,
+}
+
+impl TierModelSet {
+    /// Load all unique models for a tier+backend from model_registry.yml.
+    /// Deduplicates models that serve multiple roles.
+    pub fn from_config(
+        config_path: &Path,
+        tier: MemoryTier,
+        backend: &LlmBackend,
+    ) -> Result<Self> {
+        let contents = std::fs::read_to_string(config_path)?;
+        let file: ModelRegistryFile = serde_yaml::from_str(&contents)?;
+
+        let tiers = file.tiers.as_ref().ok_or_else(|| {
+            color_eyre::eyre::eyre!("No 'tiers' section in model registry")
+        })?;
+        let available = file.available_models.as_ref().ok_or_else(|| {
+            color_eyre::eyre::eyre!("No 'available_models' section in model registry")
+        })?;
+
+        let tier_name = tier.name();
+        let tier_config = tiers.get(tier_name).ok_or_else(|| {
+            color_eyre::eyre::eyre!("Tier '{}' not found in model registry", tier_name)
+        })?;
+
+        let backend_models = match backend {
+            LlmBackend::Mlx => tier_config.mlx.as_ref(),
+            LlmBackend::Vllm => tier_config.vllm.as_ref(),
+            LlmBackend::Cloud => None,
+        };
+
+        let role_map = match backend_models {
+            Some(m) => m,
+            None => {
+                return Ok(TierModelSet {
+                    tier,
+                    tier_description: tier_config
+                        .description
+                        .clone()
+                        .unwrap_or_else(|| tier.description().to_string()),
+                    backend: backend.clone(),
+                    models: Vec::new(),
+                });
+            }
+        };
+
+        // BTreeMap iterates in sorted key order, giving stable output.
+        // Group roles by model_key, preserving first-seen order for model_key.
+        let mut key_order: Vec<String> = Vec::new();
+        let mut key_roles: HashMap<String, Vec<String>> = HashMap::new();
+        for (role, model_key) in role_map.iter() {
+            key_roles
+                .entry(model_key.clone())
+                .or_insert_with(Vec::new)
+                .push(role.clone());
+            if !key_order.contains(model_key) {
+                key_order.push(model_key.clone());
+            }
+        }
+
+        let models: Vec<TierModel> = key_order
+            .into_iter()
+            .filter_map(|model_key| {
+                let entry = available.get(&model_key)?;
+                let model_name = entry.model_name.clone().unwrap_or_default();
+                if model_name.is_empty() {
+                    return None;
+                }
+                let size = entry
+                    .memory_estimate_gb
+                    .unwrap_or_else(|| estimate_model_size(&model_name));
+                let provider = entry.provider.clone().unwrap_or_default();
+                let description = entry.description.clone().unwrap_or_default();
+                let gpu = entry.gpu.clone();
+                let needs_gpu = matches!(
+                    provider.to_lowercase().as_str(),
+                    "vllm" | "gpu"
+                );
+                let mut roles = key_roles.remove(&model_key).unwrap_or_default();
+                roles.sort();
+                Some(TierModel {
+                    model_key,
+                    model_name,
+                    roles,
+                    estimated_size_gb: size,
+                    provider,
+                    gpu,
+                    description,
+                    needs_gpu,
+                })
+            })
+            .collect();
+
+        Ok(TierModelSet {
+            tier,
+            tier_description: tier_config
+                .description
+                .clone()
+                .unwrap_or_else(|| tier.description().to_string()),
+            backend: backend.clone(),
+            models,
+        })
+    }
 }
 
 impl ModelRecommendation {
@@ -76,7 +207,6 @@ impl ModelRecommendation {
             LlmBackend::Cloud => None,
         };
 
-        // Helper to resolve a model key to HF repo ID
         let resolve = |key: &str| -> String {
             available
                 .get(key)
@@ -151,10 +281,12 @@ impl ModelRecommendation {
                 role: "embed".into(),
                 estimated_size_gb: embed_size,
             },
-            whisper: get_optional_model("whisper"),
-            kokoro: get_optional_model("kokoro"),
-            flux: get_optional_model("flux"),
-            colpali: get_optional_model("colpali"),
+            whisper: get_optional_model("whisper")
+                .or_else(|| get_optional_model("transcribe")),
+            kokoro: get_optional_model("kokoro")
+                .or_else(|| get_optional_model("voice")),
+            flux: get_optional_model("flux")
+                .or_else(|| get_optional_model("image")),
         })
     }
 
@@ -172,9 +304,6 @@ impl ModelRecommendation {
         if let Some(ref m) = self.flux {
             total += m.estimated_size_gb;
         }
-        if let Some(ref m) = self.colpali {
-            total += m.estimated_size_gb;
-        }
         total
     }
 
@@ -187,9 +316,6 @@ impl ModelRecommendation {
             v.push(m);
         }
         if let Some(ref m) = self.flux {
-            v.push(m);
-        }
-        if let Some(ref m) = self.colpali {
             v.push(m);
         }
         v
@@ -212,7 +338,6 @@ pub fn is_model_cached_locally(model_name: &str) -> bool {
 /// Returns a list of (model_name, role, is_cached) tuples.
 pub fn check_remote_model_cache(
     ssh: &crate::modules::ssh::SshConnection,
-    remote_path: &str,
     models: &[(String, String)], // (name, role)
 ) -> Vec<(String, String, bool)> {
     let mut results = Vec::new();
@@ -230,13 +355,6 @@ pub fn check_remote_model_cache(
             .unwrap_or(false);
         results.push((name.clone(), role.clone(), cached));
     }
-
-    // Also check Marker/Surya models
-    let marker_check = format!(
-        "cd {} && bash scripts/llm/download-models.sh --check 2>/dev/null | grep -c '✓' || echo 0",
-        remote_path
-    );
-    let _marker_count = ssh.run(&marker_check).unwrap_or_default();
 
     results
 }
@@ -279,8 +397,6 @@ fn estimate_model_size(name: &str) -> f64 {
         0.2
     } else if lower.contains("flux") {
         3.5
-    } else if lower.contains("colpali") || lower.contains("paligemma") {
-        3.0
     } else {
         2.0
     }

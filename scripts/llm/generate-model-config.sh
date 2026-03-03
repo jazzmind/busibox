@@ -126,12 +126,77 @@ def estimate_params_billions(model_key: str, model_name: str) -> float:
 def classify_size(model_key: str, model_name: str) -> str:
     return "small" if estimate_params_billions(model_key, model_name) < 10 else "large"
 
+def _normalize_model_key(key: str) -> str:
+    return key.replace(".", "-").replace("_", "-").lower()
+
+def get_explicit_gpu_assignments() -> Dict[str, str]:
+    """Read GPU_ASSIGN_<MODEL_KEY>=<GPU> from environment variables."""
+    assignments: Dict[str, str] = {}
+    for key, val in os.environ.items():
+        if key.startswith("GPU_ASSIGN_"):
+            model_key = key[len("GPU_ASSIGN_"):].lower().replace("_", "-")
+            assignments[model_key] = val.strip("'\"")
+    return assignments
+
+def get_explicit_tp_overrides() -> Dict[str, int]:
+    """Read GPU_TP_<MODEL_KEY>=<tp_count> from environment variables."""
+    overrides: Dict[str, int] = {}
+    for key, val in os.environ.items():
+        if key.startswith("GPU_TP_"):
+            model_key = key[len("GPU_TP_"):].lower().replace("_", "-")
+            try:
+                overrides[model_key] = int(val.strip("'\""))
+            except ValueError:
+                pass
+    return overrides
+
+def find_explicit_gpu(model_key: str, explicit: Dict[str, str]) -> str | None:
+    """Match a model key against explicit GPU assignments, handling naming variants."""
+    if model_key in explicit:
+        return explicit[model_key]
+    normalized = _normalize_model_key(model_key)
+    for k, v in explicit.items():
+        if _normalize_model_key(k) == normalized:
+            return v
+    return None
+
+def find_explicit_tp(model_key: str, tp_overrides: Dict[str, int]) -> int | None:
+    """Match a model key against explicit TP overrides."""
+    if model_key in tp_overrides:
+        return tp_overrides[model_key]
+    normalized = _normalize_model_key(model_key)
+    for k, v in tp_overrides.items():
+        if _normalize_model_key(k) == normalized:
+            return v
+    return None
+
 def assign_models(vllm_models: List[Tuple[str, Dict[str, Any]]], gpus: int) -> Dict[str, Dict[str, Any]]:
     assigned: Dict[str, Dict[str, Any]] = {}
     port = 8000
+    explicit = get_explicit_gpu_assignments()
+    tp_overrides = get_explicit_tp_overrides()
+
+    # First pass: assign models with explicit GPU assignments
+    explicitly_assigned = set()
+    for model_key, entry in vllm_models:
+        gpu_val = find_explicit_gpu(model_key, explicit)
+        if gpu_val is not None:
+            tp_override = find_explicit_tp(model_key, tp_overrides)
+            if tp_override is not None:
+                tp = tp_override
+            elif "," in gpu_val:
+                tp = len(gpu_val.split(","))
+            else:
+                tp = 1
+            assigned[model_key] = {"gpu": gpu_val, "port": port, "tensor_parallel": tp}
+            port += 1
+            explicitly_assigned.add(model_key)
+
+    # Second pass: auto-assign remaining models
+    remaining = [(k, e) for k, e in vllm_models if k not in explicitly_assigned]
     small = []
     large = []
-    for model_key, entry in vllm_models:
+    for model_key, entry in remaining:
         model_name = entry.get("model_name", "")
         (small if classify_size(model_key, model_name) == "small" else large).append((model_key, entry))
 
@@ -159,10 +224,8 @@ def assign_models(vllm_models: List[Tuple[str, Dict[str, Any]]], gpus: int) -> D
         elif gpus >= 2:
             assigned[model_key] = {"gpu": "1", "port": port, "tensor_parallel": 1}
         elif gpus == 1:
-            # Last-resort fallback: assign on GPU 0 if it's all we have
             assigned[model_key] = {"gpu": "0", "port": port, "tensor_parallel": 1}
         else:
-            # No GPUs: leave unassigned
             continue
         port += 1
     return assigned
