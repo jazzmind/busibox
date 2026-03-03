@@ -10,6 +10,27 @@
     group: root
   tags: [data, data_configure, model_registry]
 
+# Merge default_purposes + environment overrides and resolve aliases.
+# Aliases: if a value matches another purpose key (not an available_model key),
+# follow the chain until a concrete model key is reached.
+- name: Resolve model purposes (merge defaults + overrides, resolve aliases)
+  set_fact:
+    resolved_purposes: >-
+      {%- set merged = (default_purposes | default({})) | combine(model_purposes | default({})) -%}
+      {%- set ns = namespace(result={}) -%}
+      {%- for purpose, value in merged.items() -%}
+        {%- set ns2 = namespace(v=value, depth=0) -%}
+        {%- for _ in range(10) -%}
+          {%- if ns2.v in merged and ns2.v not in available_models and ns2.depth < 10 -%}
+            {%- set ns2.v = merged[ns2.v] -%}
+            {%- set ns2.depth = ns2.depth + 1 -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {%- set _ = ns.result.update({purpose: ns2.v}) -%}
+      {%- endfor -%}
+      {{ ns.result }}
+  tags: [data, data_configure, model_registry]
+
 - name: Deploy model registry configuration
   template:
     src: model_registry.json.j2

@@ -51,6 +51,26 @@ class EmbeddingClient:
             self._client.close()
             self._client = None
     
+    def _embed_batch_sync(self, batch: List[str]) -> List[List[float]]:
+        """Send a single batch to the embedding-api and return the embedding vectors."""
+        client = self._get_client()
+        response = client.post(
+            f"{self.api_url}/embed",
+            json={"input": batch},
+        )
+
+        if response.status_code != 200:
+            error_detail = response.text
+            logger.error(
+                "Embedding API returned error",
+                status_code=response.status_code,
+                error=error_detail,
+            )
+            raise Exception(f"Embedding service error ({response.status_code}): {error_detail}")
+
+        result = response.json()
+        return [item["embedding"] for item in result["data"]]
+
     async def embed_single(self, text: str) -> Optional[List[float]]:
         """
         Generate embedding for a single text string.
@@ -66,7 +86,7 @@ class EmbeddingClient:
     
     async def embed_chunks(self, chunks: List[str]) -> List[List[float]]:
         """
-        Generate embeddings for text chunks.
+        Generate embeddings for text chunks in batches.
         
         Args:
             chunks: List of text chunks
@@ -80,40 +100,34 @@ class EmbeddingClient:
         if not chunks:
             return []
         
+        total = len(chunks)
+        num_batches = (total + self.batch_size - 1) // self.batch_size
         logger.info(
             "Generating embeddings via embedding-api",
-            chunk_count=len(chunks),
+            chunk_count=total,
+            batch_size=self.batch_size,
+            num_batches=num_batches,
             api_url=self.api_url,
         )
         
         try:
-            # Use synchronous client (worker runs in sync context)
-            client = self._get_client()
-            response = client.post(
-                f"{self.api_url}/embed",
-                json={"input": chunks},
-            )
-            
-            if response.status_code != 200:
-                error_detail = response.text
-                logger.error(
-                    "Embedding API returned error",
-                    status_code=response.status_code,
-                    error=error_detail,
+            all_embeddings: List[List[float]] = []
+            for i in range(0, total, self.batch_size):
+                batch = chunks[i : i + self.batch_size]
+                batch_num = i // self.batch_size + 1
+                logger.debug(
+                    "Embedding batch",
+                    batch=f"{batch_num}/{num_batches}",
+                    batch_size=len(batch),
                 )
-                raise Exception(f"Embedding service error ({response.status_code}): {error_detail}")
-            
-            result = response.json()
-            embeddings = [item["embedding"] for item in result["data"]]
+                all_embeddings.extend(self._embed_batch_sync(batch))
             
             logger.info(
                 "Embeddings generated successfully",
-                chunk_count=len(chunks),
-                embedding_count=len(embeddings),
-                dimension=result.get("dimension", len(embeddings[0]) if embeddings else 0),
+                chunk_count=total,
+                embedding_count=len(all_embeddings),
             )
-            
-            return embeddings
+            return all_embeddings
             
         except httpx.RequestError as e:
             logger.error(
@@ -132,7 +146,8 @@ class EmbeddingClient:
     
     def embed_chunks_sync(self, chunks: List[str]) -> List[List[float]]:
         """
-        Synchronous version of embed_chunks for use in sync contexts.
+        Synchronous version of embed_chunks -- sends chunks in batches
+        of self.batch_size to avoid OOM on the embedding-api.
         
         Args:
             chunks: List of text chunks
@@ -143,39 +158,34 @@ class EmbeddingClient:
         if not chunks:
             return []
         
+        total = len(chunks)
+        num_batches = (total + self.batch_size - 1) // self.batch_size
         logger.info(
             "Generating embeddings via embedding-api (sync)",
-            chunk_count=len(chunks),
+            chunk_count=total,
+            batch_size=self.batch_size,
+            num_batches=num_batches,
             api_url=self.api_url,
         )
         
         try:
-            client = self._get_client()
-            response = client.post(
-                f"{self.api_url}/embed",
-                json={"input": chunks},
-            )
-            
-            if response.status_code != 200:
-                error_detail = response.text
-                logger.error(
-                    "Embedding API returned error",
-                    status_code=response.status_code,
-                    error=error_detail,
+            all_embeddings: List[List[float]] = []
+            for i in range(0, total, self.batch_size):
+                batch = chunks[i : i + self.batch_size]
+                batch_num = i // self.batch_size + 1
+                logger.debug(
+                    "Embedding batch",
+                    batch=f"{batch_num}/{num_batches}",
+                    batch_size=len(batch),
                 )
-                raise Exception(f"Embedding service error ({response.status_code}): {error_detail}")
-            
-            result = response.json()
-            embeddings = [item["embedding"] for item in result["data"]]
+                all_embeddings.extend(self._embed_batch_sync(batch))
             
             logger.info(
                 "Embeddings generated successfully",
-                chunk_count=len(chunks),
-                embedding_count=len(embeddings),
-                dimension=result.get("dimension", len(embeddings[0]) if embeddings else 0),
+                chunk_count=total,
+                embedding_count=len(all_embeddings),
             )
-            
-            return embeddings
+            return all_embeddings
             
         except httpx.RequestError as e:
             logger.error(

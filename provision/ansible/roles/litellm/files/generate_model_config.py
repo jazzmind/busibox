@@ -25,19 +25,36 @@ def main():
     with open(registry_file, 'r') as f:
         registry_data = yaml.safe_load(f) or {}
     
-    model_purposes = registry_data.get('model_purposes', {})
+    default_purposes = registry_data.get('default_purposes', {})
+    env_overrides = registry_data.get('model_purposes', {})
     available_models = registry_data.get('available_models', {})
     model_configs = model_config_data.get('models', {})
+
+    # Merge defaults + environment overrides, then resolve aliases
+    merged = dict(default_purposes)
+    merged.update(env_overrides)
+
+    def resolve_alias(key, purposes, models, depth=0):
+        """Follow alias chain until we hit a concrete model key."""
+        val = purposes.get(key, key)
+        if depth > 10:
+            return val
+        if val in purposes and val not in models:
+            return resolve_alias(val, purposes, models, depth + 1)
+        return val
+
+    model_purposes = {}
+    for purpose in merged:
+        model_purposes[purpose] = resolve_alias(purpose, merged, available_models)
     
     # Debug: Show what's in model_configs
     print("DEBUG: model_configs keys: {}".format(list(model_configs.keys())), file=sys.stderr)
+    print("DEBUG: resolved purposes: {}".format(model_purposes), file=sys.stderr)
     
     # Purposes that should NOT be served through LiteLLM
     # These have dedicated services with specialized APIs
     excluded_purposes = {
         'embedding',         # FastEmbed service (dedicated embedding endpoint)
-        'visual-embedding',  # ColPali service (dedicated visual embedding endpoint)
-        # Note: reranking IS served through LiteLLM via /rerank endpoint
     }
     
     for purpose, model_key in model_purposes.items():

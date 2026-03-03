@@ -8,7 +8,7 @@ Fixes text quality issues using LLM:
 - Preserves markdown formatting
 
 Also provides page-level assessment for the progressive pipeline:
-- Whether a page needs Marker-based re-extraction (tables, formulas, etc.)
+- Whether a page needs vision model re-extraction (tables, formulas, charts, etc.)
 """
 
 import json
@@ -26,11 +26,12 @@ logger = structlog.get_logger()
 
 @dataclass
 class CleanupAssessment:
-    """Result of LLM cleanup with Marker assessment."""
+    """Result of LLM cleanup with vision re-extraction assessment."""
     cleaned_text: str
     needs_marker: bool
     reason: str
     changed: bool
+    needs_vision: bool = False
 
 
 class LLMCleanup:
@@ -169,14 +170,14 @@ Output clean, well-formatted markdown."""
                 headers["Authorization"] = f"Bearer {self.litellm_api_key}"
             
             # Calculate max_tokens based on input - cleanup output should be similar length
-            # phi-4/cleanup model has ~12K context, so we need input + output < 12K tokens
+            # qwen3.5-35b-multi/cleanup model has ~16K context, so we need input + output < 16K tokens
             # Rough estimate: 4 chars per token
             estimated_input_tokens = len(text) // 4
             system_prompt_tokens = len(self.SYSTEM_PROMPT) // 4
             
             # Cap output tokens to leave room for input + system prompt
-            # Model context: ~12000, leave buffer for safety
-            available_for_output = 10000 - estimated_input_tokens - system_prompt_tokens
+            # Model context: ~16000, leave buffer for safety
+            available_for_output = 14000 - estimated_input_tokens - system_prompt_tokens
             max_output_tokens = min(max(available_for_output, 512), 4096)
             
             # Skip cleanup if input is too long for the model
@@ -423,24 +424,30 @@ CRITICAL - IMAGE REFERENCES AND PLACEHOLDERS:
 PRESERVE: All meaningful content, markdown image references ![...](...), technical terms, numbers, dates, citations.
 DO NOT add new content. If text is already clean, keep it unchanged.
 
-TASK 2 - ASSESS WHETHER THIS PAGE NEEDS MARKER RE-EXTRACTION:
-Set needs_marker=true ONLY if:
+TASK 2 - ASSESS WHETHER THIS PAGE NEEDS VISION RE-EXTRACTION:
+A vision model can re-analyse the original page image to recover content
+that text extraction missed. Set needs_vision=true if ANY of these apply:
 - Complex tables with multi-row/column spans that OCR garbled
 - Multi-column layouts where OCR merged columns incorrectly
 - Mathematical formulas or equations that OCR couldn't represent
 - Significant visible OCR artifacts that cleaning couldn't fix
+- Charts, graphs, or diagrams that were not captured as text
+- Image placeholders but no descriptive text for what the images show
+- The page seems to be a scanned image with very little extractable text
 
-Set needs_marker=false if:
+Set needs_vision=false if:
 - Text is mostly prose/paragraphs (even if OCR quality is imperfect)
 - Simple bullet lists or numbered lists
 - Basic headings and sections
 - Minor formatting issues that cleanup already fixed
+- Tables were successfully cleaned up
+- Image placeholders already have descriptive alt-text
 
 Respond with ONLY valid JSON (no markdown code fences):
 {
   "cleaned_text": "the cleaned text here",
-  "needs_marker": true or false,
-  "reason": "brief explanation of marker decision"
+  "needs_vision": true or false,
+  "reason": "brief explanation of vision decision"
 }"""
 
     DUAL_TEXT_SYSTEM_PROMPT = """You are an expert text editor specializing in document cleanup and formatting.
@@ -480,20 +487,24 @@ CRITICAL - NO DUPLICATE CONTENT:
 PRESERVE: All meaningful content, markdown image references ![...](...), technical terms, numbers, dates, citations.
 DO NOT add new content. DO NOT duplicate sections.
 
-TASK 2 - ASSESS WHETHER THIS PAGE NEEDS MARKER RE-EXTRACTION:
-Set needs_marker=true ONLY if neither version adequately captured:
-- Complex tables with multi-row/column spans
+TASK 2 - ASSESS WHETHER THIS PAGE NEEDS VISION RE-EXTRACTION:
+A vision model can re-analyse the original page image to recover content
+that text extraction missed. Set needs_vision=true if ANY of these apply:
+- Complex tables with multi-row/column spans that neither version captured
 - Multi-column layouts that both versions got wrong
-- Mathematical formulas or equations
-- Significant content that both versions missed
+- Mathematical formulas or equations that OCR couldn't represent
+- Charts, graphs, or diagrams not captured as meaningful text by either version
+- Image placeholders exist without descriptive content
+- Tables remain garbled after merging both versions
+- The page is primarily visual content (scanned, infographic, etc.)
 
-Set needs_marker=false if the merged result is adequate.
+Set needs_vision=false if the merged result adequately captures all content.
 
 Respond with ONLY valid JSON (no markdown code fences):
 {
   "cleaned_text": "the merged/cleaned text here",
-  "needs_marker": true or false,
-  "reason": "brief explanation of marker decision"
+  "needs_vision": true or false,
+  "reason": "brief explanation of vision decision"
 }"""
     
     async def cleanup_page_with_assessment(
@@ -610,7 +621,8 @@ Respond with ONLY valid JSON (no markdown code fences):
                 
                 parsed = json.loads(raw_content)
                 cleaned_text = parsed.get("cleaned_text", page_text)
-                needs_marker = parsed.get("needs_marker", False)
+                # Accept both old (needs_marker) and new (needs_vision) keys
+                needs_vision = parsed.get("needs_vision", False) or parsed.get("needs_marker", False)
                 reason = parsed.get("reason", "")
                 
                 if not cleaned_text:
@@ -630,7 +642,7 @@ Respond with ONLY valid JSON (no markdown code fences):
                 logger.info(
                     "Page assessment complete",
                     page=page_number,
-                    needs_marker=needs_marker,
+                    needs_vision=needs_vision,
                     reason=reason,
                     changed=changed,
                     original_length=len(page_text),
@@ -639,7 +651,8 @@ Respond with ONLY valid JSON (no markdown code fences):
                 
                 return CleanupAssessment(
                     cleaned_text=cleaned_text,
-                    needs_marker=needs_marker,
+                    needs_marker=needs_vision,
+                    needs_vision=needs_vision,
                     reason=reason,
                     changed=changed,
                 )

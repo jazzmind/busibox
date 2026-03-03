@@ -269,34 +269,114 @@ class PipelineMixin:
                 start_pass=start_pass,
             )
         
-        # ── Pass 1: Fast Extract ──────────────────────────────────────────
+        # ── Pass 1: Fast Extract (page-batched for large PDFs) ───────────
         # Always run Pass 1 text extraction to populate ctx.page_texts
         # (needed by subsequent passes even when start_pass > 1)
+        page_batch_size = int(
+            (processing_config or {}).get("page_batch_size", 20)
+        )
+        num_batches = max(1, (page_count + page_batch_size - 1) // page_batch_size)
+        use_batching = page_count > page_batch_size
+
         self.history.log_stage_start(
             file_id, "parsing",
-            f"Progressive Pass 1: Fast text extraction (pymupdf4llm + layout){' (text-only, skipping index)' if start_pass > 1 else ''}",
-            metadata={"pass": 1, "page_count": page_count, "start_pass": start_pass},
+            f"Progressive Pass 1: Fast text extraction (pymupdf4llm + layout)"
+            f"{' (' + str(num_batches) + ' batches)' if use_batching else ''}"
+            f"{' (text-only, skipping index)' if start_pass > 1 else ''}",
+            metadata={"pass": 1, "page_count": page_count, "start_pass": start_pass,
+                       "page_batch_size": page_batch_size, "num_batches": num_batches},
         )
         self.postgres_service.update_pass_info(
             file_id, processing_pass=1,
             pass_metadata={"current_pass": 1, "total_passes": 3, "pass_name": "Fast Extract"},
             request=self._current_rls_context,
         )
-        
-        pass1 = self.progressive_pipeline.run_pass1(ctx, progress_callback=_progress)
-        
-        # Classify and extract metadata from Pass 1 text
+
+        pass1_start = time.time()
+        total_chunks = 0
+        chunk_index_offset = 0
+        overlap_page_texts: list = []
+        OVERLAP_PAGES = 2
+
+        for batch_idx in range(num_batches):
+            batch_start = batch_idx * page_batch_size + 1
+            batch_end = min((batch_idx + 1) * page_batch_size, page_count)
+
+            batch_page_texts, batch_combined = (
+                self.progressive_pipeline.run_pass1_batch(
+                    ctx, batch_start, batch_end, progress_callback=_progress,
+                )
+            )
+
+            ctx.page_texts.extend(batch_page_texts)
+            ctx.pass1_texts.extend([pt.text for pt in batch_page_texts])
+
+            if start_pass <= 1:
+                batch_chunks = self.progressive_pipeline.chunk_text_for_batch(
+                    batch_page_texts, overlap_page_texts, chunk_index_offset,
+                )
+
+                if batch_chunks:
+                    self._batch_chunk_embed_index(
+                        file_id, user_id, content_hash,
+                        visibility, role_ids,
+                        batch_chunks, processing_pass=1,
+                    )
+                    chunk_index_offset += len(batch_chunks)
+                    total_chunks += len(batch_chunks)
+
+                batch_combined_for_md = self.progressive_pipeline._combine_page_texts(
+                    batch_page_texts
+                )
+                markdown_content, _ = self.progressive_pipeline.generate_markdown(
+                    batch_combined_for_md, extraction_method="simple",
+                )
+                self.progressive_pipeline.upload_markdown(
+                    self.file_service, file_id, storage_path, user_id,
+                    self.progressive_pipeline._combine_page_texts(ctx.page_texts),
+                )
+
+                pct = 5 + int(25 * (batch_idx + 1) / num_batches)
+                self.postgres_service.update_status(
+                    file_id=file_id,
+                    stage="available" if batch_idx == 0 else "available",
+                    progress=pct,
+                    chunks_processed=total_chunks,
+                    total_chunks=total_chunks,
+                    pages_processed=batch_end,
+                    total_pages=page_count,
+                    status_message=(
+                        f"Pages 1-{batch_end} available"
+                        + (f", processing remaining..." if batch_end < page_count else "")
+                    ),
+                    request=self._current_rls_context,
+                )
+
+            overlap_page_texts = batch_page_texts[-OVERLAP_PAGES:]
+
+        pass1_duration = time.time() - pass1_start
+        pass1_combined = self.progressive_pipeline._combine_page_texts(ctx.page_texts)
+
+        ctx.page_count = len(ctx.page_texts) or page_count
+        ctx.pass_metadata["pass1"] = {
+            "pages": ctx.page_count,
+            "total_chars": len(pass1_combined),
+            "batches": num_batches,
+            "page_batch_size": page_batch_size,
+        }
+
+        # Classify and extract metadata from the full document
         _progress("classifying", 22, "Classifying document type")
         document_type, confidence = self.classifier.classify(
-            pass1.combined_text, original_filename, mime_type,
+            pass1_combined, original_filename, mime_type,
         )
         primary_language, detected_languages = self.classifier.detect_languages(
-            pass1.combined_text,
+            pass1_combined,
         )
-        
+
         _progress("extracting_metadata", 28, "Extracting metadata")
         metadata = self.metadata_extractor.extract(
-            temp_file_path, mime_type, pass1.combined_text,
+            temp_file_path, mime_type, pass1_combined,
         )
         self.postgres_service.update_file_metadata(
             file_id=file_id,
@@ -309,12 +389,11 @@ class PipelineMixin:
             extracted_keywords=metadata.get("keywords", []),
             request=self._current_rls_context,
         )
-        
-        # Update page_count and word_count metadata
+
         try:
             conn = self.postgres_service._get_connection(self._current_rls_context)
             with conn.cursor() as cur:
-                word_count = len(pass1.combined_text.split())
+                word_count = len(pass1_combined.split())
                 cur.execute("""
                     UPDATE data_files
                     SET metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
@@ -324,14 +403,7 @@ class PipelineMixin:
             self.postgres_service._return_connection(conn)
         except Exception as e:
             logger.warning("Failed to update metadata JSON", file_id=file_id, error=str(e))
-        
-        # Chunk, embed, index Pass 1
-        chunks = self._progressive_chunk_embed_index(
-            ctx, pass1, file_id, user_id, content_hash,
-            visibility, role_ids, processing_pass=1,
-        )
-        total_chunks = len(chunks)
-        
+
         # Extract and upload images
         images_metadata = []
         images_data = []
@@ -363,7 +435,6 @@ class PipelineMixin:
                         length=len(img_data),
                         content_type='image/png',
                     )
-                # Save image metadata JSON for duplicate/decorative filtering
                 if images_metadata:
                     import json as _json
                     _meta_json = _json.dumps(images_metadata, default=str).encode("utf-8")
@@ -399,26 +470,23 @@ class PipelineMixin:
                 file_id=file_id,
                 error=str(img_err),
             )
-        
-        # Replace pymupdf4llm image placeholders with actual image refs in page texts
+
+        # Replace pymupdf4llm image placeholders with actual image refs
         if image_refs:
             self.progressive_pipeline.replace_image_placeholders(ctx, image_refs)
-            pass1.combined_text = self.progressive_pipeline._combine_page_texts(ctx.page_texts)
+            pass1_combined = self.progressive_pipeline._combine_page_texts(ctx.page_texts)
 
-        # Generate and upload markdown (with inline images if available)
+        # Upload final markdown with image refs
         markdown_content, md_metadata = self.progressive_pipeline.generate_markdown(
-            pass1.combined_text, extraction_method="simple",
+            pass1_combined, extraction_method="simple",
             images=image_refs if image_refs else None,
         )
         markdown_path = self.progressive_pipeline.upload_markdown(
             self.file_service, file_id, storage_path, user_id, markdown_content,
         )
-        
-        # Update DB with markdown path
         if markdown_path:
             self._update_markdown_in_db(file_id, markdown_path, user_id)
-        
-        # Set stage=available -- content is now viewable and searchable
+
         self.postgres_service.update_status(
             file_id=file_id,
             stage="available",
@@ -430,15 +498,15 @@ class PipelineMixin:
             status_message="Content available - enhancing quality",
             request=self._current_rls_context,
         )
-        
+
         self.history.log_stage_complete(
             file_id, "parsing",
-            f"Pass 1 complete: {total_chunks} chunks, document now viewable",
-            metadata={"pass": 1, "chunks": total_chunks, "duration": pass1.duration_seconds},
+            f"Pass 1 complete: {total_chunks} chunks in {num_batches} batch(es), document now viewable",
+            metadata={"pass": 1, "chunks": total_chunks, "duration": pass1_duration,
+                       "batches": num_batches},
             started_at=start_time,
         )
-        
-        # Check if triggers should run at pass 1
+
         self._check_pass_triggers(file_id, user_id, delegation_token, current_pass=1)
         
         # ── Pass 2: OCR Enhancement (Tesseract) ─────────────────────────
@@ -541,6 +609,7 @@ class PipelineMixin:
                         source_pass=pt.source_pass,
                         needs_marker=pt.needs_marker,
                         marker_reason=pt.marker_reason,
+                        flags=pt.flags,
                     )
                     pass3.pages_changed = max(pass3.pages_changed, 1)
             pass3.combined_text = self.progressive_pipeline._combine_page_texts(ctx.page_texts)
@@ -689,7 +758,62 @@ class PipelineMixin:
         )
         
         return chunks
-    
+
+    def _batch_chunk_embed_index(
+        self,
+        file_id: str,
+        user_id: str,
+        content_hash: str,
+        visibility: str,
+        role_ids: Optional[List[str]],
+        chunks: List[Chunk],
+        processing_pass: int,
+    ) -> None:
+        """
+        Embed and index pre-chunked data using append (not delete+reinsert).
+
+        Used during page-batched Pass 1 where each batch's chunks are appended
+        incrementally.  Passes 2/3 continue to use _progressive_chunk_embed_index
+        which does a full delete+reinsert.
+        """
+        if not chunks:
+            return
+
+        chunk_dicts = [c.to_dict() for c in chunks]
+        self.postgres_service.upsert_chunks(file_id, chunk_dicts, processing_pass=processing_pass)
+
+        chunk_texts = [c.text for c in chunks]
+        embeddings = self.embedder.embed_chunks_sync(chunk_texts)
+
+        chunk_dicts_for_milvus = [
+            {
+                "text": c.text,
+                "chunk_index": c.chunk_index,
+                "page_number": c.page_number,
+                "char_offset": c.char_offset,
+                "section_heading": c.section_heading,
+                "language": c.language,
+            }
+            for c in chunks
+        ]
+
+        self.milvus_service.insert_text_chunks(
+            file_id=file_id,
+            user_id=user_id,
+            chunks=chunk_dicts_for_milvus,
+            embeddings=embeddings,
+            content_hash=content_hash,
+            visibility=visibility,
+            role_ids=role_ids,
+        )
+
+        logger.info(
+            "Batch chunk/embed/index complete (append)",
+            file_id=file_id,
+            pass_number=processing_pass,
+            chunk_count=len(chunks),
+        )
+
     def _update_markdown_in_db(self, file_id: str, markdown_path: str, user_id: str):
         """Update data_files with markdown path."""
         try:
