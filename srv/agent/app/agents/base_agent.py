@@ -20,6 +20,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import time
 from abc import abstractmethod
 from dataclasses import dataclass, field
@@ -42,6 +43,8 @@ from app.services.token_service import get_or_exchange_token
 from app.services.skills_service import get_skills_service
 
 logger = logging.getLogger(__name__)
+
+_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 
 def _ensure_openai_env():
@@ -1335,7 +1338,8 @@ class BaseStreamingAgent(StreamingAgent):
                 elif isinstance(output, (dict, list)):
                     context.tool_results["llm_response"] = json.dumps(output)
                 else:
-                    context.tool_results["llm_response"] = output
+                    cleaned = _THINK_RE.sub("", str(output)).strip() if isinstance(output, str) else output
+                    context.tool_results["llm_response"] = cleaned
                 
             except Exception as e:
                 logger.error(f"Conversational agent error after {round((time.monotonic() - t_conv) * 1000)}ms: {e}", exc_info=True)

@@ -27,6 +27,7 @@ class StreamEvent(BaseModel):
         "tool_start",   # Starting a tool execution
         "tool_result",  # Tool completed with result
         "content",      # Final response content (streams to chat message)
+        "prompt",       # Request for user input with structured options
         "complete",     # Execution finished
         "error",        # Error occurred
     ]
@@ -88,6 +89,17 @@ def progress(source: str, message: str, data: Optional[Dict[str, Any]] = None) -
 def interim(source: str, message: str, data: Optional[Dict[str, Any]] = None) -> StreamEvent:
     """Helper to create an interim user-facing update event."""
     return StreamEvent(type="interim", source=source, message=message, data=data)
+
+
+def prompt(source: str, message: str, data: Optional[Dict[str, Any]] = None) -> StreamEvent:
+    """Helper to create a prompt event requesting user input.
+
+    Expected ``data`` keys:
+    - prompt_type: "confirm" | "choice" | "open"
+    - options: list of option strings (e.g. ["Yes", "No"])
+    - default: optional default option string
+    """
+    return StreamEvent(type="prompt", source=source, message=message, data=data)
 
 
 def complete(source: str, message: str = "Done!", data: Optional[Dict[str, Any]] = None) -> StreamEvent:

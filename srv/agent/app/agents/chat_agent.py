@@ -24,12 +24,43 @@ from app.agents.base_agent import (
     ToolRegistry,
     ToolStrategy,
 )
-from app.schemas.streaming import content, error, interim, plan, progress, thought
+from app.schemas.streaming import content, error, interim, plan, progress, prompt, thought
 from pydantic import BaseModel, ValidationError
 
 from busibox_common.llm import get_client
 
+import re
+
 logger = logging.getLogger(__name__)
+
+_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+_YES_NO_PATTERNS = [
+    "would you like me to",
+    "shall i",
+    "do you want me to",
+    "should i",
+    "would you like to",
+]
+
+
+def _ends_with_yes_no_question(text: str) -> bool:
+    """Return True if *text* ends with a question that looks like a yes/no prompt."""
+    stripped = text.rstrip()
+    if not stripped.endswith("?"):
+        return False
+    last_sentence = stripped.rsplit("\n", 1)[-1].lower()
+    return any(p in last_sentence for p in _YES_NO_PATTERNS)
+
+
+def _strip_think_tags(text: str) -> tuple:
+    """Strip ``<think>`` blocks and return (clean_text, think_content_or_None)."""
+    matches = _THINK_RE.findall(text)
+    if not matches:
+        return text, None
+    think_text = "\n".join(m.strip() for m in matches)
+    cleaned = _THINK_RE.sub("", text).strip()
+    return cleaned, think_text
 
 
 # Chat agent system prompt - focused on behavior, tools are auto-documented by PydanticAI
@@ -850,6 +881,13 @@ class ChatAgent(BaseStreamingAgent):
             },
         ))
         fast_response = decision.response.strip()
+        fast_response, fast_think = _strip_think_tags(fast_response)
+        if fast_think:
+            await stream(thought(
+                source=self.name,
+                message=fast_think,
+                data={"phase": "model_reasoning"},
+            ))
         if fast_response:
             await stream(content(
                 source=self.name,
@@ -868,11 +906,23 @@ class ChatAgent(BaseStreamingAgent):
                     message=decision.follow_up_question,
                     data={"phase": "clarify", "partial": False},
                 ))
+                if _ends_with_yes_no_question(decision.follow_up_question):
+                    await stream(prompt(
+                        source=self.name,
+                        message=decision.follow_up_question,
+                        data={"prompt_type": "confirm", "options": ["Yes", "No"]},
+                    ))
                 return f"{fast_response}\n\n{decision.follow_up_question}".strip()
             return fast_response
 
         # For simple conversational messages, the fast response is final.
         if not decision.needs_tools:
+            if _ends_with_yes_no_question(fast_response):
+                await stream(prompt(
+                    source=self.name,
+                    message=fast_response,
+                    data={"prompt_type": "confirm", "options": ["Yes", "No"]},
+                ))
             return fast_response
 
         await stream(thought(
@@ -939,6 +989,13 @@ class ChatAgent(BaseStreamingAgent):
                     data={"phase": "quick_findings", "partial": False},
                 ))
             deep_response = str(agent_context.tool_results["llm_response"] or "").strip()
+            deep_response, deep_think = _strip_think_tags(deep_response)
+            if deep_think:
+                await stream(thought(
+                    source=self.name,
+                    message=deep_think,
+                    data={"phase": "model_reasoning"},
+                ))
             if deep_response:
                 for chunk in self._stream_chunks(deep_response):
                     if cancel.is_set():
@@ -996,6 +1053,15 @@ class ChatAgent(BaseStreamingAgent):
                     ))
             except Exception as exc:
                 logger.warning("Voice output generation skipped: %s", exc)
+        # Emit quick-reply prompt when the final response ends with a yes/no question.
+        final_text = f"{fast_response}\n\n{deep_response}".strip() if fast_response else deep_response
+        if _ends_with_yes_no_question(final_text):
+            await stream(prompt(
+                source=self.name,
+                message=final_text.rsplit("\n", 1)[-1].strip(),
+                data={"prompt_type": "confirm", "options": ["Yes", "No"]},
+            ))
+
         total_ms = round((time.monotonic() - t0) * 1000)
         logger.info(
             "Chat agent request complete",
@@ -1005,9 +1071,7 @@ class ChatAgent(BaseStreamingAgent):
                 "response_length": len(deep_response) if decision.needs_tools else len(fast_response),
             }
         )
-        if fast_response:
-            return f"{fast_response}\n\n{deep_response}".strip()
-        return deep_response
+        return final_text
 
 
 # Singleton instance
