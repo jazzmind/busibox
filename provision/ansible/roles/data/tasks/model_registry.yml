@@ -13,11 +13,16 @@
 # Merge default_purposes + environment overrides and resolve aliases.
 # Aliases: if a value matches another purpose key (not an available_model key),
 # follow the chain until a concrete model key is reached.
-- name: Resolve model purposes (merge defaults + overrides, resolve aliases)
+- name: Merge default and environment model purposes
+  set_fact:
+    _merged_purposes: "{{ (default_purposes | default({})) | combine(model_purposes | default({})) }}"
+  tags: [data, data_configure, model_registry]
+
+- name: Resolve model purpose aliases
   set_fact:
     resolved_purposes: >-
-      {%- set merged = (default_purposes | default({})) | combine(model_purposes | default({})) -%}
-      {%- set ns = namespace(result={}) -%}
+      {%- set merged = _merged_purposes -%}
+      {%- set ns = namespace(json='{') -%}
       {%- for purpose, value in merged.items() -%}
         {%- set ns2 = namespace(v=value, depth=0) -%}
         {%- for _ in range(10) -%}
@@ -26,9 +31,10 @@
             {%- set ns2.depth = ns2.depth + 1 -%}
           {%- endif -%}
         {%- endfor -%}
-        {%- set _ = ns.result.update({purpose: ns2.v}) -%}
+        {%- if not loop.first -%}{%- set ns.json = ns.json ~ ', ' -%}{%- endif -%}
+        {%- set ns.json = ns.json ~ '"' ~ purpose ~ '": "' ~ ns2.v ~ '"' -%}
       {%- endfor -%}
-      {{ ns.result }}
+      {{ ns.json ~ '}' }}
   tags: [data, data_configure, model_registry]
 
 - name: Deploy model registry configuration

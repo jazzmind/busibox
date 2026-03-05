@@ -212,6 +212,32 @@
     group: root
   tags: [agent_api, agent_api_configure, model_registry]
 
+- name: Merge default and environment model purposes
+  set_fact:
+    _merged_purposes: "{{ (default_purposes | default({})) | combine(model_purposes | default({})) }}"
+  when: resolved_purposes is not defined
+  tags: [agent_api, agent_api_configure, model_registry]
+
+- name: Resolve model purpose aliases
+  set_fact:
+    resolved_purposes: >-
+      {%- set merged = _merged_purposes -%}
+      {%- set ns = namespace(json='{') -%}
+      {%- for purpose, value in merged.items() -%}
+        {%- set ns2 = namespace(v=value, depth=0) -%}
+        {%- for _ in range(10) -%}
+          {%- if ns2.v in merged and ns2.v not in available_models and ns2.depth < 10 -%}
+            {%- set ns2.v = merged[ns2.v] -%}
+            {%- set ns2.depth = ns2.depth + 1 -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {%- if not loop.first -%}{%- set ns.json = ns.json ~ ', ' -%}{%- endif -%}
+        {%- set ns.json = ns.json ~ '"' ~ purpose ~ '": "' ~ ns2.v ~ '"' -%}
+      {%- endfor -%}
+      {{ ns.json ~ '}' }}
+  when: resolved_purposes is not defined
+  tags: [agent_api, agent_api_configure, model_registry]
+
 - name: Deploy model registry configuration
   template:
     src: "{{ playbook_dir }}/roles/data/templates/model_registry.json.j2"

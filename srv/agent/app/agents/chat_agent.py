@@ -594,14 +594,17 @@ class ChatAgent(BaseStreamingAgent):
         )
         try:
             client = get_client()
+            logger.info("plan: calling LLM (model=tool_calling)")
+            t_plan = time.monotonic()
             result = await client.chat_completion(
-                model="fast",
+                model="tool_calling",
                 messages=[
                     {"role": "system", "content": "You are a strict JSON planner. Return valid JSON only."},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
             )
+            logger.info("plan: LLM responded in %dms", round((time.monotonic() - t_plan) * 1000))
             raw = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             if raw.startswith("```json"):
                 raw = raw[7:]
