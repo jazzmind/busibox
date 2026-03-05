@@ -253,32 +253,35 @@ routing = assign_models(vllm_entries, gpu_count)
 
 output_models: Dict[str, Any] = {}
 
-# Collect model_names that are part of the CURRENT registry purpose set
-current_model_names = set()
-for mk in vllm_model_keys:
-    mn = (available_models.get(mk, {}) or {}).get("model_name", "")
-    if mn:
-        current_model_names.add(mn)
+# Collect model_keys that are part of the CURRENT registry purpose set.
+# Also build a set of model_keys from existing entries (keyed by model_key).
+current_model_keys = set(vllm_model_keys)
 
-# Only preserve existing entries that don't conflict with current assignments.
-# Stale vLLM entries (not in current purpose set) are dropped to avoid
-# port collisions where old models shadow new ones.
-for model_name, cfg in existing_models.items():
+# Preserve existing entries, re-keying vLLM entries by model_key to migrate
+# from old HF-name-keyed format.  Stale vLLM entries (not in current purpose
+# set) are dropped to avoid port collisions.
+for entry_key, cfg in existing_models.items():
     cfg = dict(cfg or {})
     is_vllm = cfg.get("provider", "").lower() == "vllm"
-    if is_vllm and model_name not in current_model_names:
-        print(f"[INFO] Removing stale vLLM entry: {model_name}", file=sys.stderr)
+    mk = cfg.get("model_key", entry_key)
+    if is_vllm and mk not in current_model_keys:
+        print(f"[INFO] Removing stale vLLM entry: {entry_key}", file=sys.stderr)
         continue
-    output_models[model_name] = cfg
+    # Re-key vLLM entries by their model_key field (migrates old HF-name keys)
+    canonical_key = mk if is_vllm else entry_key
+    if canonical_key in output_models:
+        continue  # already seen under canonical key
+    output_models[canonical_key] = cfg
 
 for model_key in vllm_model_keys:
     entry = available_models.get(model_key, {}) or {}
     model_name = entry.get("model_name", "")
     if not model_name:
         continue
-    merged = dict(output_models.get(model_name, {}))
+    merged = dict(output_models.get(model_key, {}))
     merged["provider"] = "vllm"
     merged["model_key"] = model_key
+    merged["model_name"] = model_name
 
     # Preserve technical/tuning hints from registry when present
     for key in (
@@ -294,6 +297,11 @@ for model_key in vllm_model_keys:
         if key in entry and entry[key] is not None:
             merged[key] = entry[key]
 
+    # served_model_name: the "model" field from registry (what API clients see)
+    served = entry.get("model", "")
+    if served:
+        merged["served_model_name"] = served
+
     assigned = routing.get(model_key)
     if assigned:
         merged["assigned"] = True
@@ -306,17 +314,16 @@ for model_key in vllm_model_keys:
         merged.pop("port", None)
         merged.pop("tensor_parallel", None)
 
-    output_models[model_name] = merged
+    output_models[model_key] = merged
 
-result = {"models": output_models}
+result = {"models": output_models, "model_purposes": dict(model_purposes)}
 model_config_file.parent.mkdir(parents=True, exist_ok=True)
 with model_config_file.open("w", encoding="utf-8") as f:
     yaml.safe_dump(result, f, sort_keys=False)
 
 assigned_count = sum(
     1 for key in vllm_model_keys
-    if (available_models.get(key, {}) or {}).get("model_name", "") in output_models
-    and output_models[(available_models.get(key, {}) or {}).get("model_name", "")].get("assigned") is True
+    if key in output_models and output_models[key].get("assigned") is True
 )
 print(f"[INFO] Wrote model_config.yml with {assigned_count} assigned vLLM model(s)", file=sys.stderr)
 print(f"[INFO] Output: {model_config_file}", file=sys.stderr)

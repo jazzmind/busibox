@@ -1430,6 +1430,350 @@ async def get_passkey_by_credential_for_auth(request: Request, credential_id: st
 
 
 # ============================================================================
+# IdP Discovery
+# ============================================================================
+
+
+async def _get_microsoft_config(request: Request) -> dict | None:
+    """
+    Resolve Microsoft IdP config from DB first, then env var fallback.
+    Returns dict with client_id, client_secret, tenant_id, enabled -- or None.
+    """
+    db = _get_pg(request)
+    await db.connect()
+    db_cfg = await db.get_idp_config("microsoft")
+    if db_cfg and db_cfg.get("enabled") and db_cfg.get("client_id") and db_cfg.get("tenant_id"):
+        return db_cfg
+
+    # Env var fallback
+    if config.microsoft_enabled:
+        return {
+            "provider": "microsoft",
+            "enabled": True,
+            "client_id": config.microsoft_client_id,
+            "client_secret": config.microsoft_client_secret or "",
+            "tenant_id": config.microsoft_tenant_id,
+            "metadata": {},
+        }
+    return None
+
+
+@router.get("/auth/idp/providers")
+async def list_idp_providers(request: Request):
+    """
+    List available identity providers (public endpoint).
+    
+    Used by the login page to show/hide IdP login buttons.
+    Does NOT expose secrets -- only provider type and whether it's enabled.
+    """
+    providers = []
+    ms = await _get_microsoft_config(request)
+    if ms:
+        providers.append({
+            "provider": "microsoft",
+            "enabled": True,
+            "name": "Microsoft",
+        })
+    return {"providers": providers}
+
+
+@router.get("/auth/idp/microsoft/config")
+async def get_microsoft_idp_config(request: Request):
+    """
+    Get Microsoft OIDC config needed by the portal to initiate the auth flow.
+    
+    Returns client_id and tenant_id (public values) so the portal can
+    construct the authorization URL. The client_secret stays server-side.
+    
+    Returns 404 if Microsoft auth is not configured.
+    """
+    ms = await _get_microsoft_config(request)
+    if not ms:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Microsoft authentication is not configured",
+        )
+
+    tenant_id = ms["tenant_id"]
+    return {
+        "client_id": ms["client_id"],
+        "tenant_id": tenant_id,
+        "authorization_endpoint": f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/authorize",
+        "token_endpoint": f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+    }
+
+
+@router.get("/auth/idp/microsoft/token-config")
+async def get_microsoft_token_config(request: Request):
+    """
+    Get Microsoft OIDC config INCLUDING the client_secret.
+    
+    Used by the portal server-side for the authorization code → token exchange.
+    NOT public -- requires no auth currently since it's called server-to-server
+    from the portal, but should only be accessible on the internal network.
+    
+    Returns 404 if Microsoft auth is not configured.
+    """
+    ms = await _get_microsoft_config(request)
+    if not ms:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Microsoft authentication is not configured",
+        )
+
+    tenant_id = ms["tenant_id"]
+    return {
+        "client_id": ms["client_id"],
+        "client_secret": ms["client_secret"],
+        "tenant_id": tenant_id,
+        "token_endpoint": f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+    }
+
+
+# ============================================================================
+# IdP Admin Configuration (CRUD)
+# ============================================================================
+
+
+class IdpConfigRequest(BaseModel):
+    """Request to create/update an IdP configuration."""
+    provider: str
+    enabled: bool = False
+    client_id: str = ""
+    client_secret: str = ""
+    tenant_id: str = ""
+    metadata: dict = Field(default_factory=dict)
+
+
+@router.get("/admin/idp/config")
+async def list_idp_configs(request: Request):
+    """
+    List all IdP configurations.
+    
+    Requires admin authentication (authz.settings.read scope).
+    Client secrets are masked in the response.
+    """
+    await _require_client_auth(request, ["authz.settings.read", "authz.users.read"])
+
+    db = _get_pg(request)
+    await db.connect()
+    configs = await db.list_idp_configs()
+
+    return {
+        "configs": [
+            {
+                "provider": c["provider"],
+                "enabled": c["enabled"],
+                "client_id": c["client_id"],
+                "tenant_id": c["tenant_id"],
+                "has_client_secret": bool(c.get("client_secret")),
+                "metadata": c.get("metadata", {}),
+                "created_at": _format_datetime(c["created_at"]),
+                "updated_at": _format_datetime(c["updated_at"]),
+            }
+            for c in configs
+        ]
+    }
+
+
+@router.get("/admin/idp/config/{provider}")
+async def get_idp_config(request: Request, provider: str):
+    """
+    Get a specific IdP configuration.
+    
+    Requires admin authentication. Client secret is masked.
+    """
+    await _require_client_auth(request, ["authz.settings.read", "authz.users.read"])
+
+    db = _get_pg(request)
+    await db.connect()
+    cfg = await db.get_idp_config(provider)
+
+    if not cfg:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"IdP config not found: {provider}")
+
+    return {
+        "provider": cfg["provider"],
+        "enabled": cfg["enabled"],
+        "client_id": cfg["client_id"],
+        "tenant_id": cfg["tenant_id"],
+        "has_client_secret": bool(cfg.get("client_secret")),
+        "metadata": cfg.get("metadata", {}),
+        "created_at": _format_datetime(cfg["created_at"]),
+        "updated_at": _format_datetime(cfg["updated_at"]),
+    }
+
+
+@router.put("/admin/idp/config/{provider}")
+async def upsert_idp_config(request: Request, provider: str):
+    """
+    Create or update an IdP configuration.
+    
+    Requires admin authentication (authz.settings.write scope).
+    If client_secret is empty string, the existing secret is preserved.
+    """
+    await _require_client_auth(request, ["authz.settings.write", "authz.users.write"])
+
+    body = await request.json()
+    try:
+        idp_data = IdpConfigRequest.model_validate({**body, "provider": provider})
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+    db = _get_pg(request)
+    await db.connect()
+    cfg = await db.upsert_idp_config(
+        provider=idp_data.provider,
+        enabled=idp_data.enabled,
+        client_id=idp_data.client_id,
+        client_secret=idp_data.client_secret,
+        tenant_id=idp_data.tenant_id,
+        metadata=idp_data.metadata,
+    )
+
+    return {
+        "provider": cfg["provider"],
+        "enabled": cfg["enabled"],
+        "client_id": cfg["client_id"],
+        "tenant_id": cfg["tenant_id"],
+        "has_client_secret": bool(cfg.get("client_secret")),
+        "metadata": cfg.get("metadata", {}),
+        "created_at": _format_datetime(cfg["created_at"]),
+        "updated_at": _format_datetime(cfg["updated_at"]),
+    }
+
+
+@router.delete("/admin/idp/config/{provider}")
+async def delete_idp_config(request: Request, provider: str):
+    """Delete an IdP configuration."""
+    await _require_client_auth(request, ["authz.settings.write", "authz.users.write"])
+
+    db = _get_pg(request)
+    await db.connect()
+    deleted = await db.delete_idp_config(provider)
+
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"IdP config not found: {provider}")
+
+    return {"status": "ok", "deleted": True}
+
+
+# ============================================================================
+# External Identity Provider (IdP) Authentication
+# ============================================================================
+
+
+class IdpAuthenticateRequest(BaseModel):
+    """Request to authenticate via an external IdP (e.g. Microsoft Entra ID)."""
+    email: str
+    idp_provider: str
+    idp_tenant_id: Optional[str] = None
+    idp_object_id: Optional[str] = None
+    idp_roles: List[str] = Field(default_factory=list)
+    idp_groups: List[str] = Field(default_factory=list)
+    display_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+
+@router.post("/auth/idp/authenticate")
+async def authenticate_with_idp(request: Request):
+    """
+    Authenticate a user via external identity provider.
+    
+    Called by the portal after it completes the OIDC authorization code flow
+    with the external IdP (e.g. Microsoft). The portal validates the ID token
+    and sends the verified claims here.
+    
+    This endpoint:
+    1. Validates the email domain against allowlist
+    2. Creates or updates the user with IdP metadata
+    3. Activates PENDING users
+    4. Creates a session
+    5. Returns user and signed session JWT
+    
+    This endpoint is NOT public -- it requires a valid access token from
+    busibox-portal (the portal calls this server-to-server).
+    """
+    body = await request.json()
+    try:
+        idp_data = IdpAuthenticateRequest.model_validate(body)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+    email = idp_data.email.lower().strip()
+
+    # Validate email domain
+    if config.allowed_email_domains:
+        domain = email.split("@")[-1].lower()
+        if domain not in config.allowed_email_domains:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Email domain '{domain}' is not allowed",
+            )
+
+    db = _get_pg(request)
+    await db.connect()
+
+    result = await db.authenticate_with_idp(
+        email=email,
+        idp_provider=idp_data.idp_provider,
+        idp_tenant_id=idp_data.idp_tenant_id,
+        idp_object_id=idp_data.idp_object_id,
+        idp_roles=idp_data.idp_roles,
+        idp_groups=idp_data.idp_groups,
+        display_name=idp_data.display_name,
+        first_name=idp_data.first_name,
+        last_name=idp_data.last_name,
+        avatar_url=idp_data.avatar_url,
+    )
+
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is deactivated",
+        )
+
+    user = result["user"]
+    session = result["session"]
+
+    # Ensure admin role
+    user_roles = await _ensure_admin_role_for_email(user["email"], user["user_id"], db)
+
+    # Sign a session JWT
+    session_jwt, expires_at = await _sign_session_jwt(
+        user_id=user["user_id"],
+        email=user["email"],
+        session_id=session["session_id"],
+        display_name=user.get("display_name"),
+        first_name=user.get("first_name"),
+        last_name=user.get("last_name"),
+        avatar_url=user.get("avatar_url"),
+        favorite_color=user.get("favorite_color"),
+        roles=user_roles,
+        db=db,
+    )
+
+    return {
+        "user": {
+            "user_id": user["user_id"],
+            "email": user["email"],
+            "status": user["status"],
+            "roles": [
+                {"id": r["id"], "name": r["name"]}
+                for r in user_roles
+            ],
+        },
+        "session": {
+            "token": session_jwt,
+            "expires_at": _format_datetime_from_timestamp(expires_at),
+            "token_type": "Bearer",
+        },
+    }
+
+
+# ============================================================================
 # Cleanup Endpoints (for scheduled jobs)
 # ============================================================================
 

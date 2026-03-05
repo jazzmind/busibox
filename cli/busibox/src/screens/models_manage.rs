@@ -250,8 +250,12 @@ pub fn render(f: &mut Frame, app: &App) {
             help_spans.push(Span::styled("Roles  ", theme::normal()));
             help_spans.push(Span::styled("a ", theme::highlight()));
             help_spans.push(Span::styled("Add  ", theme::normal()));
+            help_spans.push(Span::styled("c ", theme::highlight()));
+            help_spans.push(Span::styled("Change  ", theme::normal()));
             help_spans.push(Span::styled("d ", theme::highlight()));
             help_spans.push(Span::styled("Del  ", theme::normal()));
+            help_spans.push(Span::styled("s ", theme::highlight()));
+            help_spans.push(Span::styled("Save  ", theme::normal()));
             help_spans.push(Span::styled("b ", theme::highlight()));
             help_spans.push(Span::styled("Bench  ", theme::normal()));
             help_spans.push(Span::styled("Enter ", theme::highlight()));
@@ -267,6 +271,8 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 
     if app.models_manage_focus == ModelsFocus::Tiers {
+        help_spans.push(Span::styled("s ", theme::highlight()));
+        help_spans.push(Span::styled("Save  ", theme::normal()));
         help_spans.push(Span::styled("Enter ", theme::highlight()));
         if is_changed {
             help_spans.push(Span::styled(
@@ -846,36 +852,24 @@ fn render_model_details(f: &mut Frame, app: &App, area: Rect) {
         )));
     }
 
-    let current_tier_key = if app.models_manage_tier_selected == CUSTOM_TIER_INDEX {
-        "custom"
-    } else {
-        MemoryTier::all()
-            .get(app.models_manage_tier_selected)
-            .map(|t| t.name())
-            .unwrap_or("standard")
-    };
-    let is_changed = app
-        .models_manage_current_tier
-        .as_deref()
-        .map(|c| c != current_tier_key)
-        .unwrap_or(true);
-
     lines.push(Line::from(""));
-    if is_changed {
-        lines.push(Line::from(Span::styled(
-            " Press Enter to apply this tier",
-            theme::warning(),
-        )));
+    if app.models_manage_config_dirty {
+        lines.push(Line::from(vec![
+            Span::styled(" Unsaved changes  ", theme::warning()),
+            Span::styled("s Save  ", theme::highlight()),
+            Span::styled("Enter Deploy", theme::success()),
+        ]));
+    } else if app.models_manage_config_undeployed {
+        lines.push(Line::from(vec![
+            Span::styled(" Saved (not deployed)  ", theme::info()),
+            Span::styled("Enter Deploy to GPUs", theme::success()),
+        ]));
     } else {
         lines.push(Line::from(Span::styled(
-            " Press Enter to re-apply (regen config + redeploy)",
-            theme::info(),
+            " Configuration matches deployed",
+            theme::success(),
         )));
     }
-    lines.push(Line::from(Span::styled(
-        " (generates config → deploys mlx/vllm → deploys litellm)",
-        theme::muted(),
-    )));
 
     let border_style = if is_focused {
         theme::highlight()
@@ -1052,12 +1046,14 @@ fn handle_tier_key(app: &mut App, key: KeyEvent) {
             if app.models_manage_tier_selected > 0 {
                 app.models_manage_tier_selected -= 1;
                 rebuild_tier_cache(app);
+                app.models_manage_config_dirty = true;
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
             if app.models_manage_tier_selected < tier_count.saturating_sub(1) {
                 app.models_manage_tier_selected += 1;
                 rebuild_tier_cache(app);
+                app.models_manage_config_dirty = true;
             }
         }
         KeyCode::Tab => {
@@ -1072,6 +1068,9 @@ fn handle_tier_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('b') => {
             crate::screens::model_benchmark::init_screen(app, None);
             app.screen = Screen::ModelBenchmark;
+        }
+        KeyCode::Char('s') => {
+            save_config(app);
         }
         KeyCode::Enter => {
             apply_tier(app);
@@ -1121,6 +1120,9 @@ fn handle_model_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('a') => {
             open_add_picker(app);
         }
+        KeyCode::Char('c') => {
+            change_model(app);
+        }
         KeyCode::Char('b') => {
             let preselect_port = app
                 .deployed_models
@@ -1147,11 +1149,40 @@ fn handle_model_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('d') | KeyCode::Delete => {
             remove_selected_model(app);
         }
+        KeyCode::Char('s') => {
+            save_config(app);
+        }
         KeyCode::Enter => {
             apply_tier(app);
         }
         _ => {}
     }
+}
+
+fn change_model(app: &mut App) {
+    let idx = app.models_manage_model_selected;
+    let model = app
+        .models_manage_tier_models
+        .as_ref()
+        .and_then(|ts| ts.models.get(idx));
+    let model = match model {
+        Some(m) => m,
+        None => return,
+    };
+    if model.is_media {
+        app.set_message("Cannot change media models", MessageKind::Warning);
+        return;
+    }
+    if !matches!(model.provider.as_str(), "vllm" | "mlx") {
+        app.set_message("Change only applies to LLM models", MessageKind::Warning);
+        return;
+    }
+    app.models_manage_change_inherit_roles = Some(model.roles.clone());
+    app.models_manage_change_inherit_gpu =
+        app.models_manage_gpu_assignments.get(&model.model_key).cloned();
+    app.models_manage_change_insert_index = Some(idx);
+    remove_selected_model(app);
+    open_add_picker(app);
 }
 
 /// Open the add-model picker popup, populating candidates from the registry.
@@ -1221,6 +1252,7 @@ fn remove_selected_model(app: &mut App) {
         if app.models_manage_model_selected >= model_count && model_count > 0 {
             app.models_manage_model_selected = model_count - 1;
         }
+        app.models_manage_config_dirty = true;
     }
 }
 
@@ -1245,12 +1277,20 @@ fn handle_add_picker_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Enter => {
             if app.models_manage_add_selected < count {
-                let model = app.models_manage_add_candidates.remove(app.models_manage_add_selected);
+                let mut model = app.models_manage_add_candidates.remove(app.models_manage_add_selected);
                 let model_key = model.model_key.clone();
 
-                // Set default GPU assignment if the model needs GPU
+                let inherit_roles = app.models_manage_change_inherit_roles.take();
+                let inherit_gpu = app.models_manage_change_inherit_gpu.take();
+                let insert_index = app.models_manage_change_insert_index.take();
+
+                if let Some(roles) = inherit_roles {
+                    model.roles = roles;
+                }
                 if model.needs_gpu {
-                    if let Some(ref gpu_str) = model.gpu {
+                    if let Some(assign) = inherit_gpu {
+                        app.models_manage_gpu_assignments.insert(model_key.clone(), assign);
+                    } else if let Some(ref gpu_str) = model.gpu {
                         let gpus: Vec<usize> = gpu_str
                             .split(',')
                             .filter_map(|s| s.trim().parse().ok())
@@ -1268,8 +1308,15 @@ fn handle_add_picker_key(app: &mut App, key: KeyEvent) {
                 }
 
                 if let Some(ref mut ts) = app.models_manage_tier_models {
-                    ts.models.push(model);
+                    if let Some(idx) = insert_index {
+                        let idx = idx.min(ts.models.len());
+                        ts.models.insert(idx, model);
+                        app.models_manage_model_selected = idx;
+                    } else {
+                        ts.models.push(model);
+                    }
                 }
+                app.models_manage_config_dirty = true;
 
                 if app.models_manage_add_candidates.is_empty() {
                     app.models_manage_add_mode = false;
@@ -1361,6 +1408,7 @@ fn handle_role_edit_key(app: &mut App, key: KeyEvent) {
                                 m.roles.dedup();
                             }
                         }
+                        app.models_manage_config_dirty = true;
                     }
                 }
             }
@@ -1425,6 +1473,7 @@ fn toggle_gpu(app: &mut App, gpu_idx: usize) {
     if should_remove {
         app.models_manage_gpu_assignments.remove(&key);
     }
+    app.models_manage_config_dirty = true;
 }
 
 /// Toggle tensor parallelism for the selected model (only meaningful with >1 GPU).
@@ -1440,6 +1489,7 @@ fn toggle_tp(app: &mut App) {
     if let Some(entry) = app.models_manage_gpu_assignments.get_mut(&key) {
         if entry.gpus.len() > 1 {
             entry.tensor_parallel = !entry.tensor_parallel;
+            app.models_manage_config_dirty = true;
         }
     }
 }
@@ -1510,7 +1560,15 @@ fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+fn save_config(app: &mut App) {
+    apply_tier_inner(app, false);
+}
+
 fn apply_tier(app: &mut App) {
+    apply_tier_inner(app, true);
+}
+
+fn apply_tier_inner(app: &mut App, deploy: bool) {
     if !app.has_profiles() {
         app.set_message("No profile configured", MessageKind::Error);
         return;
@@ -1611,10 +1669,14 @@ fn apply_tier(app: &mut App) {
         })
         .unwrap_or_default();
 
+    let deploy = deploy;
     std::thread::spawn(move || {
-        let _ = tx.send(ModelsManageUpdate::Log(format!(
-            ">>> Applying tier: {tier_name}"
-        )));
+        let header = if deploy {
+            format!(">>> Applying tier: {tier_name}")
+        } else {
+            "--- Saving configuration (no deploy) ---".to_string()
+        };
+        let _ = tx.send(ModelsManageUpdate::Log(header));
 
         if !gpu_assignments.is_empty() {
             let _ = tx.send(ModelsManageUpdate::Log(
@@ -1697,7 +1759,7 @@ fn apply_tier(app: &mut App) {
                     let _ = tx.send(ModelsManageUpdate::Log(format!(
                         "ERROR: rsync failed: {e}"
                     )));
-                    let _ = tx.send(ModelsManageUpdate::Complete { success: false });
+                    let _ = tx.send(ModelsManageUpdate::Complete { success: false, deployed: false });
                     return;
                 }
                 let _ = tx.send(ModelsManageUpdate::Log("✓ Files synced".into()));
@@ -1749,7 +1811,7 @@ fn apply_tier(app: &mut App) {
                 let _ = tx.send(ModelsManageUpdate::Log(
                     "ERROR: No SSH connection for remote profile".into(),
                 ));
-                let _ = tx.send(ModelsManageUpdate::Complete { success: false });
+                let _ = tx.send(ModelsManageUpdate::Complete { success: false, deployed: false });
                 return;
             }
         } else {
@@ -1789,8 +1851,7 @@ fn apply_tier(app: &mut App) {
             ));
         }
 
-        // Compare vLLM config before and after generation to detect changes
-        let vllm_changed = if backend_str == "vllm" && gen_ok {
+        let vllm_changed = if deploy && backend_str == "vllm" && gen_ok {
             let post_snapshot = snapshot_vllm_config(&repo_root, is_remote, &ssh_details, &remote_path);
             if !pre_snapshot.is_empty() && pre_snapshot == post_snapshot {
                 let vllm_ports = collect_assigned_vllm_ports(&repo_root, is_remote, &ssh_details, &remote_path);
@@ -1832,12 +1893,12 @@ fn apply_tier(app: &mut App) {
                 true
             }
         } else {
-            true
+            deploy
         };
 
         let (mut step2_ok, mut step3_ok) = (true, true);
 
-        if vllm_changed {
+        if vllm_changed && deploy {
             // Step 2: Deploy LLM services
             let _ = tx.send(ModelsManageUpdate::Log(
                 "--- Step 2/5: Deploying vLLM services ---".into(),
@@ -1902,7 +1963,7 @@ fn apply_tier(app: &mut App) {
 
             // Step 4: Redeploy litellm
             let _ = tx.send(ModelsManageUpdate::Log(
-                "--- Step 4/5: Redeploying litellm ---".into(),
+                "--- Step 4/5: Deploying saved config to LiteLLM ---".into(),
             ));
 
             let litellm_args = "install SERVICE=litellm".to_string();
@@ -1947,12 +2008,23 @@ fn apply_tier(app: &mut App) {
             }
         }
 
-        let _ = tx.send(ModelsManageUpdate::Log(format!(
-            "✓ Tier '{tier_name}' applied successfully"
-        )));
-        let _ = tx.send(ModelsManageUpdate::Complete {
-            success: step2_ok && step3_ok,
-        });
+        if deploy {
+            let _ = tx.send(ModelsManageUpdate::Log(format!(
+                "✓ Tier '{tier_name}' applied successfully"
+            )));
+            let _ = tx.send(ModelsManageUpdate::Complete {
+                success: step2_ok && step3_ok,
+                deployed: true,
+            });
+        } else {
+            let _ = tx.send(ModelsManageUpdate::Log(
+                "✓ Configuration saved. Use Enter to deploy to GPUs.".into(),
+            ));
+            let _ = tx.send(ModelsManageUpdate::Complete {
+                success: gen_ok,
+                deployed: false,
+            });
+        }
     });
 }
 

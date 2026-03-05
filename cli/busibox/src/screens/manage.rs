@@ -696,6 +696,10 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
         .active_profile()
         .and_then(|(_, p)| p.network_base_octets.clone())
         .filter(|v| !v.trim().is_empty());
+    let profile_site_domain: Option<String> = app
+        .active_profile()
+        .and_then(|(_, p)| p.site_domain.clone())
+        .filter(|v| !v.trim().is_empty());
 
     std::thread::spawn(move || {
         let remote_path = profile_remote_path
@@ -870,8 +874,12 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
 
         let env_val = profile_env.as_deref().unwrap_or("development");
         let backend_val = profile_backend.as_deref().unwrap_or("docker");
+        let site_domain_export = profile_site_domain
+            .as_deref()
+            .map(|d| format!("SITE_DOMAIN={d} "))
+            .unwrap_or_default();
         let make_args = format!(
-            "manage SERVICE={service} ACTION={action} BUSIBOX_ENV={env_val} BUSIBOX_BACKEND={backend_val}"
+            "{site_domain_export}manage SERVICE={service} ACTION={action} BUSIBOX_ENV={env_val} BUSIBOX_BACKEND={backend_val}"
         );
         let _ = tx.send(ManageUpdate::Log(format!("Running: make {make_args}")));
 
@@ -922,8 +930,12 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
                         ));
                         let env_val = profile_env.as_deref().unwrap_or("development");
                         let backend_val = profile_backend.as_deref().unwrap_or("docker");
+                        let sd = profile_site_domain
+                            .as_deref()
+                            .map(|d| format!("SITE_DOMAIN={d} "))
+                            .unwrap_or_default();
                         let vllm_args = format!(
-                            "manage SERVICE=vllm ACTION=redeploy BUSIBOX_ENV={env_val} BUSIBOX_BACKEND={backend_val}"
+                            "{sd}manage SERVICE=vllm ACTION=redeploy BUSIBOX_ENV={env_val} BUSIBOX_BACKEND={backend_val}"
                         );
                         let _ = tx.send(ManageUpdate::Log(format!("Running: make {vllm_args}")));
 

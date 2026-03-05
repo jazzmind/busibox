@@ -2008,6 +2008,116 @@ class PostgresService:
             "session": session,
         }
 
+    async def authenticate_with_idp(
+        self,
+        *,
+        email: str,
+        idp_provider: str,
+        idp_tenant_id: str | None = None,
+        idp_object_id: str | None = None,
+        idp_roles: list | None = None,
+        idp_groups: list | None = None,
+        display_name: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        avatar_url: str | None = None,
+    ) -> dict | None:
+        """
+        Authenticate via external identity provider (e.g. Microsoft Entra ID).
+        
+        Upserts the user with IdP metadata, activates if PENDING, creates a session.
+        Returns user + session dict, same shape as authenticate_with_passkey/use_magic_link.
+        """
+        email = email.lower().strip()
+
+        async with self.acquire(None, None) as conn:
+            # Look up existing user by email
+            row = await conn.fetchrow(
+                "SELECT user_id, status FROM authz_users WHERE email = $1",
+                email,
+            )
+
+            if row:
+                user_id = row["user_id"]
+                if row["status"] == "DEACTIVATED":
+                    return None
+
+                # Update existing user with IdP fields + profile info
+                await conn.execute(
+                    """
+                    UPDATE authz_users
+                    SET idp_provider = $2,
+                        idp_tenant_id = $3,
+                        idp_object_id = $4,
+                        idp_roles = $5,
+                        idp_groups = $6,
+                        display_name = COALESCE($7, display_name),
+                        first_name = COALESCE($8, first_name),
+                        last_name = COALESCE($9, last_name),
+                        avatar_url = COALESCE($10, avatar_url),
+                        status = CASE WHEN status = 'PENDING' THEN 'ACTIVE' ELSE status END,
+                        email_verified_at = COALESCE(email_verified_at, now()),
+                        last_login_at = now(),
+                        pending_expires_at = NULL,
+                        updated_at = now()
+                    WHERE user_id = $1
+                    """,
+                    user_id,
+                    idp_provider,
+                    idp_tenant_id,
+                    idp_object_id,
+                    json.dumps(idp_roles or []),
+                    json.dumps(idp_groups or []),
+                    display_name,
+                    first_name,
+                    last_name,
+                    avatar_url,
+                )
+            else:
+                # Create new user from IdP
+                user_id = uuid.uuid4()
+                await conn.execute(
+                    """
+                    INSERT INTO authz_users (
+                        user_id, email, status, idp_provider, idp_tenant_id, idp_object_id,
+                        idp_roles, idp_groups, display_name, first_name, last_name, avatar_url,
+                        email_verified_at, last_login_at
+                    )
+                    VALUES ($1, $2, 'ACTIVE', $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), now())
+                    """,
+                    user_id,
+                    email,
+                    idp_provider,
+                    idp_tenant_id,
+                    idp_object_id,
+                    json.dumps(idp_roles or []),
+                    json.dumps(idp_groups or []),
+                    display_name,
+                    first_name,
+                    last_name,
+                    avatar_url,
+                )
+
+        # Get user with roles
+        user = await self.get_user_with_roles(str(user_id))
+
+        # Create session
+        import secrets as secrets_mod
+        from datetime import datetime, timedelta
+        session_token = secrets_mod.token_urlsafe(32)
+        expires_at = datetime.now() + timedelta(hours=24)
+
+        session = await self.create_session(
+            user_id=str(user_id),
+            token=session_token,
+            expires_at=expires_at.isoformat(),
+        )
+
+        return {
+            "user": user,
+            "session": session,
+        }
+
     async def cleanup_expired_passkey_challenges(self) -> int:
         """Delete all expired passkey challenges."""
         async with self.acquire(None, None) as conn:
@@ -2775,3 +2885,96 @@ class PostgresService:
                 resource_type,
             )
             return [row["resource_id"] for row in rows]
+
+    # ---------------------------------------------------------------------
+    # IdP Configuration
+    # ---------------------------------------------------------------------
+
+    async def get_idp_config(self, provider: str) -> dict | None:
+        """Get IdP configuration by provider name."""
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT provider, enabled, client_id, client_secret, tenant_id,
+                       metadata, created_at, updated_at
+                FROM authz_idp_config
+                WHERE provider = $1
+                """,
+                provider,
+            )
+            if not row:
+                return None
+            result = dict(row)
+            if isinstance(result.get("metadata"), str):
+                result["metadata"] = json.loads(result["metadata"])
+            return result
+
+    async def list_idp_configs(self) -> list[dict]:
+        """List all IdP configurations."""
+        async with self.acquire(None, None) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT provider, enabled, client_id, tenant_id,
+                       metadata, created_at, updated_at
+                FROM authz_idp_config
+                ORDER BY provider
+                """
+            )
+            results = []
+            for row in rows:
+                r = dict(row)
+                if isinstance(r.get("metadata"), str):
+                    r["metadata"] = json.loads(r["metadata"])
+                results.append(r)
+            return results
+
+    async def upsert_idp_config(
+        self,
+        *,
+        provider: str,
+        enabled: bool,
+        client_id: str,
+        client_secret: str,
+        tenant_id: str,
+        metadata: dict | None = None,
+    ) -> dict:
+        """Create or update an IdP configuration."""
+        meta_json = json.dumps(metadata or {})
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO authz_idp_config (provider, enabled, client_id, client_secret, tenant_id, metadata)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                ON CONFLICT (provider) DO UPDATE SET
+                    enabled = EXCLUDED.enabled,
+                    client_id = EXCLUDED.client_id,
+                    client_secret = CASE
+                        WHEN EXCLUDED.client_secret = '' THEN authz_idp_config.client_secret
+                        ELSE EXCLUDED.client_secret
+                    END,
+                    tenant_id = EXCLUDED.tenant_id,
+                    metadata = EXCLUDED.metadata,
+                    updated_at = now()
+                RETURNING provider, enabled, client_id, client_secret, tenant_id,
+                          metadata, created_at, updated_at
+                """,
+                provider,
+                enabled,
+                client_id,
+                client_secret,
+                tenant_id,
+                meta_json,
+            )
+            result = dict(row)
+            if isinstance(result.get("metadata"), str):
+                result["metadata"] = json.loads(result["metadata"])
+            return result
+
+    async def delete_idp_config(self, provider: str) -> bool:
+        """Delete an IdP configuration."""
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_idp_config WHERE provider = $1",
+                provider,
+            )
+            return result != "DELETE 0"

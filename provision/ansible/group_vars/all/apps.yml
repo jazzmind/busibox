@@ -40,6 +40,7 @@ _common_env: &common_env
   AGENT_API_PORT: "{{ agent_api_port }}"
   NEXT_PUBLIC_AGENT_API_URL: "http://{{ agent_ip }}:{{ agent_api_port }}"
   NEXT_PUBLIC_BUSIBOX_PORTAL_URL: "https://{{ full_domain }}/portal"
+  WEBAUTHN_RP_ID: "{{ full_domain }}"
   LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
   SSO_TOKEN_EXPIRY: "900"
   DATA_API_HOST: "{{ data_ip }}"

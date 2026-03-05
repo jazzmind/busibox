@@ -328,6 +328,19 @@ def get_authz_schema() -> SchemaManager:
         )
     """)
     
+    schema.add_table("""
+        CREATE TABLE IF NOT EXISTS authz_idp_config (
+            provider text PRIMARY KEY,
+            enabled boolean NOT NULL DEFAULT false,
+            client_id text NOT NULL DEFAULT '',
+            client_secret text NOT NULL DEFAULT '',
+            tenant_id text NOT NULL DEFAULT '',
+            metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+            created_at timestamptz NOT NULL DEFAULT now(),
+            updated_at timestamptz NOT NULL DEFAULT now()
+        )
+    """)
+    
     # ==========================================================================
     # Indexes
     # ==========================================================================
@@ -418,5 +431,6 @@ def get_authz_schema() -> SchemaManager:
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_user_channel_bindings TO busibox_user")
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_email_domain_config TO busibox_user")
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_role_bindings TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_idp_config TO busibox_user")
     
     return schema

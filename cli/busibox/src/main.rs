@@ -239,27 +239,27 @@ fn main() -> Result<()> {
                                     app.models_manage_log.len().saturating_sub(1);
                             }
                         }
-                        Ok(app::ModelsManageUpdate::Complete { success }) => {
+                        Ok(app::ModelsManageUpdate::Complete { success, deployed }) => {
                             app.models_manage_action_running = false;
                             app.models_manage_action_complete = true;
                             app.models_manage_log_scroll =
                                 app.models_manage_log.len().saturating_sub(1);
                             if success {
-                                // After apply, the deployed config IS the active config.
-                                // Mark as custom and point to the Custom tier slot.
-                                app.models_manage_is_custom = true;
-                                app.models_manage_current_tier = Some("custom".to_string());
-                                app.models_manage_tier_selected =
-                                    screens::models_manage::CUSTOM_TIER_INDEX;
-                                // Reload profiles to reflect updated tier
-                                if let Ok(profiles) =
-                                    modules::profile::load_profiles(&app.repo_root)
-                                {
-                                    app.profiles = Some(profiles);
+                                app.models_manage_config_dirty = false;
+                                app.models_manage_config_undeployed = !deployed;
+                                if deployed {
+                                    app.models_manage_is_custom = true;
+                                    app.models_manage_current_tier = Some("custom".to_string());
+                                    app.models_manage_tier_selected =
+                                        screens::models_manage::CUSTOM_TIER_INDEX;
+                                    if let Ok(profiles) =
+                                        modules::profile::load_profiles(&app.repo_root)
+                                    {
+                                        app.profiles = Some(profiles);
+                                    }
+                                    app.models_manage_loaded = false;
+                                    screens::welcome::load_active_tier_models(&mut app);
                                 }
-                                // Force reload of the deployed config
-                                app.models_manage_loaded = false;
-                                screens::welcome::load_active_tier_models(&mut app);
                             }
                             put_back = false;
                             break;

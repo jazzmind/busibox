@@ -15,6 +15,12 @@ vllm_tensor_parallel_size: 1
 vllm_cuda_visible_devices: ""
 vllm_host: "0.0.0.0"
 
+# LoRA Adapter Support
+vllm_enable_lora: false
+vllm_lora_base_model: ""
+vllm_max_loras: 1
+vllm_max_lora_rank: 128
+
 # Performance Configuration
 vllm_gpu_memory_utilization: 0.9
 vllm_max_model_len: 8192

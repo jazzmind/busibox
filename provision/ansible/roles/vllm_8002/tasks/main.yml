@@ -18,6 +18,7 @@
 - name: Find model assigned to port {{ vllm_port }} using Python
   shell: |
     python3 << 'PYTHON_EOF'
+    import json
     import yaml
     from pathlib import Path
     
@@ -33,7 +34,7 @@
     models = model_config.get('models', {})
     target_port = {{ vllm_port }}
     
-    for model_name, config in models.items():
+    for entry_key, config in models.items():
         port = config.get('port')
         assigned = config.get('assigned', False)
         provider = config.get('provider', 'vllm')
@@ -43,7 +44,11 @@
             continue
         
         if port == target_port and assigned:
-            print(model_name)
+            print(json.dumps({
+                "model_key": entry_key,
+                "model_name": config.get('model_name', entry_key),
+                "served_model_name": config.get('served_model_name', '')
+            }))
             exit(0)
     
     print("")
@@ -53,37 +58,48 @@
   changed_when: false
   when: model_config_file.stat.exists
 
-- name: Set vllm_assigned_model from Python output
+- name: Parse port assignment lookup
   set_fact:
-    vllm_assigned_model: "{{ model_lookup.stdout | trim }}"
+    _port_lookup: "{{ model_lookup.stdout | trim }}"
   when: model_config_file.stat.exists
 
-- name: Set vllm_assigned_model to empty if no model_config
+- name: Set model assignment facts from lookup
   set_fact:
+    vllm_assigned_model_key: "{{ (_port_lookup | from_json).model_key }}"
+    vllm_assigned_model: "{{ (_port_lookup | from_json).model_name }}"
+    vllm_assigned_served_name: "{{ (_port_lookup | from_json).served_model_name }}"
+  when:
+    - model_config_file.stat.exists
+    - _port_lookup | length > 0
+
+- name: Set empty assignment if no model found
+  set_fact:
+    vllm_assigned_model_key: ""
     vllm_assigned_model: ""
-  when: not model_config_file.stat.exists
+    vllm_assigned_served_name: ""
+  when: not model_config_file.stat.exists or _port_lookup | default('') | length == 0
 
 - name: Debug - Show model assignment for port {{ vllm_port }}
   debug:
-    msg: "Port {{ vllm_port }}: {{ 'Assigned to ' + vllm_assigned_model if vllm_assigned_model|length > 0 else 'No model assigned - skipping deployment' }}"
+    msg: "Port {{ vllm_port }}: {{ 'Assigned to ' + vllm_assigned_model + ' (key: ' + vllm_assigned_model_key + ')' if vllm_assigned_model|length > 0 else 'No model assigned - skipping deployment' }}"
 
 - name: End play for this host if no model assigned
   meta: end_host
-  when: vllm_assigned_model is not defined or vllm_assigned_model|length == 0
+  when: vllm_assigned_model_key is not defined or vllm_assigned_model_key|length == 0
 
 - name: Set model configuration from model_config.yml
   set_fact:
     vllm_default_model: "{{ vllm_assigned_model }}"
-    vllm_tensor_parallel_size: "{{ model_config_data.models[vllm_assigned_model].tensor_parallel | default(1) }}"
-    vllm_cuda_visible_devices: "{{ model_config_data.models[vllm_assigned_model].gpu | default('') }}"
-    # Performance tuning parameters from model registry
-    vllm_gpu_memory_utilization: "{{ model_config_data.models[vllm_assigned_model].gpu_memory_utilization | default(0.9) }}"
-    vllm_max_model_len: "{{ model_config_data.models[vllm_assigned_model].max_model_len | default(8192) }}"
-    vllm_max_num_seqs: "{{ model_config_data.models[vllm_assigned_model].max_num_seqs | default(256) }}"
-    vllm_cpu_offload_gb: "{{ model_config_data.models[vllm_assigned_model].cpu_offload_gb | default(0) }}"
-  when: vllm_assigned_model != ""
+    vllm_served_model_name: "{{ vllm_assigned_served_name if vllm_assigned_served_name | length > 0 else omit }}"
+    vllm_tensor_parallel_size: "{{ model_config_data.models[vllm_assigned_model_key].tensor_parallel | default(1) }}"
+    vllm_cuda_visible_devices: "{{ model_config_data.models[vllm_assigned_model_key].gpu | default('') }}"
+    vllm_gpu_memory_utilization: "{{ model_config_data.models[vllm_assigned_model_key].gpu_memory_utilization | default(0.9) }}"
+    vllm_max_model_len: "{{ model_config_data.models[vllm_assigned_model_key].max_model_len | default(8192) }}"
+    vllm_max_num_seqs: "{{ model_config_data.models[vllm_assigned_model_key].max_num_seqs | default(256) }}"
+    vllm_cpu_offload_gb: "{{ model_config_data.models[vllm_assigned_model_key].cpu_offload_gb | default(0) }}"
+  when: vllm_assigned_model_key != ""
 
-- name: Check if model has tool calling config in registry
+- name: Check if model has LoRA base model and tool calling config in registry
   shell: |
     python3 << 'PYTHON_EOF'
     import yaml
@@ -93,7 +109,7 @@
     registry_file = Path("{{ playbook_dir }}/group_vars/all/model_registry.yml")
     
     if not registry_file.exists():
-        print(json.dumps({"tool_calling": False, "tool_call_parser": "", "tool_chat_template": ""}))
+        print(json.dumps({"lora_base": "", "tool_calling": False, "tool_call_parser": "", "tool_chat_template": ""}))
         exit(0)
     
     with open(registry_file, 'r') as f:
@@ -101,21 +117,23 @@
     
     available_models = registry_data.get('available_models', {})
     
-    # Find model entry by model_name
+    # Find model entry by model_key
+    lora_base = ""
     tool_calling = False
     tool_call_parser = ""
     tool_chat_template = ""
     multimodal = False
     limit_mm_per_prompt = ""
+    hf_overrides = ""
     
     for model_key, model_config in available_models.items():
-        if model_config.get('model_name') == "{{ vllm_assigned_model }}":
+        if model_key == "{{ vllm_assigned_model_key }}":
+            lora_base = model_config.get('lora_base_model', '')
             tool_calling = model_config.get('tool_calling', False)
             tool_call_parser = model_config.get('tool_call_parser', '')
             tool_chat_template = model_config.get('tool_chat_template', '')
             multimodal = model_config.get('multimodal', False)
             hf_overrides = model_config.get('hf_overrides', '')
-            # Convert limit_mm_per_prompt dict to JSON string for vLLM
             limit_mm_dict = model_config.get('limit_mm_per_prompt', {})
             if limit_mm_dict:
                 import json as json_module
@@ -123,6 +141,7 @@
             break
     
     print(json.dumps({
+        "lora_base": lora_base,
         "tool_calling": tool_calling,
         "tool_call_parser": tool_call_parser,
         "tool_chat_template": tool_chat_template,
@@ -134,14 +153,25 @@
   register: model_features_lookup
   delegate_to: localhost
   changed_when: false
-  when: vllm_assigned_model != ""
+  when: vllm_assigned_model_key != ""
 
 - name: Parse model features from JSON
   set_fact:
     model_features: "{{ model_features_lookup.stdout | from_json }}"
   when: 
-    - vllm_assigned_model != ""
+    - vllm_assigned_model_key != ""
     - model_features_lookup.stdout is defined
+
+- name: Enable LoRA support if base model is defined
+  set_fact:
+    vllm_enable_lora: true
+    vllm_lora_base_model: "{{ model_features.lora_base }}"
+    vllm_max_loras: 1
+    vllm_max_lora_rank: 128
+  when: 
+    - vllm_assigned_model_key != ""
+    - model_features.lora_base is defined
+    - model_features.lora_base | length > 0
 
 - name: Enable tool calling if configured
   set_fact:
@@ -149,7 +179,7 @@
     vllm_tool_call_parser: "{{ model_features.tool_call_parser }}"
     vllm_tool_chat_template: "{{ model_features.tool_chat_template }}"
   when: 
-    - vllm_assigned_model != ""
+    - vllm_assigned_model_key != ""
     - model_features.tool_calling is defined
 
 - name: Enable multimodal support if configured
@@ -157,7 +187,7 @@
     vllm_multimodal: "{{ model_features.multimodal }}"
     vllm_limit_mm_per_prompt: "{{ model_features.limit_mm_per_prompt }}"
   when: 
-    - vllm_assigned_model != ""
+    - vllm_assigned_model_key != ""
     - model_features.multimodal is defined
     - model_features.multimodal
 
@@ -165,9 +195,22 @@
   set_fact:
     vllm_hf_overrides: "{{ model_features.hf_overrides }}"
   when: 
-    - vllm_assigned_model != ""
+    - vllm_assigned_model_key != ""
     - model_features.hf_overrides is defined
     - model_features.hf_overrides | length > 0
+
+- name: Display LoRA configuration if enabled
+  debug:
+    msg: |
+      LoRA Support: ENABLED
+      Base Model: {{ vllm_lora_base_model }}
+      LoRA Adapter: {{ vllm_default_model }}
+      Max LoRAs: {{ vllm_max_loras }}
+      Max Rank: {{ vllm_max_lora_rank }}
+  when: 
+    - vllm_assigned_model_key != ""
+    - vllm_enable_lora is defined
+    - vllm_enable_lora
 
 - name: Display tool calling configuration if enabled
   debug:
@@ -176,7 +219,7 @@
       Parser: {{ vllm_tool_call_parser }}
       Chat Template: {{ vllm_tool_chat_template if vllm_tool_chat_template | length > 0 else 'Default' }}
   when: 
-    - vllm_assigned_model != ""
+    - vllm_assigned_model_key != ""
     - vllm_enable_tool_calling is defined
     - vllm_enable_tool_calling
 
@@ -186,7 +229,7 @@
       Multimodal: ENABLED
       Limits: {{ vllm_limit_mm_per_prompt }}
   when: 
-    - vllm_assigned_model != ""
+    - vllm_assigned_model_key != ""
     - vllm_multimodal is defined
     - vllm_multimodal
 
@@ -197,13 +240,13 @@
       GPU: {{ vllm_cuda_visible_devices }}
       Tensor Parallel: {{ vllm_tensor_parallel_size }}
       Port: {{ vllm_port }}
-  when: vllm_assigned_model != ""
+  when: vllm_assigned_model_key != ""
 
 - name: Include configuration tasks
-  include_tasks: configure.yml
-  when: vllm_assigned_model != ""
-  tags:
-    - vllm
-    - vllm_configure
-    - "vllm_{{ vllm_port }}"
+  include_tasks:
+    file: configure.yml
+    apply:
+      tags: [vllm, vllm_configure, "vllm_{{ vllm_port }}"]
+  when: vllm_assigned_model_key != ""
+  tags: [vllm, vllm_configure, "vllm_{{ vllm_port }}"]
 
