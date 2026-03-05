@@ -656,6 +656,7 @@ async def delete_library(
             soft_delete=not hard_delete,
             document_action=document_action,
             target_library_id=target_library_id,
+            request=request,
         )
         
         if deleted:

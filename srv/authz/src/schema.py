@@ -405,6 +405,12 @@ def get_authz_schema() -> SchemaManager:
     schema.add_migration("ALTER TABLE authz_users ADD COLUMN IF NOT EXISTS favorite_color text NULL")
     schema.add_migration("ALTER TABLE authz_users ADD COLUMN IF NOT EXISTS github_pat_encrypted bytea NULL")
     
+    # Roles - self-service columns
+    schema.add_migration("ALTER TABLE authz_roles ADD COLUMN IF NOT EXISTS created_by uuid NULL")
+    schema.add_migration("ALTER TABLE authz_roles ADD COLUMN IF NOT EXISTS source_app text NULL")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_roles_created_by ON authz_roles(created_by)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_roles_source_app ON authz_roles(source_app)")
+    
     # User roles
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_user_roles_user ON authz_user_roles(user_id)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_user_roles_role ON authz_user_roles(role_id)")

@@ -566,6 +566,7 @@ class LibraryService:
         soft_delete: bool = True,
         document_action: str = "orphan",
         target_library_id: Optional[str] = None,
+        request=None,
     ) -> bool:
         """
         Delete a library and handle its documents.
@@ -574,10 +575,11 @@ class LibraryService:
             library_id: The library's UUID
             soft_delete: If True, soft delete (set deleted_at). If False, hard delete.
             document_action: What to do with documents:
-                - "orphan": Leave documents with null library_id (legacy default)
+                - "orphan": Leave documents with null library_id (FK cascade handles this on hard delete)
                 - "move": Move documents to target_library_id
-                - "delete": Soft-delete all documents in the library
+                - "delete": Hard-delete all documents in the library
             target_library_id: Required when document_action is "move"
+            request: FastAPI request for RLS context (required for move/delete document actions)
             
         Returns:
             True if deleted, False if not found
@@ -586,6 +588,9 @@ class LibraryService:
         target_uuid = uuid.UUID(target_library_id) if target_library_id else None
         
         async with self.pool.acquire() as conn:
+            if request and document_action in ("move", "delete"):
+                await set_rls_session_vars(conn, request)
+            
             async with conn.transaction():
                 if document_action == "move" and target_uuid:
                     moved = await conn.execute(
@@ -606,15 +611,14 @@ class LibraryService:
                 elif document_action == "delete":
                     deleted_docs = await conn.execute(
                         """
-                        UPDATE data_files
-                        SET deleted_at = NOW(), updated_at = NOW()
-                        WHERE library_id = $1 AND deleted_at IS NULL
+                        DELETE FROM data_files
+                        WHERE library_id = $1
                         """,
                         lib_uuid,
                     )
                     deleted_count = int(deleted_docs.split()[-1])
                     logger.info(
-                        "Soft-deleted documents in library",
+                        "Deleted documents in library",
                         library_id=library_id,
                         count=deleted_count,
                     )

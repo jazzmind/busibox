@@ -433,25 +433,38 @@ class PostgresService:
     # RBAC admin operations
     # ---------------------------------------------------------------------
 
-    async def create_role(self, *, name: str, description: str | None, scopes: List[str] | None = None) -> dict:
+    _ROLE_COLUMNS = "id::text, name, description, scopes, is_system, created_by::text, source_app, created_at, updated_at"
+
+    async def create_role(
+        self,
+        *,
+        name: str,
+        description: str | None,
+        scopes: List[str] | None = None,
+        created_by: str | None = None,
+        source_app: str | None = None,
+    ) -> dict:
+        created_by_uuid = validate_uuid(created_by, "created_by") if created_by else None
         async with self.acquire(None, None) as conn:
             row = await conn.fetchrow(
-                """
-                INSERT INTO authz_roles (id, name, description, scopes)
-                VALUES (gen_random_uuid(), $1, $2, $3)
-                RETURNING id::text, name, description, scopes, created_at, updated_at
+                f"""
+                INSERT INTO authz_roles (id, name, description, scopes, created_by, source_app)
+                VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
+                RETURNING {self._ROLE_COLUMNS}
                 """,
                 name,
                 description,
                 scopes or [],
+                created_by_uuid,
+                source_app,
             )
             return dict(row)
 
     async def list_roles(self) -> List[dict]:
         async with self.acquire(None, None) as conn:
             rows = await conn.fetch(
-                """
-                SELECT id::text, name, description, scopes, created_at, updated_at
+                f"""
+                SELECT {self._ROLE_COLUMNS}
                 FROM authz_roles
                 ORDER BY name
                 """
@@ -461,8 +474,8 @@ class PostgresService:
     async def get_role(self, role_id: str) -> dict | None:
         async with self.acquire(None, None) as conn:
             row = await conn.fetchrow(
-                """
-                SELECT id::text, name, description, scopes, created_at, updated_at
+                f"""
+                SELECT {self._ROLE_COLUMNS}
                 FROM authz_roles
                 WHERE id = $1
                 """,
@@ -477,8 +490,8 @@ class PostgresService:
     async def get_role_by_name(self, name: str) -> dict | None:
         async with self.acquire(None, None) as conn:
             row = await conn.fetchrow(
-                """
-                SELECT id::text, name, description, scopes, created_at, updated_at
+                f"""
+                SELECT {self._ROLE_COLUMNS}
                 FROM authz_roles
                 WHERE name = $1
                 """,
@@ -486,9 +499,41 @@ class PostgresService:
             )
             return dict(row) if row else None
 
+    async def get_user_accessible_roles(
+        self, user_id: str, *, source_app: str | None = None,
+    ) -> List[dict]:
+        """Return roles where the user is the creator OR is assigned."""
+        uid = validate_uuid(user_id, "user_id")
+        async with self.acquire(None, None) as conn:
+            base = f"""
+                SELECT DISTINCT r.{self._ROLE_COLUMNS.replace('id', 'r.id').replace('name', 'r.name').replace('description', 'r.description').replace('scopes', 'r.scopes').replace('is_system', 'r.is_system').replace('created_by', 'r.created_by').replace('source_app', 'r.source_app').replace('created_at', 'r.created_at').replace('updated_at', 'r.updated_at')}
+                FROM authz_roles r
+                LEFT JOIN authz_user_roles ur ON ur.role_id = r.id AND ur.user_id = $1
+                WHERE (r.created_by = $1 OR ur.user_id IS NOT NULL)
+            """
+            params: list = [uid]
+            if source_app:
+                base += f" AND r.source_app = ${len(params) + 1}"
+                params.append(source_app)
+            base += " ORDER BY r.name"
+            rows = await conn.fetch(base, *params)
+            return [dict(r) for r in rows]
+
+    async def get_roles_by_source_app(self, source_app: str) -> List[dict]:
+        async with self.acquire(None, None) as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT {self._ROLE_COLUMNS}
+                FROM authz_roles
+                WHERE source_app = $1
+                ORDER BY name
+                """,
+                source_app,
+            )
+            return [dict(r) for r in rows]
+
     async def update_role(self, *, role_id: str, name: str | None, description: str | None, scopes: List[str] | None = None) -> dict | None:
         async with self.acquire(None, None) as conn:
-            # Build dynamic update query
             updates = []
             params = []
             param_idx = 1
@@ -518,7 +563,7 @@ class PostgresService:
                 UPDATE authz_roles
                 SET {', '.join(updates)}
                 WHERE id = ${param_idx}
-                RETURNING id::text, name, description, scopes, created_at, updated_at
+                RETURNING {self._ROLE_COLUMNS}
             """
 
             row = await conn.fetchrow(query, *params)
