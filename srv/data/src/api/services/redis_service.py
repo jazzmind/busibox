@@ -23,7 +23,10 @@ class RedisService:
         self.config = config
         self.host = config.get("redis_host", "redis")
         self.port = config.get("redis_port", 6379)
-        self.stream_name = config.get("redis_stream", "jobs:data")
+        base_stream = config.get("redis_stream", "jobs:data")
+        self.stream_name = base_stream  # kept for backward compat
+        self.stream_high = f"{base_stream}:high"
+        self.stream_low = f"{base_stream}:low"
         self.consumer_group = config.get("redis_consumer_group", "workers")
         
         self.client: Optional[redis_async.Redis] = None
@@ -69,6 +72,7 @@ class RedisService:
         visibility: str = "personal",
         role_ids: Optional[list] = None,
         delegation_token: Optional[str] = None,
+        priority: str = "high",
     ) -> str:
         """
         Add job to Redis Streams queue.
@@ -85,6 +89,7 @@ class RedisService:
             role_ids: List of role UUIDs for shared documents
             delegation_token: Delegation JWT for worker to use for Zero Trust
                              token exchange during background processing
+            priority: 'high' for Pass 1 jobs (default), 'low' for enhancement passes
         
         Returns:
             Message ID (stream entry ID)
@@ -92,6 +97,8 @@ class RedisService:
         if not self.client:
             await self.connect()
         
+        stream = self.stream_high if priority == "high" else self.stream_low
+
         job_data = {
             "job_id": file_id,
             "file_id": file_id,
@@ -101,6 +108,7 @@ class RedisService:
             "original_filename": original_filename,
             "created_at": datetime.utcnow().isoformat(),
             "visibility": visibility,
+            "priority": priority,
         }
         
         if metadata:
@@ -117,53 +125,54 @@ class RedisService:
         
         try:
             message_id = await self.client.xadd(
-                self.stream_name,
+                stream,
                 job_data,
-                maxlen=10000,  # Limit stream to 10k messages
+                maxlen=10000,
             )
             
             logger.info(
                 "Job added to Redis Streams",
-                stream=self.stream_name,
+                stream=stream,
                 file_id=file_id,
                 message_id=message_id,
+                priority=priority,
             )
             
             return message_id
         except Exception as e:
             logger.error(
                 "Failed to add job to Redis",
-                stream=self.stream_name,
+                stream=stream,
                 file_id=file_id,
                 error=str(e),
             )
             raise
     
     async def ensure_consumer_group(self):
-        """Ensure consumer group exists (idempotent)."""
+        """Ensure consumer groups exist on both priority streams (idempotent)."""
         if not self.client:
             await self.connect()
-        
-        try:
-            await self.client.xgroup_create(
-                self.stream_name,
-                self.consumer_group,
-                id="0",
-                mkstream=True,
-            )
-            logger.info(
-                "Consumer group created",
-                stream=self.stream_name,
-                group=self.consumer_group,
-            )
-        except ResponseError as e:
-            if "BUSYGROUP" in str(e):
-                # Group already exists - this is fine
-                logger.debug(
-                    "Consumer group already exists",
-                    stream=self.stream_name,
+
+        for stream in (self.stream_high, self.stream_low):
+            try:
+                await self.client.xgroup_create(
+                    stream,
+                    self.consumer_group,
+                    id="0",
+                    mkstream=True,
+                )
+                logger.info(
+                    "Consumer group created",
+                    stream=stream,
                     group=self.consumer_group,
                 )
-            else:
-                raise
+            except ResponseError as e:
+                if "BUSYGROUP" in str(e):
+                    logger.debug(
+                        "Consumer group already exists",
+                        stream=stream,
+                        group=self.consumer_group,
+                    )
+                else:
+                    raise
 

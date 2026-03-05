@@ -584,12 +584,13 @@ class ChatAgent(BaseStreamingAgent):
             )
         )
 
-        if document_library_intent and "document_search" in enabled_tools:
+        # Always search user's personal and shared documents for context
+        if "document_search" in enabled_tools:
             fallback_steps.append(
                 PlanStep(
                     id="step_1",
                     tool="document_search",
-                    objective="Search attached/library documents",
+                    objective="Search user's personal and shared documents for relevant context",
                     args={"query": query},
                 )
             )
@@ -599,8 +600,9 @@ class ChatAgent(BaseStreamingAgent):
             and "web_search" in enabled_tools
             and not document_library_intent
         ):
+            step_id = f"step_{len(fallback_steps) + 1}"
             fallback_steps.append(
-                PlanStep(id="step_1", tool="web_search", objective="Gather external context", args={"query": query})
+                PlanStep(id=step_id, tool="web_search", objective="Gather external context", args={"query": query})
             )
         if data_document_list_intent and "list_data_documents" in enabled_tools:
             fallback_steps.append(
@@ -661,7 +663,7 @@ class ChatAgent(BaseStreamingAgent):
             "- Do NOT include `create_task` unless the user explicitly asked to create a scheduled task.\n"
             "- Do NOT include `send_notification` unless the user explicitly asked to send a notification.\n"
             "- Do NOT include `memory_search` or `memory_save` unless the user asks about previous conversations or preferences.\n"
-            "- For general questions, prefer `document_search` and/or `web_search`.\n"
+            "- ALWAYS include `document_search` as the first step to search the user's personal and shared documents for relevant context. Add `web_search` as a second step when external information is also needed.\n"
             "- Use `list_data_documents`, `get_data_document`, or `query_data` ONLY when the user explicitly asks about structured data tables/records.\n\n"
             f"Dispatch action type: {dispatch.action_type}\n"
             f"User query: {query}\n"

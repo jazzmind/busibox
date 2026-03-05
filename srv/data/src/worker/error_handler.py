@@ -31,7 +31,8 @@ class ErrorHandler:
         self.postgres_service = postgres_service
         self.redis_client = redis_client
         self.max_retries = config.get("max_retries", 3)
-        self.stream_name = config.get("stream_name", "jobs:data")
+        base_stream = config.get("stream_name", "jobs:data")
+        self.stream_name = f"{base_stream}:high"
     
     def is_transient_error(self, error: Exception) -> bool:
         """

@@ -672,15 +672,20 @@ class InsightsService:
         self,
         user_id: str,
         category: Optional[str] = None,
+        conversation_id: Optional[str] = None,
         offset: int = 0,
         limit: int = 50,
     ) -> Tuple[List[Dict[str, Any]], int]:
         """
         List insights for a user with pagination and optional category filter.
         
+        When conversation_id is provided, thread-scoped categories (goal, context)
+        are filtered to that conversation while profile categories remain cross-thread.
+        
         Args:
             user_id: User ID
-            category: Optional category filter (preference, fact, goal, context, other)
+            category: Optional category filter
+            conversation_id: Optional conversation ID for thread-scoped filtering
             offset: Number of results to skip
             limit: Maximum number of results to return
             
@@ -728,13 +733,22 @@ class InsightsService:
             logger.warning(f"Error querying insights: {e}")
             return [], 0
         
+        # Thread-scoped filtering: goal and context belong to specific conversations
+        _THREAD_SCOPED = {"goal", "context"}
+        if conversation_id:
+            results = [
+                r for r in results
+                if r.get("category") not in _THREAD_SCOPED
+                or r.get("conversationId", "") == conversation_id
+            ]
+        
         total_count = len(results)
         
         # Sort by analyzedAt descending (newest first) and apply pagination
         results.sort(key=lambda x: x.get("analyzedAt", 0), reverse=True)
         paginated_results = results[offset:offset + limit]
         
-        logger.info(f"Listed {len(paginated_results)} insights for user {user_id} (total: {total_count}, category: {category})")
+        logger.info(f"Listed {len(paginated_results)} insights for user {user_id} (total: {total_count}, category: {category}, conversation: {conversation_id})")
         
         return paginated_results, total_count
 

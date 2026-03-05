@@ -405,7 +405,29 @@ def get_data_schema() -> SchemaManager:
                 SELECT 1 FROM information_schema.columns 
                 WHERE table_name = 'data_files' AND column_name = 'visibility'
             ) THEN
-                ALTER TABLE data_files ADD COLUMN visibility VARCHAR(20) DEFAULT 'personal' CHECK (visibility IN ('personal', 'shared', 'group'));
+                ALTER TABLE data_files ADD COLUMN visibility VARCHAR(20) DEFAULT 'personal' CHECK (visibility IN ('personal', 'shared', 'group', 'authenticated'));
+            END IF;
+        END $$;
+    """)
+    
+    # Fix visibility CHECK constraint for databases created before 'authenticated' was added
+    schema.add_migration("""
+        DO $$
+        DECLARE
+            cname TEXT;
+        BEGIN
+            SELECT c.conname INTO cname
+            FROM pg_constraint c
+            JOIN pg_attribute a ON a.attnum = ANY(c.conkey) AND a.attrelid = c.conrelid
+            WHERE c.conrelid = 'data_files'::regclass
+              AND c.contype = 'c'
+              AND a.attname = 'visibility'
+              AND pg_get_constraintdef(c.oid) NOT LIKE '%authenticated%';
+            
+            IF cname IS NOT NULL THEN
+                EXECUTE 'ALTER TABLE data_files DROP CONSTRAINT ' || quote_ident(cname);
+                ALTER TABLE data_files ADD CONSTRAINT data_files_visibility_check
+                    CHECK (visibility IN ('personal', 'shared', 'group', 'authenticated'));
             END IF;
         END $$;
     """)
@@ -950,13 +972,19 @@ def get_data_schema() -> SchemaManager:
     schema.add_rls("""
         CREATE POLICY shared_docs_update ON data_files FOR UPDATE USING (
             visibility = 'shared'
-            AND EXISTS (
-                SELECT 1 FROM document_roles dr
-                WHERE dr.file_id = data_files.file_id
-                AND dr.role_id = ANY(
-                    COALESCE(
-                        string_to_array(current_setting('app.user_role_ids_update', true), ',')::uuid[],
-                        ARRAY[]::uuid[]
+            AND (
+                owner_id = COALESCE(
+                    NULLIF(current_setting('app.user_id', true), '')::uuid,
+                    '00000000-0000-0000-0000-000000000000'::uuid
+                )
+                OR EXISTS (
+                    SELECT 1 FROM document_roles dr
+                    WHERE dr.file_id = data_files.file_id
+                    AND dr.role_id = ANY(
+                        COALESCE(
+                            string_to_array(current_setting('app.user_role_ids_update', true), ',')::uuid[],
+                            ARRAY[]::uuid[]
+                        )
                     )
                 )
             )

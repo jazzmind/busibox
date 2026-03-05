@@ -46,6 +46,7 @@ class HTMLRenderer:
             'a': ['href', 'title', 'rel'],
             'img': ['src', 'alt', 'title', 'width', 'height'],
             'code': ['class'],  # For syntax highlighting
+            'div': ['class', 'id', 'data-page'],
         }
 
     def render(self, markdown_content: str, file_id: str = None) -> Tuple[str, List[Dict]]:
@@ -82,6 +83,9 @@ class HTMLRenderer:
             # Now inject heading IDs into the rendered HTML (post-conversion)
             # This preserves all inline markdown formatting (bold, italic, etc.)
             html = self._inject_heading_ids(html)
+
+            # Convert page marker comments into data-page div wrappers
+            html = self._inject_page_divs(html)
             
             # Sanitize HTML
             html = self._sanitize_html(html)
@@ -184,6 +188,33 @@ class HTMLRenderer:
         result = re.sub(heading_pattern, replace_heading, html, flags=re.DOTALL)
         
         return result
+
+    def _inject_page_divs(self, html: str) -> str:
+        """Convert ``<!-- page:N -->`` comments into ``<div data-page="N">`` wrappers.
+
+        Each page marker opens a new div (closing the previous one if open).
+        This gives the frontend per-page boundaries for interactive actions.
+        """
+        page_comment_re = re.compile(r'<!-- page:(\d+) -->')
+
+        parts: list[str] = []
+        last_end = 0
+        div_open = False
+
+        for m in page_comment_re.finditer(html):
+            parts.append(html[last_end:m.start()])
+            if div_open:
+                parts.append('</div>')
+            page_num = m.group(1)
+            parts.append(f'<div id="page-{page_num}" data-page="{page_num}" class="doc-page-section">')
+            div_open = True
+            last_end = m.end()
+
+        parts.append(html[last_end:])
+        if div_open:
+            parts.append('</div>')
+
+        return ''.join(parts)
 
     def _slugify(self, text: str) -> str:
         """

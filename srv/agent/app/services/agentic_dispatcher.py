@@ -516,21 +516,22 @@ Choose the most appropriate single agent for the query.""",
                     ]
 
                     # Thread-scoped memory policy:
-                    # - context insights are considered thread-local
-                    # - only include context from the current conversation thread
+                    # - goal and context insights are conversation-local
+                    # - profile insights (preference, fact) are cross-thread
+                    _THREAD_SCOPED_CATEGORIES = {"goal", "context"}
                     current_conversation_id = None
                     if metadata and metadata.get("conversation_id"):
                         current_conversation_id = str(metadata.get("conversation_id"))
                     if current_conversation_id:
                         relevant_insights = [
                             i for i in relevant_insights
-                            if i.get("category") != "context"
+                            if i.get("category") not in _THREAD_SCOPED_CATEGORIES
                             or str(i.get("conversation_id", "")) == current_conversation_id
                         ]
                     else:
                         relevant_insights = [
                             i for i in relevant_insights
-                            if i.get("category") != "context"
+                            if i.get("category") not in _THREAD_SCOPED_CATEGORIES
                         ]
                     
                     if relevant_insights:

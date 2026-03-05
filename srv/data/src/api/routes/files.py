@@ -9,6 +9,7 @@ Handles:
 - DELETE /files/{fileId}: Delete file and all associated data
 - POST /files/{fileId}/reprocess: Reprocess document (delete chunks/vectors, re-run data)
 - POST /files/reprocess-all: Bulk reprocess all documents (for embedding model changes)
+- POST /files/{fileId}/cancel: Cancel in-progress document processing
 - GET /files/{fileId}/export: Export document in various formats (markdown, html, text, docx, pdf)
 """
 
@@ -302,8 +303,9 @@ async def reprocess_all_files(request: Request, body: BulkReprocessRequest = Non
             failed_count = 0
             
             try:
-                stream_name = config.get("redis_stream", "jobs:data")
-                
+                base_stream = config.get("redis_stream", "jobs:data")
+                stream_name = f"{base_stream}:high"
+
                 for file_row in files:
                     file_id = str(file_row["file_id"])
                     user_id = str(file_row["user_id"])
@@ -1747,8 +1749,8 @@ async def move_file(fileId: str, request: Request):
             library_id=library_id,
         )
     except Exception as exc:
-        logger.error("Failed to move file", error=str(exc))
-        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": "Failed to move file"})
+        logger.error("Failed to move file", file_id=fileId, target_visibility=target_visibility, error=str(exc), exc_info=True)
+        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": f"Failed to move file: {str(exc)}"})
 
     return {"status": "ok", "visibility": target_visibility, "roleIds": role_ids}
 
@@ -1961,7 +1963,8 @@ async def reprocess_file(fileId: str, request: Request):
                 if processing_config:
                     job_data["processing_config"] = json.dumps(processing_config)
                 
-                stream_name = config.get("redis_stream", "jobs:data")
+                base_stream = config.get("redis_stream", "jobs:data")
+                stream_name = f"{base_stream}:high"
                 await redis_client.xadd(stream_name, job_data)
                 
                 logger.info(
@@ -2007,6 +2010,257 @@ async def reprocess_file(fileId: str, request: Request):
     finally:
         # Don't disconnect - pg_service is a singleton shared across requests
         pass
+
+
+@router.post("/{fileId}/cancel", dependencies=[Depends(require_data_write)])
+async def cancel_processing(fileId: str, request: Request):
+    """
+    Cancel in-progress document processing.
+
+    Sets a Redis flag that the worker checks between processing stages.
+    If the document is still queued (not yet picked up), the status is
+    set to 'cancelled' immediately.
+    """
+    user_id = request.state.user_id
+    config = Config().to_dict()
+
+    postgres_service = _get_postgres_service()
+    if not postgres_service.pool:
+        await postgres_service.connect()
+
+    try:
+        file_uuid = uuid.UUID(fileId)
+    except ValueError:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "Invalid file ID format"},
+        )
+
+    try:
+        async with postgres_service.acquire(request) as conn:
+            has_access, _, error_msg = await check_file_access(
+                conn, file_uuid, user_id, request
+            )
+            if not has_access:
+                code = status.HTTP_404_NOT_FOUND if error_msg == "File not found" else status.HTTP_403_FORBIDDEN
+                return JSONResponse(status_code=code, content={"error": error_msg})
+
+            current_stage = await conn.fetchval(
+                "SELECT stage FROM data_status WHERE file_id = $1", file_uuid
+            )
+
+        redis_client = redis_async.Redis(
+            host=config.get("redis_host", "redis"),
+            port=config.get("redis_port", 6379),
+            decode_responses=True,
+        )
+        try:
+            await redis_client.set(f"cancel:{fileId}", "1", ex=300)
+
+            if current_stage == "queued":
+                async with postgres_service.acquire(request) as conn:
+                    await conn.execute(
+                        "UPDATE data_status SET stage = 'cancelled', status_message = 'Cancelled by user' WHERE file_id = $1",
+                        file_uuid,
+                    )
+        finally:
+            await redis_client.aclose()
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={"message": "Cancellation requested", "fileId": fileId},
+        )
+    except Exception as e:
+        logger.error("Failed to cancel processing", file_id=fileId, error=str(e), exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to cancel processing"},
+        )
+
+
+class EnhanceRequest(BaseModel):
+    mode: str = Field(..., pattern="^(llm_cleanup|vision_describe|vision_table|vision_chart|vision_ocr)$")
+    context_text: Optional[str] = None
+
+
+@router.post("/{fileId}/pages/{pageNum}/enhance", dependencies=[Depends(require_data_write)])
+async def enhance_page(fileId: str, pageNum: int, body: EnhanceRequest, request: Request):
+    """
+    On-demand enhancement for a single page via LLM cleanup or vision analysis.
+
+    Loads the persisted page_texts.json from MinIO, runs the selected mode,
+    updates the page text in place, regenerates the markdown, and returns
+    the enhanced text.
+    """
+    import asyncio
+    import tempfile
+
+    user_id = request.state.user_id
+    config = Config().to_dict()
+    minio_service = MinIOService(config)
+    postgres_service = _get_postgres_service()
+    if not postgres_service.pool:
+        await postgres_service.connect()
+
+    try:
+        file_uuid = uuid.UUID(fileId)
+    except ValueError:
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Invalid file ID"})
+
+    try:
+        async with postgres_service.acquire(request) as conn:
+            has_access, _, error_msg = await check_file_access(conn, file_uuid, user_id, request)
+            if not has_access:
+                code = status.HTTP_404_NOT_FOUND if error_msg == "File not found" else status.HTTP_403_FORBIDDEN
+                return JSONResponse(status_code=code, content={"error": error_msg})
+
+            file_row = await conn.fetchrow(
+                "SELECT storage_path, markdown_path FROM data_files WHERE file_id = $1",
+                file_uuid,
+            )
+            if not file_row:
+                return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"error": "File not found"})
+
+        storage_path = file_row["storage_path"]
+        path_parts = storage_path.rsplit("/", 2)
+        base_path = (path_parts[0] + "/" + fileId) if len(path_parts) >= 2 else f"{user_id}/{fileId}"
+        page_texts_path = f"{base_path}/page_texts.json"
+
+        loop = asyncio.get_event_loop()
+
+        # Load page_texts.json
+        try:
+            raw = await loop.run_in_executor(None, minio_service.get_file_content, page_texts_path)
+            page_data = json.loads(raw)
+        except Exception:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"error": "Page text data not available. Please reprocess the document first."},
+            )
+
+        # Find the target page
+        target = None
+        target_idx = None
+        for idx, p in enumerate(page_data):
+            if p["page_number"] == pageNum:
+                target = p
+                target_idx = idx
+                break
+
+        if target is None:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"error": f"Page {pageNum} not found in page texts"},
+            )
+
+        original_text = target["text"]
+        enhanced_text = original_text
+
+        if body.mode == "llm_cleanup":
+            from processors.llm_cleanup import LLMCleanup
+            cleanup = LLMCleanup(config)
+            if cleanup.enabled or True:
+                cleanup.enabled = True
+                assessment = await cleanup.cleanup_page_with_assessment(
+                    body.context_text or original_text, page_number=pageNum,
+                )
+                if assessment.cleaned_text and assessment.cleaned_text.strip():
+                    enhanced_text = assessment.cleaned_text
+        else:
+            # Vision modes
+            mode_map = {
+                "vision_describe": "describe",
+                "vision_table": "table",
+                "vision_chart": "chart",
+                "vision_ocr": "ocr",
+            }
+            vision_mode = mode_map.get(body.mode, "describe")
+
+            # Download original PDF to temp file for page rendering
+            tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+            try:
+                pdf_data = await loop.run_in_executor(
+                    None,
+                    lambda: minio_service.client.get_object(minio_service.bucket, storage_path).read(),
+                )
+                tmp.write(pdf_data)
+                tmp.flush()
+                tmp.close()
+
+                from processors.vision_extractor import VisionExtractor
+                vision = VisionExtractor(config)
+                result = await vision.analyse_page(
+                    file_path=tmp.name,
+                    page_number=pageNum,
+                    mode=vision_mode,
+                    existing_text=body.context_text or original_text,
+                )
+                if result.text and result.text.strip():
+                    enhanced_text = result.text
+            finally:
+                import os as _os
+                _os.unlink(tmp.name)
+
+        # Update page_texts.json if text changed
+        if enhanced_text != original_text:
+            page_data[target_idx]["text"] = enhanced_text
+            page_data[target_idx]["source_pass"] = f"enhance:{body.mode}"
+
+            updated_json = json.dumps(page_data, ensure_ascii=False).encode("utf-8")
+            import io as _io
+            await loop.run_in_executor(
+                None,
+                lambda: minio_service.client.put_object(
+                    bucket_name=minio_service.bucket,
+                    object_name=page_texts_path,
+                    data=_io.BytesIO(updated_json),
+                    length=len(updated_json),
+                    content_type="application/json",
+                ),
+            )
+
+            # Regenerate combined markdown from updated page texts
+            from processors.progressive_pipeline import ProgressivePipeline, PageText
+            page_texts_obj = [
+                PageText(page_number=p["page_number"], text=p["text"], source_pass=p.get("source_pass", ""))
+                for p in page_data
+            ]
+            pipeline = ProgressivePipeline(config)
+            combined = pipeline._combine_page_texts(page_texts_obj)
+
+            from processors.markdown_generator import MarkdownGenerator
+            md_gen = MarkdownGenerator(config)
+            markdown_content, _ = md_gen.generate(combined, extraction_method="simple")
+
+            md_bytes = markdown_content.encode("utf-8")
+            md_path = f"{base_path}/content.md"
+            await loop.run_in_executor(
+                None,
+                lambda: minio_service.client.put_object(
+                    bucket_name=minio_service.bucket,
+                    object_name=md_path,
+                    data=_io.BytesIO(md_bytes),
+                    length=len(md_bytes),
+                    content_type="text/markdown",
+                ),
+            )
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "original_text": original_text,
+                "enhanced_text": enhanced_text,
+                "page_number": pageNum,
+                "mode": body.mode,
+                "changed": enhanced_text != original_text,
+            },
+        )
+    except Exception as e:
+        logger.error("Page enhancement failed", file_id=fileId, page=pageNum, error=str(e), exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": f"Enhancement failed: {str(e)}"},
+        )
 
 
 @router.get("/{fileId}/export", dependencies=[Depends(require_data_read)])

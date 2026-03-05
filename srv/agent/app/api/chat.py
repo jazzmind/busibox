@@ -20,7 +20,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -347,12 +347,18 @@ async def send_chat_message(
             if user_settings.enabled_tools:
                 enabled_tools = [t for t in enabled_tools if t in user_settings.enabled_tools]
         
-        # Get conversation history for context
+        # Get the most recent 20 messages for context (in chronological order)
+        recent_ids_subq = (
+            select(Message.id)
+            .where(Message.conversation_id == conversation.id)
+            .order_by(desc(Message.created_at))
+            .limit(20)
+            .scalar_subquery()
+        )
         history_result = await session.execute(
             select(Message)
-            .where(Message.conversation_id == conversation.id)
+            .where(Message.id.in_(recent_ids_subq))
             .order_by(Message.created_at.asc())
-            .limit(20)  # Last 20 messages for context
         )
         history_messages = history_result.scalars().all()
         history_dicts = [
@@ -676,12 +682,18 @@ async def send_chat_message_stream(
             )
             user_settings = settings_result.scalar_one_or_none()
             
-            # Get conversation history
+            # Get the most recent 20 messages for context (in chronological order)
+            recent_ids_subq = (
+                select(Message.id)
+                .where(Message.conversation_id == conversation.id)
+                .order_by(desc(Message.created_at))
+                .limit(20)
+                .scalar_subquery()
+            )
             history_result = await session.execute(
                 select(Message)
-                .where(Message.conversation_id == conversation.id)
+                .where(Message.id.in_(recent_ids_subq))
                 .order_by(Message.created_at.asc())
-                .limit(20)
             )
             history_messages = history_result.scalars().all()
             history_dicts = [
@@ -964,12 +976,18 @@ async def send_chat_message_stream_agentic(
                         "parsed_content": attachment.parsed_content,
                     })
             
-            # Get conversation history
+            # Get the most recent 20 messages for context (in chronological order)
+            recent_ids_subq = (
+                select(Message.id)
+                .where(Message.conversation_id == conversation.id)
+                .order_by(desc(Message.created_at))
+                .limit(20)
+                .scalar_subquery()
+            )
             history_result = await session.execute(
                 select(Message)
-                .where(Message.conversation_id == conversation.id)
+                .where(Message.id.in_(recent_ids_subq))
                 .order_by(Message.created_at.asc())
-                .limit(20)
             )
             history_messages = history_result.scalars().all()
             history_dicts = [

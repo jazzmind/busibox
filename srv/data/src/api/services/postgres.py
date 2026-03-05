@@ -438,7 +438,7 @@ class PostgresService:
                         uuid.UUID(file_id),
                         role_uuids,
                     )
-                elif visibility == "personal":
+                elif visibility in ("personal", "authenticated"):
                     await conn.execute(
                         "DELETE FROM document_roles WHERE file_id = $1",
                         uuid.UUID(file_id),

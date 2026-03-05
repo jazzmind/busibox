@@ -24,8 +24,113 @@ from processors.progressive_pipeline import PageText, PassResult, ProgressiveCon
 logger = structlog.get_logger()
 
 
+class CancelledError(Exception):
+    """Raised when processing is cancelled via the cancel API."""
+
+
 class PipelineMixin:
     """Mixin providing progressive pipeline processing methods for IngestWorker."""
+
+    CANCEL_KEY_PREFIX = "cancel:"
+    CANCEL_KEY_TTL = 300  # seconds
+
+    def _is_cancelled(self, file_id: str) -> bool:
+        """Check whether a cancellation has been requested for this file."""
+        try:
+            return bool(self.redis_client.exists(f"{self.CANCEL_KEY_PREFIX}{file_id}"))
+        except Exception:
+            return False
+
+    def _handle_cancellation(self, file_id: str) -> None:
+        """Mark the document as cancelled and clean up the cancel flag."""
+        self.postgres_service.update_status(
+            file_id=file_id,
+            stage="cancelled",
+            status_message="Processing cancelled by user",
+            request=self._current_rls_context,
+        )
+        try:
+            self.redis_client.delete(f"{self.CANCEL_KEY_PREFIX}{file_id}")
+        except Exception:
+            pass
+        raise CancelledError(f"Processing cancelled for {file_id}")
+
+    def _store_page_texts(
+        self,
+        ctx,
+        file_id: str,
+        storage_path: str,
+        user_id: str,
+    ) -> None:
+        """Persist per-page text as JSON in MinIO for on-demand enhancement."""
+        import json as _json
+
+        page_data = [
+            {
+                "page_number": pt.page_number,
+                "text": pt.text,
+                "source_pass": pt.source_pass,
+                "flags": pt.flags if pt.flags else [],
+            }
+            for pt in ctx.page_texts
+        ]
+
+        path_parts = storage_path.rsplit("/", 2)
+        if len(path_parts) >= 2:
+            base_path = path_parts[0] + "/" + file_id
+        else:
+            base_path = f"{user_id}/{file_id}"
+        object_path = f"{base_path}/page_texts.json"
+
+        data = _json.dumps(page_data, ensure_ascii=False).encode("utf-8")
+        try:
+            import io
+            self.file_service.client.put_object(
+                bucket_name=self.file_service.bucket,
+                object_name=object_path,
+                data=io.BytesIO(data),
+                length=len(data),
+                content_type="application/json",
+            )
+            logger.info("Page texts stored", file_id=file_id, path=object_path, pages=len(page_data))
+        except Exception as e:
+            logger.warning("Failed to store page texts", file_id=file_id, error=str(e))
+
+    def _enqueue_pass2(
+        self,
+        file_id: str,
+        user_id: str,
+        storage_path: str,
+        mime_type: str,
+        original_filename: str,
+        visibility: str,
+        role_ids: Optional[List[str]],
+        delegation_token: Optional[str],
+    ) -> None:
+        """Enqueue a Pass 2 (OCR enhancement) job on the low-priority stream."""
+        import json as _json
+        from datetime import datetime as _dt
+
+        stream = f"{self.stream_name}:low" if hasattr(self, "stream_name") else "jobs:data:low"
+        job_data = {
+            "job_id": file_id,
+            "file_id": file_id,
+            "user_id": user_id,
+            "storage_path": storage_path,
+            "mime_type": mime_type,
+            "original_filename": original_filename,
+            "created_at": _dt.utcnow().isoformat(),
+            "visibility": visibility,
+            "priority": "low",
+            "processing_config": _json.dumps({"start_pass": 2}),
+        }
+        if role_ids:
+            job_data["role_ids"] = _json.dumps(role_ids)
+        if delegation_token:
+            job_data["delegation_token"] = delegation_token
+
+        self.redis_client.xadd(stream, job_data, maxlen=10000)
+        logger.info("Pass 2 enqueued on low-priority stream", file_id=file_id, stream=stream)
 
     def _fast_reprocess(
         self,
@@ -288,7 +393,7 @@ class PipelineMixin:
         )
         self.postgres_service.update_pass_info(
             file_id, processing_pass=1,
-            pass_metadata={"current_pass": 1, "total_passes": 3, "pass_name": "Fast Extract"},
+            pass_metadata={"current_pass": 1, "total_passes": 2, "pass_name": "Fast Extract"},
             request=self._current_rls_context,
         )
 
@@ -299,6 +404,9 @@ class PipelineMixin:
         OVERLAP_PAGES = 2
 
         for batch_idx in range(num_batches):
+            if self._is_cancelled(file_id):
+                self._handle_cancellation(file_id)
+
             batch_start = batch_idx * page_batch_size + 1
             batch_end = min((batch_idx + 1) * page_batch_size, page_count)
 
@@ -508,9 +616,46 @@ class PipelineMixin:
         )
 
         self._check_pass_triggers(file_id, user_id, delegation_token, current_pass=1)
-        
+
+        # If this job started at Pass 1, enqueue Pass 2 as a low-priority job
+        # so new uploads get their Pass 1 first.
+        if start_pass <= 1:
+            self._enqueue_pass2(
+                file_id=file_id,
+                user_id=user_id,
+                storage_path=storage_path,
+                mime_type=mime_type,
+                original_filename=original_filename,
+                visibility=visibility,
+                role_ids=role_ids,
+                delegation_token=delegation_token,
+            )
+            # Mark as available (enhancing) with current chunk counts
+            self.postgres_service.update_status(
+                file_id=file_id,
+                stage="available",
+                progress=50,
+                chunks_processed=total_chunks,
+                total_chunks=total_chunks,
+                status_message="Pass 1 complete, enhancement queued",
+                request=self._current_rls_context,
+            )
+
+            processing_duration = int(time.time() - start_time)
+            self.postgres_service.update_file_metadata(
+                file_id=file_id,
+                chunk_count=total_chunks,
+                vector_count=total_chunks,
+                processing_duration_seconds=processing_duration,
+                request=self._current_rls_context,
+            )
+            return
+
         # ── Pass 2: OCR Enhancement (Tesseract) ─────────────────────────
         if start_pass <= 2:
+            if self._is_cancelled(file_id):
+                self._handle_cancellation(file_id)
+
             self.history.log_stage_start(
                 file_id, "available",
                 "Progressive Pass 2: Tesseract OCR enhancement",
@@ -519,7 +664,7 @@ class PipelineMixin:
             self.postgres_service.update_pass_info(
                 file_id, processing_pass=2,
                 pass_metadata={
-                    "current_pass": 2, "total_passes": 3, "pass_name": "OCR Enhancement",
+                    "current_pass": 2, "total_passes": 2, "pass_name": "OCR Enhancement",
                     **ctx.pass_metadata,
                 },
                 request=self._current_rls_context,
@@ -569,96 +714,28 @@ class PipelineMixin:
         else:
             logger.info("Skipping Pass 2", start_pass=start_pass, file_id=file_id)
         
-        # ── Pass 3: LLM Cleanup + Selective Marker ───────────────────────
-        llm_cleanup_enabled = (
-            (processing_config.get("llm_cleanup_enabled", False) if processing_config else False)
-            or (self.llm_cleanup and self.llm_cleanup.enabled)
-        )
+        # Pass 3 (LLM Cleanup) is no longer run automatically.
+        # It can be triggered on-demand per page via the enhance API endpoint
+        # or via the reprocess UI with start_pass=3.
         
-        if llm_cleanup_enabled:
-            # processing_config overrides the env-var default on the LLMCleanup instance
-            if self.llm_cleanup and not self.llm_cleanup.enabled:
-                self.llm_cleanup.enabled = True
+        # Persist per-page text data for on-demand enhancement operations
+        self._store_page_texts(ctx, file_id, storage_path, user_id)
 
-            self.history.log_stage_start(
-                file_id, "cleanup",
-                "Progressive Pass 3: LLM cleanup + selective Marker",
-                metadata={"pass": 3},
-            )
-            self.postgres_service.update_pass_info(
-                file_id, processing_pass=3,
-                pass_metadata={
-                    "current_pass": 3, "total_passes": 3,
-                    "pass_name": "LLM Cleanup + Marker",
-                    **ctx.pass_metadata,
-                },
-                request=self._current_rls_context,
-            )
-            
-            pass3 = self.progressive_pipeline.run_pass3(ctx, progress_callback=_progress)
-            
-            # Post-cleanup sanitization: strip residual unicode junk, leftover placeholders
-            from processors.progressive_pipeline import ProgressivePipeline, PageText
-            for i, pt in enumerate(ctx.page_texts):
-                sanitized = ProgressivePipeline.post_cleanup_sanitize(pt.text)
-                if sanitized != pt.text:
-                    ctx.page_texts[i] = PageText(
-                        page_number=pt.page_number,
-                        text=sanitized,
-                        text_hash=PageText.compute_hash(sanitized),
-                        source_pass=pt.source_pass,
-                        needs_marker=pt.needs_marker,
-                        marker_reason=pt.marker_reason,
-                        flags=pt.flags,
-                    )
-                    pass3.pages_changed = max(pass3.pages_changed, 1)
-            pass3.combined_text = self.progressive_pipeline._combine_page_texts(ctx.page_texts)
-
-            if pass3.pages_changed > 0:
-                chunks = self._progressive_chunk_embed_index(
-                    ctx, pass3, file_id, user_id, content_hash,
-                    visibility, role_ids, processing_pass=3,
-                )
-                total_chunks = len(chunks)
-                
-                # Final markdown with images
-                markdown_content, _ = self.progressive_pipeline.generate_markdown(
-                    pass3.combined_text, extraction_method="simple",
-                    images=image_refs if image_refs else None,
-                )
-                markdown_path = self.progressive_pipeline.upload_markdown(
-                    self.file_service, file_id, storage_path, user_id, markdown_content,
-                )
-                if markdown_path:
-                    self._update_markdown_in_db(file_id, markdown_path, user_id)
-            
-            self.history.log_stage_complete(
-                file_id, "cleanup",
-                f"Pass 3 complete: {pass3.pages_changed} pages improved",
-                metadata={
-                    "pass": 3,
-                    "changed": pass3.pages_changed,
-                    "marker_pages": ctx.pass_metadata.get("pass3", {}).get("marker_pages_requested", 0),
-                },
-            )
-        else:
-            logger.info("Pass 3 skipped: LLM cleanup disabled", file_id=file_id)
-        
         # ── Complete ──────────────────────────────────────────────────────
         processing_duration = int(time.time() - start_time)
         
         self.postgres_service.update_file_metadata(
             file_id=file_id,
             chunk_count=total_chunks,
-            vector_count=total_chunks,  # 1:1 for text chunks
+            vector_count=total_chunks,
             processing_duration_seconds=processing_duration,
             request=self._current_rls_context,
         )
         
         self.postgres_service.update_pass_info(
-            file_id, processing_pass=3,
+            file_id, processing_pass=2,
             pass_metadata={
-                "total_passes": 3, "pass_name": "Completed",
+                "total_passes": 2, "pass_name": "Completed",
                 "processing_duration_seconds": processing_duration,
                 **ctx.pass_metadata,
             },
@@ -683,14 +760,13 @@ class PipelineMixin:
             metadata={
                 "total_chunks": total_chunks,
                 "processing_duration_seconds": processing_duration,
-                "passes_completed": 3 if llm_cleanup_enabled else 2,
+                "passes_completed": 2,
                 "pass_metadata": ctx.pass_metadata,
             },
             started_at=start_time,
         )
         
-        # Run pass-3 triggers (includes default triggers)
-        self._check_pass_triggers(file_id, user_id, delegation_token, current_pass=3)
+        self._check_pass_triggers(file_id, user_id, delegation_token, current_pass=2)
         
         logger.info(
             "Progressive PDF processing completed",

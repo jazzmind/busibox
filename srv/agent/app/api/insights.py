@@ -309,6 +309,7 @@ async def list_my_insights(
     principal: Principal = Depends(get_principal),
     service: InsightsService = Depends(get_insights_service),
     category: Optional[str] = Query(None, description="Filter by category: preference, fact, goal, context, other"),
+    conversation_id: Optional[str] = Query(None, description="Conversation ID to scope thread-local insights (goal, context)"),
     offset: int = Query(0, ge=0, description="Number of results to skip"),
     limit: int = Query(50, ge=1, le=100, description="Maximum results to return"),
 ):
@@ -316,7 +317,9 @@ async def list_my_insights(
     List all insights for the authenticated user.
     
     Supports pagination and optional category filtering.
-    Returns insights in frontend-compatible format.
+    When conversation_id is provided, thread-scoped categories (goal, context)
+    are filtered to that conversation while profile categories (preference, fact)
+    remain cross-thread.
     """
     user_id = principal.sub
     
@@ -325,6 +328,7 @@ async def list_my_insights(
         results, total = service.list_user_insights(
             user_id=user_id,
             category=category,
+            conversation_id=conversation_id,
             offset=offset,
             limit=limit,
         )

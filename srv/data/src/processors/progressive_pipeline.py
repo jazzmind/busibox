@@ -820,12 +820,15 @@ class ProgressivePipeline:
 
         return text.strip()
 
+    PAGE_MARKER_TEMPLATE = "<!-- page:{} -->"
+
     def _combine_page_texts(self, page_texts: List[PageText]) -> str:
         """Combine per-page text into a single document string with page markers."""
         parts = []
         for pt in page_texts:
             if pt.text.strip():
-                parts.append(pt.text)
+                marker = self.PAGE_MARKER_TEMPLATE.format(pt.page_number)
+                parts.append(f"{marker}\n{pt.text}")
         return "\n\n---\n\n".join(parts)
 
     def _is_meaningful_improvement(self, old_text: str, new_text: str) -> bool:
@@ -955,7 +958,11 @@ class ProgressivePipeline:
     def _build_page_boundaries(
         self, page_texts: List[PageText]
     ) -> List[Tuple[int, int, int]]:
-        """Build (start_offset, end_offset, page_number) tuples."""
+        """Build (start_offset, end_offset, page_number) tuples.
+
+        Accounts for the ``<!-- page:N -->\\n`` marker prepended to each page
+        in ``_combine_page_texts`` so chunk char_offset maps correctly.
+        """
         boundaries = []
         offset = 0
         separator_len = len("\n\n---\n\n")
@@ -963,9 +970,11 @@ class ProgressivePipeline:
         for i, pt in enumerate(page_texts):
             if not pt.text.strip():
                 continue
+            marker_len = len(self.PAGE_MARKER_TEMPLATE.format(pt.page_number)) + 1  # +1 for \n
             text_len = len(pt.text)
-            boundaries.append((offset, offset + text_len, pt.page_number))
-            offset += text_len + separator_len
+            text_start = offset + marker_len
+            boundaries.append((text_start, text_start + text_len, pt.page_number))
+            offset += marker_len + text_len + separator_len
 
         return boundaries
 

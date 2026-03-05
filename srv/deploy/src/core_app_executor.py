@@ -509,32 +509,43 @@ NPMRC_EOF
             
             # Clone or update the shared monorepo
             if [ -d "$MONO_DIR/.git" ]; then
-                echo "Updating existing monorepo..."
+                echo "DEBUG: Updating existing monorepo at $MONO_DIR"
                 cd "$MONO_DIR"
-                git fetch origin
-                git checkout {github_ref}
-                git reset --hard origin/{github_ref}
+                echo "DEBUG: git fetch origin..."
+                git fetch origin 2>&1
+                echo "DEBUG: git fetch done (exit $?)"
+                echo "DEBUG: git checkout {github_ref}..."
+                git checkout {github_ref} 2>&1
+                echo "DEBUG: git checkout done (exit $?)"
+                echo "DEBUG: git reset --hard origin/{github_ref}..."
+                git reset --hard origin/{github_ref} 2>&1
+                echo "DEBUG: git reset done (exit $?)"
             else
-                echo "Cloning monorepo from GitHub..."
+                echo "DEBUG: Cloning monorepo from GitHub..."
                 rm -rf "$MONO_DIR"
-                git clone {repo_url} "$MONO_DIR"
+                git clone {repo_url} "$MONO_DIR" 2>&1
+                echo "DEBUG: git clone done (exit $?)"
                 cd "$MONO_DIR"
-                git checkout {github_ref}
+                git checkout {github_ref} 2>&1
+                echo "DEBUG: git checkout done (exit $?)"
             fi
             
             cd "$MONO_DIR"
+            echo "DEBUG: pwd=$(pwd), git branch=$(git branch --show-current)"
             
             # Install pnpm if not available
             if ! command -v pnpm &>/dev/null; then
-                echo "Installing pnpm..."
-                npm install -g pnpm
+                echo "DEBUG: Installing pnpm..."
+                npm install -g pnpm 2>&1
+                echo "DEBUG: pnpm install done (exit $?)"
+            else
+                echo "DEBUG: pnpm already available at $(which pnpm) version $(pnpm --version)"
             fi
             
             # Set GITHUB_AUTH_TOKEN for .npmrc interpolation
             export GITHUB_AUTH_TOKEN='{github_token}'
             
             # Clean stale node_modules to prevent duplicate React instances
-            # (known Next.js 16 build issue in monorepos with stale deps)
             echo "=== CLEANING STALE DEPS ==="
             rm -rf node_modules/.cache 2>/dev/null || true
             for app_dir in apps/*/node_modules; do
@@ -543,22 +554,20 @@ NPMRC_EOF
             
             # Install all workspace dependencies from root
             echo "=== PNPM INSTALL START ==="
-            NODE_ENV=development pnpm install --frozen-lockfile || NODE_ENV=development pnpm install
-            echo "=== PNPM INSTALL END ==="
+            NODE_ENV=development pnpm install --frozen-lockfile 2>&1 || NODE_ENV=development pnpm install 2>&1
+            echo "=== PNPM INSTALL END (exit $?) ==="
             
-            # Build the shared package first, then the app.
-            # We can't just cd into the app and run 'pnpm run build' because that
-            # invokes 'next build' directly without building workspace dependencies
-            # like @jazzmind/busibox-app (which compiles TS to dist/).
+            # Build shared packages then the app
             echo "=== BUILD SHARED PACKAGES ==="
-            pnpm --filter @jazzmind/busibox-app run build
-            echo "=== BUILD SHARED PACKAGES DONE ==="
+            pnpm --filter @jazzmind/busibox-app run build 2>&1
+            echo "=== BUILD SHARED PACKAGES DONE (exit $?) ==="
             
             cd "$APP_DIR"
             echo "=== BUILD START ({pnpm_pkg_name}) ==="
+            echo "DEBUG: APP_DIR=$(pwd)"
             rm -rf .next 2>/dev/null || true
-            NODE_ENV=production pnpm run build
-            echo "=== BUILD END ==="
+            NODE_ENV=production pnpm run build 2>&1
+            echo "=== BUILD END (exit $?) ==="
             
             # Copy standalone assets.
             # In a monorepo, Next.js nests the standalone output under the
@@ -623,9 +632,14 @@ NPMRC_EOF
     
     if code != 0:
         logs.append(f"❌ Deployment failed with exit code {code}")
-        # Combine stdout and stderr for the error message
-        combined_output = stderr or stdout
-        return False, f"Deployment failed: {combined_output}"
+        parts = []
+        if stderr:
+            parts.append(f"STDERR:\n{stderr.strip()}")
+        if stdout:
+            last_lines = "\n".join(stdout.strip().split("\n")[-30:])
+            parts.append(f"STDOUT (last 30 lines):\n{last_lines}")
+        combined_output = "\n---\n".join(parts) if parts else "(no output)"
+        return False, f"Deployment failed (exit {code}):\n{combined_output}"
     
     # Sync app documentation to docs-api content directory
     await sync_app_docs(app_id, logs, environment)

@@ -937,7 +937,7 @@ async def embed_fields(
     user_id = getattr(request.state, "user_id", None)
     role_ids = getattr(request.state, "role_ids", [])
 
-    doc = data_service.get(document_id, user_id=user_id, role_ids=role_ids, include_records=True)
+    doc = await data_service.get_document(request, document_id=document_id, include_records=True)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -1008,8 +1008,8 @@ async def index_from_extraction(
     user_id = getattr(request.state, "user_id", None)
     role_ids = getattr(request.state, "role_ids", [])
 
-    schema_doc = data_service.get(
-        schema_document_id, user_id=user_id, role_ids=role_ids, include_records=False,
+    schema_doc = await data_service.get_document(
+        request, document_id=schema_document_id, include_records=False,
     )
     if not schema_doc:
         raise HTTPException(status_code=404, detail="Schema document not found")
@@ -1037,8 +1037,8 @@ async def index_from_extraction(
         return {"indexed_count": 0, "message": "No fields have keyword or embed search tags"}
 
     # Load extraction records for this file_id (stored in the schema doc records)
-    records_doc = data_service.get(
-        schema_document_id, user_id=user_id, role_ids=role_ids, include_records=True,
+    records_doc = await data_service.get_document(
+        request, document_id=schema_document_id, include_records=True,
     )
     all_records = records_doc.get("records", []) if records_doc else []
 

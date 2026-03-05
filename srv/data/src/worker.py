@@ -86,7 +86,7 @@ from processors.llm_cleanup import LLMCleanup
 from processors.markdown_generator import MarkdownGenerator
 from processors.image_extractor import ImageExtractor
 from worker import ErrorHandler, HistoryLogger
-from worker.pipeline import PipelineMixin
+from worker.pipeline import PipelineMixin, CancelledError
 from worker.triggers import TriggerMixin
 
 # Import WorkerRLSContext for setting RLS context on database operations
@@ -125,7 +125,10 @@ class IngestWorker(PipelineMixin, TriggerMixin):
             config = Config().to_dict()
         self.config = config
         self.worker_id = config.get("worker_id", socket.gethostname())
-        self.stream_name = config.get("stream_name", "jobs:data")
+        base_stream = config.get("stream_name", "jobs:data")
+        self.stream_name = base_stream  # backward compat
+        self.stream_high = f"{base_stream}:high"
+        self.stream_low = f"{base_stream}:low"
         self.consumer_group = config.get("consumer_group", "workers")
         self.consumer_name = f"{self.worker_id}-{os.getpid()}"
         self.running = False
@@ -171,20 +174,21 @@ class IngestWorker(PipelineMixin, TriggerMixin):
         )
         self.redis_client.ping()
         
-        # Create consumer group if it doesn't exist
-        try:
-            self.redis_client.xgroup_create(
-                self.stream_name,
-                self.consumer_group,
-                id='0',
-                mkstream=True
-            )
-            logger.info("Consumer group created", group=self.consumer_group)
-        except redis_sync.ResponseError as e:
-            if "BUSYGROUP" in str(e):
-                logger.info("Consumer group already exists", group=self.consumer_group)
-            else:
-                raise
+        # Create consumer groups on both priority streams
+        for stream in (self.stream_high, self.stream_low):
+            try:
+                self.redis_client.xgroup_create(
+                    stream,
+                    self.consumer_group,
+                    id='0',
+                    mkstream=True
+                )
+                logger.info("Consumer group created", stream=stream, group=self.consumer_group)
+            except redis_sync.ResponseError as e:
+                if "BUSYGROUP" in str(e):
+                    logger.info("Consumer group already exists", stream=stream, group=self.consumer_group)
+                else:
+                    raise
         
         # Initialize services
         self.file_service = FileService(self.config)
@@ -1916,6 +1920,10 @@ class IngestWorker(PipelineMixin, TriggerMixin):
                 delegation_token=delegation_token,
             )
         
+        except CancelledError:
+            logger.info("Processing cancelled by user", file_id=file_id)
+            return
+
         except asyncio.TimeoutError as e:
             processing_duration = int(time.time() - start_time)
             error_msg = f"Processing exceeded {timeout_seconds}s timeout for {page_count}-page document"
@@ -2036,18 +2044,22 @@ class IngestWorker(PipelineMixin, TriggerMixin):
         """
         Claim and process pending messages that were delivered but not acknowledged.
         
-        This handles the case where a previous worker instance received messages
-        but crashed before acknowledging them. Messages idle for >60 seconds
-        are claimed by this worker.
+        Checks both high and low priority streams.
         
         Returns:
             Number of messages claimed
         """
+        total = 0
+        for stream in (self.stream_high, self.stream_low):
+            total += self._claim_pending_on_stream(stream)
+        return total
+
+    def _claim_pending_on_stream(self, target_stream: str) -> int:
+        """Claim pending messages on a single stream."""
         claimed_count = 0
         try:
-            # Check for pending messages in the consumer group
             pending_info = self.redis_client.xpending(
-                self.stream_name,
+                target_stream,
                 self.consumer_group,
             )
             
@@ -2057,18 +2069,16 @@ class IngestWorker(PipelineMixin, TriggerMixin):
             pending_count = pending_info['pending']
             logger.info(
                 "Found pending messages in consumer group",
-                stream=self.stream_name,
+                stream=target_stream,
                 pending_count=pending_count,
             )
             
-            # Get detailed info about pending messages
-            # Only claim messages that have been idle for > 60 seconds
             pending_messages = self.redis_client.xpending_range(
-                self.stream_name,
+                target_stream,
                 self.consumer_group,
                 min='-',
                 max='+',
-                count=100,  # Process up to 100 pending messages at a time
+                count=100,
             )
             
             for msg_info in pending_messages:
@@ -2083,7 +2093,6 @@ class IngestWorker(PipelineMixin, TriggerMixin):
                     times_delivered=times_delivered,
                 )
 
-                # Dead-letter poison-pill jobs that have failed too many times.
                 if times_delivered > 5:
                     logger.warning(
                         "Dead-lettering pending message after too many deliveries",
@@ -2091,21 +2100,19 @@ class IngestWorker(PipelineMixin, TriggerMixin):
                         times_delivered=times_delivered,
                     )
                     self.redis_client.xack(
-                        self.stream_name,
+                        target_stream,
                         self.consumer_group,
                         message_id,
                     )
                     continue
                 
-                # Only claim messages idle for > 60 seconds (60000ms)
                 if idle_time_ms > 60000:
                     try:
-                        # Claim the message for this consumer
                         claimed = self.redis_client.xclaim(
-                            self.stream_name,
+                            target_stream,
                             self.consumer_group,
                             self.consumer_name,
-                            min_idle_time=60000,  # 60 seconds
+                            min_idle_time=60000,
                             message_ids=[message_id],
                         )
                         
@@ -2120,7 +2127,6 @@ class IngestWorker(PipelineMixin, TriggerMixin):
                                     file_id=file_id,
                                 )
                                 
-                                # Check if file still exists in database before processing
                                 file_exists = self._check_file_exists(file_id)
                                 if not file_exists:
                                     logger.warning(
@@ -2128,28 +2134,24 @@ class IngestWorker(PipelineMixin, TriggerMixin):
                                         message_id=msg_id,
                                         file_id=file_id,
                                     )
-                                    # Acknowledge the orphaned message to remove it from pending
                                     self.redis_client.xack(
-                                        self.stream_name,
+                                        target_stream,
                                         self.consumer_group,
                                         msg_id
                                     )
                                     continue
                                 
-                                # Process the claimed message
                                 job_id = msg_data.get("job_id")
                                 trace_id = msg_data.get("trace_id", f"trace-{uuid.uuid4()}")
                                 
                                 try:
                                     self.process_job(job_id, msg_data, trace_id)
-                                    # Acknowledge the message
                                     self.redis_client.xack(
-                                        self.stream_name,
+                                        target_stream,
                                         self.consumer_group,
                                         msg_id
                                     )
                                 except ValueError as e:
-                                    # File not found or similar - acknowledge to prevent infinite retry
                                     if "not found" in str(e).lower():
                                         logger.warning(
                                             "Acknowledging failed message - file not found",
@@ -2158,7 +2160,7 @@ class IngestWorker(PipelineMixin, TriggerMixin):
                                             error=str(e),
                                         )
                                         self.redis_client.xack(
-                                            self.stream_name,
+                                            target_stream,
                                             self.consumer_group,
                                             msg_id
                                         )
@@ -2176,7 +2178,6 @@ class IngestWorker(PipelineMixin, TriggerMixin):
                                         error=str(e),
                                         exc_info=True,
                                     )
-                                    # Don't ack - will be retried
                     
                     except Exception as e:
                         logger.warning(
@@ -2188,6 +2189,7 @@ class IngestWorker(PipelineMixin, TriggerMixin):
         except Exception as e:
             logger.error(
                 "Error checking pending messages",
+                stream=target_stream,
                 error=str(e),
                 exc_info=True,
             )
@@ -2236,24 +2238,36 @@ class IngestWorker(PipelineMixin, TriggerMixin):
                     
                     TextExtractor.cleanup_if_idle()
                 
-                # Read from stream (block for 5 seconds)
+                # Priority-aware read: try high-priority stream first (non-blocking),
+                # then fall back to low-priority stream (blocking).
                 messages = self.redis_client.xreadgroup(
                     groupname=self.consumer_group,
                     consumername=self.consumer_name,
-                    streams={self.stream_name: '>'},
+                    streams={self.stream_high: '>'},
                     count=1,
-                    block=5000,  # 5 second timeout
+                    block=None,  # non-blocking: omit BLOCK so Redis returns immediately
                 )
+                active_stream = self.stream_high
+
+                if not messages:
+                    messages = self.redis_client.xreadgroup(
+                        groupname=self.consumer_group,
+                        consumername=self.consumer_name,
+                        streams={self.stream_low: '>'},
+                        count=1,
+                        block=5000,  # block up to 5s
+                    )
+                    active_stream = self.stream_low
                 
                 if not messages:
                     continue
                 
                 # Reset heartbeat counter when we get a message
                 heartbeat_counter = 0
-                logger.info("Received job from Redis stream")
+                logger.info("Received job from Redis stream", stream=active_stream)
                 
                 # Process message
-                for stream, message_list in messages:
+                for stream_name, message_list in messages:
                     for message_id, message_data in message_list:
                         job_id = message_data.get("job_id")
                         trace_id = message_data.get("trace_id", f"trace-{uuid.uuid4()}")
@@ -2263,23 +2277,21 @@ class IngestWorker(PipelineMixin, TriggerMixin):
                             
                             # Acknowledge message
                             self.redis_client.xack(
-                                self.stream_name,
+                                active_stream,
                                 self.consumer_group,
                                 message_id
                             )
                             
-                            # Trim stream to keep only last 10000 messages (prevent memory bloat)
-                            # MAXLEN ~ 10000 uses approximate trimming for better performance
                             try:
                                 self.redis_client.xtrim(
-                                    self.stream_name,
+                                    active_stream,
                                     maxlen=10000,
                                     approximate=True
                                 )
                             except Exception as trim_err:
                                 logger.warning(
                                     "Failed to trim Redis stream",
-                                    stream=self.stream_name,
+                                    stream=active_stream,
                                     error=str(trim_err)
                                 )
                             
@@ -2291,11 +2303,9 @@ class IngestWorker(PipelineMixin, TriggerMixin):
                                 error=str(e),
                                 exc_info=True,
                             )
-                            # process_job requeues transient errors internally.
-                            # If we reached this block, the job is permanently failed.
                             try:
                                 self.redis_client.xack(
-                                    self.stream_name,
+                                    active_stream,
                                     self.consumer_group,
                                     message_id,
                                 )
