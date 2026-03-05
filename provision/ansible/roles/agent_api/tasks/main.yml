@@ -47,9 +47,15 @@
   when: agent_deploy_version_file.stat.exists
   tags: [agent_api, agent_api_deploy]
 
-- name: Get new version to deploy
+- name: Get new version to deploy (content hash of source files)
   set_fact:
-    agent_new_commit: "{{ lookup('pipe', 'cd ' + playbook_dir + '/../.. && git rev-parse --short HEAD 2>/dev/null || echo unknown') }}"
+    agent_new_commit: "{{ lookup('pipe', 'find ' + playbook_dir + '/../../srv/agent -type f -name \"*.py\" | LC_ALL=C sort | xargs md5sum 2>/dev/null | md5sum | cut -c1-8') }}"
+  tags: [agent_api, agent_api_deploy]
+
+- name: Get git info for version metadata
+  set_fact:
+    agent_git_commit: "{{ lookup('pipe', 'cd ' + playbook_dir + '/../.. && git rev-parse --short HEAD 2>/dev/null || echo unknown') }}"
+    agent_git_branch: "{{ lookup('pipe', 'cd ' + playbook_dir + '/../.. && git branch --show-current 2>/dev/null || echo unknown') }}"
   tags: [agent_api, agent_api_deploy]
 
 - name: Check if deployment is needed
@@ -62,7 +68,8 @@
     msg: |
       Agent API Version Check:
       - Current deployed: {{ agent_current_commit | default('none') }}
-      - New version: {{ agent_new_commit }}
+      - New content hash: {{ agent_new_commit }}
+      - Git commit: {{ agent_git_commit }}
       - Deployment needed: {{ agent_deployment_needed }}
   tags: [agent_api, agent_api_deploy]
 
@@ -530,8 +537,9 @@
   copy:
     content: |
       {
-        "commit": "{{ lookup('pipe', 'cd ' + playbook_dir + '/../.. && git rev-parse --short HEAD 2>/dev/null || echo unknown') }}",
-        "branch": "{{ lookup('pipe', 'cd ' + playbook_dir + '/../.. && git branch --show-current 2>/dev/null || echo unknown') }}",
+        "commit": "{{ agent_new_commit }}",
+        "git_commit": "{{ agent_git_commit | default('unknown') }}",
+        "branch": "{{ agent_git_branch | default('unknown') }}",
         "timestamp": "{{ now(utc=true).isoformat() }}",
         "deployed_by": "ansible"
       }

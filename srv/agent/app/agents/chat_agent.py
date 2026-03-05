@@ -491,6 +491,33 @@ class ChatAgent(BaseStreamingAgent):
             logger.warning("Quick findings summary skipped after %dms: %s", round((time.monotonic() - t_qf) * 1000) if 't_qf' in dir() else -1, exc)
             return ""
 
+    @staticmethod
+    def _build_tool_signatures(tool_names: List[str]) -> str:
+        """Build a compact reference of tool signatures for the planner prompt."""
+        lines: List[str] = []
+        for name in tool_names:
+            func = ToolRegistry.get(name)
+            if not func:
+                continue
+            try:
+                sig = inspect.signature(func)
+                params = []
+                for pname, param in sig.parameters.items():
+                    if pname == "ctx":
+                        continue
+                    annotation = param.annotation
+                    type_str = getattr(annotation, "__name__", str(annotation)) if annotation != inspect.Parameter.empty else "any"
+                    type_str = type_str.replace("typing.", "")
+                    if param.default is not inspect.Parameter.empty:
+                        params.append(f"{pname}: {type_str} = {param.default!r}")
+                    else:
+                        params.append(f"{pname}: {type_str}")
+                doc = (func.__doc__ or "").strip().split("\n")[0]
+                lines.append(f"  {name}({', '.join(params)}) — {doc}")
+            except Exception:
+                lines.append(f"  {name}(...)")
+        return "\n".join(lines)
+
     async def _generate_plan(
         self,
         query: str,
@@ -575,19 +602,36 @@ class ChatAgent(BaseStreamingAgent):
                 estimated_duration="quick",
             )
 
+        tool_sigs = self._build_tool_signatures(enabled_tools)
+        has_attachments = bool(context.attachment_metadata)
+        has_audio = has_attachments and any(
+            a.get("mime_type", "").startswith("audio/") for a in context.attachment_metadata
+        )
+        has_image_request = any(
+            kw in query.lower() for kw in ("generate image", "create image", "draw", "make a picture", "make an image")
+        )
+
         prompt = (
             "Plan tool execution for this user request.\n"
-            "Return ONLY JSON with keys: summary, steps, parallel_groups, feedback_points, estimated_duration.\n"
-            "Constraints:\n"
-            f"- Allowed tools: {enabled_tools}\n"
-            "- Each step must include id, tool, objective, run_mode, args.\n"
-            "- parallel_groups is a list of step-id lists.\n"
-            "- feedback_points is a list of objects: after_step_id, message, kind.\n"
-            "- keep plan concise and practical.\n\n"
-            "Planning policy:\n"
-            "- For queries about user documents/files/resumes/candidates, start with `document_search`.\n"
-            "- Use `list_data_documents`, `get_data_document`, or `query_data` ONLY when the user explicitly asks about structured data documents/tables/records.\n"
-            "- Do NOT include `memory_search` unless the user explicitly asks about previous conversations, preferences, or saved memory.\n\n"
+            "Return ONLY JSON with keys: summary, steps, parallel_groups, feedback_points, estimated_duration.\n\n"
+            "Format:\n"
+            "- Each step: {id, tool, objective, run_mode, args}\n"
+            "- args must use ONLY the parameter names shown in the tool signatures below.\n"
+            "- parallel_groups: list of step-id lists.\n"
+            "- feedback_points: list of {after_step_id, message, kind}.\n"
+            "- Keep the plan minimal — only include tools that directly serve the query.\n\n"
+            f"Available tools and their signatures:\n{tool_sigs}\n\n"
+            "STRICT RULES — violating these will cause errors:\n"
+            "- Only use parameter names that appear in the tool signatures above.\n"
+            "- All required parameters (those without defaults) MUST be provided in args.\n"
+            f"- Do NOT include `transcribe_audio` unless the user provided an audio file.{' Audio attachment detected.' if has_audio else ' No audio attachment present.'}\n"
+            f"- Do NOT include `generate_image` unless the user explicitly asked for image generation.{' Image generation requested.' if has_image_request else ' No image request detected.'}\n"
+            "- Do NOT include `text_to_speech` unless the user asked for voice/audio output.\n"
+            "- Do NOT include `create_task` unless the user explicitly asked to create a scheduled task.\n"
+            "- Do NOT include `send_notification` unless the user explicitly asked to send a notification.\n"
+            "- Do NOT include `memory_search` or `memory_save` unless the user asks about previous conversations or preferences.\n"
+            "- For general questions, prefer `document_search` and/or `web_search`.\n"
+            "- Use `list_data_documents`, `get_data_document`, or `query_data` ONLY when the user explicitly asks about structured data tables/records.\n\n"
             f"Dispatch action type: {dispatch.action_type}\n"
             f"User query: {query}\n"
             f"{self._build_fast_ack_context(query, context)}"
