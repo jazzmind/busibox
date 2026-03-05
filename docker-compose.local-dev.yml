@@ -79,6 +79,7 @@ services:
       # Service URLs (for SSO redirect via nginx proxy)
       NEXT_PUBLIC_BUSIBOX_AGENTS_URL: https://localhost/agents
       NEXT_PUBLIC_APP_URL: https://localhost/portal
+      WEBAUTHN_RP_ID: localhost
       # NOTE: NEXT_PUBLIC_BASE_PATH is set per-app in core-apps-entrypoint.sh
       # because both apps run in the same container but need different values
       # Backend service URLs (for server-side API calls)

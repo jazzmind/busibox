@@ -15,7 +15,7 @@ vllm_tensor_parallel_size: 1
 vllm_cuda_visible_devices: ""
 vllm_host: "0.0.0.0"
 
-# LoRA Adapter Support (for ColPali and other LoRA models)
+# LoRA Adapter Support
 vllm_enable_lora: false
 vllm_lora_base_model: ""
 vllm_max_loras: 1

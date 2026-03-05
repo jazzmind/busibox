@@ -100,6 +100,10 @@ pub struct App {
     pub models_manage_log_autoscroll: bool,
     pub models_manage_action_running: bool,
     pub models_manage_action_complete: bool,
+    /// True when the in-memory config has unsaved changes vs model_config.yml
+    pub models_manage_config_dirty: bool,
+    /// True when the saved model_config.yml differs from what is actually running on GPUs
+    pub models_manage_config_undeployed: bool,
     pub models_manage_tick: usize,
     pub models_manage_rx: Option<mpsc::Receiver<ModelsManageUpdate>>,
 
@@ -112,6 +116,10 @@ pub struct App {
     pub models_manage_role_edit_mode: bool,
     pub models_manage_role_edit_selected: usize,
     pub models_manage_available_roles: Vec<String>,
+
+    pub models_manage_change_inherit_roles: Option<Vec<String>>,
+    pub models_manage_change_inherit_gpu: Option<GpuAssignment>,
+    pub models_manage_change_insert_index: Option<usize>,
 
     // Benchmark screen state
     pub benchmark_models: Vec<DeployedModel>,
@@ -449,7 +457,7 @@ impl GpuAssignment {
 #[derive(Debug)]
 pub enum ModelsManageUpdate {
     Log(String),
-    Complete { success: bool },
+    Complete { success: bool, deployed: bool },
 }
 
 pub enum BenchmarkUpdate {
@@ -521,6 +529,8 @@ impl App {
             models_manage_log_autoscroll: true,
             models_manage_action_running: false,
             models_manage_action_complete: false,
+            models_manage_config_dirty: false,
+            models_manage_config_undeployed: false,
             models_manage_tick: 0,
             models_manage_rx: None,
             models_manage_add_mode: false,
@@ -529,6 +539,9 @@ impl App {
             models_manage_role_edit_mode: false,
             models_manage_role_edit_selected: 0,
             models_manage_available_roles: Vec::new(),
+            models_manage_change_inherit_roles: None,
+            models_manage_change_inherit_gpu: None,
+            models_manage_change_insert_index: None,
             benchmark_models: Vec::new(),
             benchmark_selected: 0,
             benchmark_toggled: Vec::new(),

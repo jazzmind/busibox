@@ -26,13 +26,20 @@ def main():
         registry_data = yaml.safe_load(f) or {}
     
     default_purposes = registry_data.get('default_purposes', {})
-    env_overrides = registry_data.get('model_purposes', {})
+    registry_purposes = registry_data.get('model_purposes', {})
     available_models = registry_data.get('available_models', {})
     model_configs = model_config_data.get('models', {})
 
-    # Merge defaults + environment overrides, then resolve aliases
+    # model_config.yml may contain CLI-overridden purposes (from the TUI role editor).
+    # These take priority over model_registry.yml defaults.
+    config_purposes = model_config_data.get('model_purposes', {})
+
+    # Merge: defaults < registry < model_config overrides
     merged = dict(default_purposes)
-    merged.update(env_overrides)
+    merged.update(registry_purposes)
+    if config_purposes:
+        merged.update(config_purposes)
+        print("INFO: Using purpose overrides from model_config.yml ({} entries)".format(len(config_purposes)), file=sys.stderr)
 
     def resolve_alias(key, purposes, models, depth=0):
         """Follow alias chain until we hit a concrete model key."""
@@ -69,18 +76,16 @@ def main():
         
         model_name = model_entry.get('model_name', '')
         provider = model_entry.get('provider', '').lower()
-        config = model_configs.get(model_name, {})
+        # model_config.yml is keyed by model_key
+        config = model_configs.get(model_key, {})
         
-        # Fallback: if model_name not found, search by model_key field
-        # This handles cases where model_config.yml was generated with different
-        # model names (e.g. old Qwen3 vs new Qwen3.5) but the model_key matches
+        # Fallback: search by model_key field inside entries (backward compat)
         if not config:
-            for cfg_model_name, cfg_entry in model_configs.items():
+            for cfg_entry_key, cfg_entry in model_configs.items():
                 if cfg_entry.get('model_key') == model_key:
                     config = cfg_entry
-                    model_name = cfg_model_name
                     print("DEBUG: Matched purpose '{}' to config entry '{}' via model_key '{}'".format(
-                        purpose, cfg_model_name, model_key), file=sys.stderr)
+                        purpose, cfg_entry_key, model_key), file=sys.stderr)
                     break
         
         config_provider = config.get('provider', '').lower()
@@ -114,10 +119,13 @@ def main():
         elif provider == 'vllm' and config.get('assigned', False) and config.get('port'):
             # vLLM model assigned to a port
             vllm_ip = os.environ.get('VLLM_IP', '10.96.200.208')
+            # Use served_model_name if set (multiple instances of same HF model),
+            # otherwise fall back to the HF model_name
+            served_name = config.get('served_model_name', '') or model_name
             models.append({
                 'model_name': purpose,
                 'litellm_params': {
-                    'model': "openai/{}".format(model_name),
+                    'model': "openai/{}".format(served_name),
                     'api_base': "http://{}:{}/v1".format(vllm_ip, config['port']),
                     'api_key': 'EMPTY'
                 }

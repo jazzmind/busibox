@@ -103,6 +103,12 @@ class Config:
         # so developers can authenticate without a working email setup.
         self.dev_mode: bool = os.getenv("DEV_MODE", "false").lower() == "true"
 
+        # ---- Microsoft Entra ID / Azure AD integration ----
+        self.microsoft_client_id: Optional[str] = os.getenv("MICROSOFT_CLIENT_ID")
+        self.microsoft_client_secret: Optional[str] = os.getenv("MICROSOFT_CLIENT_SECRET")
+        self.microsoft_tenant_id: Optional[str] = os.getenv("MICROSOFT_TENANT_ID")
+        self.microsoft_enabled: bool = bool(self.microsoft_client_id and self.microsoft_tenant_id)
+
     def to_dict(self) -> Dict:
         return {
             "postgres_host": self.postgres_host,

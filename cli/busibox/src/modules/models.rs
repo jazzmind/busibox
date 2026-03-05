@@ -109,6 +109,7 @@ pub enum DeployedModelUpdate {
 #[derive(Debug, Deserialize)]
 struct ModelConfigFile {
     models: Option<HashMap<String, ModelConfigEntry>>,
+    model_purposes: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -464,9 +465,14 @@ impl TierModelSet {
         let available = reg_file.available_models.unwrap_or_default();
 
         let defaults = reg_file.default_purposes.unwrap_or_default();
-        let overrides = reg_file.model_purposes.unwrap_or_default();
+        let registry_overrides = reg_file.model_purposes.unwrap_or_default();
+        let config_purposes = mc_file.model_purposes.unwrap_or_default();
         let mut merged_purposes: HashMap<String, String> = defaults;
-        merged_purposes.extend(overrides);
+        merged_purposes.extend(registry_overrides);
+        // CLI-persisted purpose overrides from model_config.yml take highest priority
+        if !config_purposes.is_empty() {
+            merged_purposes.extend(config_purposes);
+        }
 
         fn resolve_alias(
             key: &str,

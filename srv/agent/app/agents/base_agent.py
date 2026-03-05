@@ -1058,6 +1058,32 @@ class BaseStreamingAgent(StreamingAgent):
                     dropped_args,
                 )
 
+            # Validate that all required positional args are present.
+            # The planner LLM can produce steps with missing args; catch
+            # that here with a clear message instead of a Python TypeError.
+            missing_required = []
+            for param_name, param in tool_sig.parameters.items():
+                if param_name == "ctx":
+                    continue
+                if (
+                    param.default is inspect.Parameter.empty
+                    and param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+                    and param_name not in filtered_args
+                ):
+                    missing_required.append(param_name)
+            if missing_required:
+                logger.warning(
+                    "Skipping tool %s: planner did not provide required args %s (provided: %s)",
+                    step.tool,
+                    missing_required,
+                    sorted(filtered_args.keys()),
+                )
+                await stream(error(
+                    source=step.tool,
+                    message=f"Skipped {step.tool}: missing required parameters {missing_required}",
+                ))
+                return None
+
             # Execute tool
             # Detect whether the tool function expects a RunContext `ctx`.
             expects_ctx = "ctx" in tool_sig.parameters
