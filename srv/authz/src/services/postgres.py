@@ -505,8 +505,10 @@ class PostgresService:
         """Return roles where the user is the creator OR is assigned."""
         uid = validate_uuid(user_id, "user_id")
         async with self.acquire(None, None) as conn:
-            base = f"""
-                SELECT DISTINCT r.{self._ROLE_COLUMNS.replace('id', 'r.id').replace('name', 'r.name').replace('description', 'r.description').replace('scopes', 'r.scopes').replace('is_system', 'r.is_system').replace('created_by', 'r.created_by').replace('source_app', 'r.source_app').replace('created_at', 'r.created_at').replace('updated_at', 'r.updated_at')}
+            base = """
+                SELECT DISTINCT
+                    r.id::text, r.name, r.description, r.scopes, r.is_system,
+                    r.created_by::text, r.source_app, r.created_at, r.updated_at
                 FROM authz_roles r
                 LEFT JOIN authz_user_roles ur ON ur.role_id = r.id AND ur.user_id = $1
                 WHERE (r.created_by = $1 OR ur.user_id IS NOT NULL)
