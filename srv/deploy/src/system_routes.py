@@ -5,6 +5,7 @@ Provides API endpoints for managing installation state, Docker services,
 and system health. Protected by busibox-admin scope verification.
 """
 
+import json
 import logging
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,9 +14,19 @@ from pydantic import BaseModel
 from .auth import verify_admin_token
 from .state import read_state, write_state, get_state_value
 from .docker_manager import DockerManager
-from .core_app_executor import is_docker_environment, execute_ssh_command
+from .core_app_executor import is_docker_environment, execute_ssh_command, execute_in_core_apps
 
 logger = logging.getLogger(__name__)
+
+# Core-app sub-services that run inside the core-apps container (Docker)
+# or as separate systemd units (Proxmox). Maps service ID to app-manager name.
+CORE_APP_SERVICES = {
+    'busibox-portal': 'portal',
+    'busibox-agents': 'agents',
+    'busibox-appbuilder': 'appbuilder',
+}
+
+APP_MANAGER_PORT = 9999
 
 
 # =============================================================================
@@ -212,7 +223,16 @@ async def start_service(
 ):
     """
     Start a specific service.
+    
+    For Docker: Uses docker start, or app-manager for core-app sub-services.
+    For Proxmox: Uses SSH + systemctl to start the service on the appropriate container.
     """
+    if not is_docker_environment():
+        return await _proxmox_service_action(service, "start")
+    
+    if service in CORE_APP_SERVICES:
+        return await _core_app_action(service, "restart")
+    
     manager = DockerManager()
     result = await manager.start_service(service)
     
@@ -229,7 +249,16 @@ async def stop_service(
 ):
     """
     Stop a specific service.
+    
+    For Docker: Uses docker stop, or app-manager for core-app sub-services.
+    For Proxmox: Uses SSH + systemctl to stop the service on the appropriate container.
     """
+    if not is_docker_environment():
+        return await _proxmox_service_action(service, "stop")
+    
+    if service in CORE_APP_SERVICES:
+        return await _core_app_action(service, "stop")
+    
     manager = DockerManager()
     result = await manager.stop_service(service)
     
@@ -246,7 +275,16 @@ async def restart_service(
 ):
     """
     Restart a specific service.
+    
+    For Docker: Uses docker restart, or app-manager for core-app sub-services.
+    For Proxmox: Uses SSH + systemctl to restart the service on the appropriate container.
     """
+    if not is_docker_environment():
+        return await _proxmox_service_action(service, "restart")
+    
+    if service in CORE_APP_SERVICES:
+        return await _core_app_action(service, "restart")
+    
     manager = DockerManager()
     result = await manager.restart_service(service)
     
@@ -254,6 +292,99 @@ async def restart_service(
         raise HTTPException(status_code=500, detail=result.get("error", "Failed to restart service"))
     
     return result
+
+
+async def _proxmox_service_action(service: str, action: str) -> dict:
+    """
+    Execute a systemctl action on a Proxmox/LXC service via SSH.
+    
+    Args:
+        service: Service name (e.g., "authz-api", "postgres").
+        action: systemctl action ("start", "stop", "restart").
+    
+    Returns:
+        Result dictionary with success status.
+    
+    Raises:
+        HTTPException: If the service is unrecognized or the command fails.
+    """
+    if service not in PROXMOX_SERVICE_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Service '{service}' is not recognized. Available services: {', '.join(sorted(set(PROXMOX_SERVICE_MAP.keys())))}"
+        )
+    
+    container_host, systemd_service = PROXMOX_SERVICE_MAP[service]
+    
+    try:
+        command = f"systemctl {action} {systemd_service}"
+        stdout, stderr, code = await execute_ssh_command(container_host, command, timeout=60)
+        
+        if code != 0:
+            logger.error(f"Failed to {action} {service} via SSH: {stderr}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to {action} service: {stderr}"
+            )
+        
+        return {
+            "success": True,
+            "service": service,
+            "action": action,
+            "host": container_host,
+            "output": stdout,
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"SSH error during {action} for {service}: {e}")
+        raise HTTPException(status_code=500, detail=f"SSH error: {str(e)}")
+
+
+async def _core_app_action(service: str, action: str) -> dict:
+    """
+    Execute an action on a core-app sub-service via the app-manager.
+    
+    Core-app sub-services (busibox-portal, busibox-agents, busibox-appbuilder)
+    run inside the core-apps container and are managed by the app-manager
+    control API on port 9999. This function routes start/stop/restart actions
+    through that API.
+    
+    Args:
+        service: Service ID (e.g., "busibox-portal").
+        action: Action to perform ("restart" or "stop").
+    
+    Returns:
+        Result dictionary from the app-manager.
+    """
+    app_name = CORE_APP_SERVICES.get(service)
+    if not app_name:
+        raise HTTPException(status_code=400, detail=f"Unknown core-app service: {service}")
+    
+    body = json.dumps({"app": app_name})
+    curl_cmd = f"curl -sf -X POST -d '{body}' -H 'Content-Type: application/json' http://localhost:{APP_MANAGER_PORT}/{action}"
+    
+    try:
+        stdout, stderr, code = await execute_in_core_apps(curl_cmd, timeout=60)
+        
+        if code != 0:
+            raise HTTPException(
+                status_code=502,
+                detail=f"app-manager unreachable: {stderr or stdout}",
+            )
+        
+        try:
+            result = json.loads(stdout)
+            result["success"] = True
+            return result
+        except json.JSONDecodeError:
+            return {"success": True, "output": stdout, "service": service, "action": action}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to {action} core-app {service}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to {action} {service}: {str(e)}")
 
 
 @router.get("/services/{service}/logs")
