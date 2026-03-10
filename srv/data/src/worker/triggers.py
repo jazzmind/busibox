@@ -88,14 +88,10 @@ class TriggerMixin:
                 trigger_count=len(triggers_to_fire),
             )
 
-            # For pass 3 (or the final pass), use the existing full trigger mechanism
-            if current_pass == 3:
-                self._check_library_triggers(file_id, user_id, delegation_token)
-            else:
-                # For earlier passes, fire triggers individually
-                # The existing _check_library_triggers handles all triggers;
-                # for progressive we just log that triggers ran at this pass
-                self._check_library_triggers(file_id, user_id, delegation_token)
+            self._check_library_triggers(
+                file_id, user_id, delegation_token,
+                trigger_ids=triggers_to_fire,
+            )
 
         except Exception as e:
             logger.warning(
@@ -327,10 +323,14 @@ class TriggerMixin:
         file_id: str,
         user_id: str,
         delegation_token: Optional[str] = None,
+        trigger_ids: Optional[list] = None,
     ):
         """
         Check if the completed file's library has any active triggers.
         If so, fire them by calling the Agent API.
+
+        When *trigger_ids* is provided only those triggers are fired (used by
+        ``_check_pass_triggers`` to respect ``run_at_pass`` filtering).
 
         This is non-blocking -- failures here do not affect the document processing result.
         """
@@ -383,6 +383,10 @@ class TriggerMixin:
                     triggers = cur.fetchall()
             finally:
                 self.postgres_service._return_connection(conn)
+
+            if trigger_ids is not None:
+                id_set = set(trigger_ids)
+                triggers = [t for t in triggers if str(t[0]) in id_set]
 
             if not triggers:
                 # Upload may have pre-marked the file as trigger pending, but active

@@ -2397,6 +2397,29 @@ async def _run_extraction_pipeline(
         insert_result: Dict[str, Any] = {"stored": False, "count": 0}
         if payload.store_results:
             try:
+                # Remove any previous records for this source file so
+                # re-extraction is idempotent (no duplicates).
+                try:
+                    await client.request(
+                        "DELETE",
+                        f"/data/{payload.schema_document_id}/records",
+                        json={
+                            "where": {
+                                "field": "_sourceFileId",
+                                "op": "eq",
+                                "value": payload.file_id,
+                            }
+                        },
+                    )
+                except Exception:
+                    logger.debug(
+                        "No previous records to delete (or delete failed)",
+                        extra={
+                            "file_id": payload.file_id,
+                            "schema_document_id": payload.schema_document_id,
+                        },
+                    )
+
                 result = await client.request(
                     "POST",
                     f"/data/{payload.schema_document_id}/records",

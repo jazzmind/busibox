@@ -766,7 +766,8 @@ class PipelineMixin:
             started_at=start_time,
         )
         
-        self._check_pass_triggers(file_id, user_id, delegation_token, current_pass=2)
+        # Pass-2 triggers already fired at line 713 after Pass 2 completed.
+        # Do NOT re-fire here; it causes duplicate extraction.
         
         logger.info(
             "Progressive PDF processing completed",
