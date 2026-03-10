@@ -18,6 +18,7 @@ from .deployment_config_routes import router as deployment_config_router
 from .deployment_history_routes import router as deployment_history_router
 from .secrets_routes import router as secrets_router
 from .releases_routes import router as releases_router
+from .config_routes import router as config_router
 from .test_routes import router as test_router
 from .config import config
 
@@ -68,6 +69,7 @@ app.include_router(deployment_config_router)
 app.include_router(deployment_history_router)
 app.include_router(secrets_router)
 app.include_router(releases_router)
+app.include_router(config_router)
 app.include_router(test_router)
 
 
