@@ -33,7 +33,7 @@ from typing import Optional, List, Dict
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "test_utils"))
 
 try:
-    from testing.environment import get_test_doc_repo_path
+    from busibox_common.testing.environment import get_test_doc_repo_path
 except ImportError:
     # Fallback for when test_utils isn't available
     def get_test_doc_repo_path():

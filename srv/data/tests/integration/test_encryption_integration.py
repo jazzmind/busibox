@@ -30,7 +30,7 @@ import httpx
 
 # Add shared testing module to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../shared"))
-from testing.auth import AuthTestClient, auth_client
+from busibox_common.testing.auth import AuthTestClient, auth_client
 
 # Test configuration - uses test container IPs
 AUTHZ_BASE_URL = os.getenv("AUTHZ_BASE_URL", "http://10.96.201.210:8010")

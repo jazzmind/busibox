@@ -31,7 +31,7 @@ import psycopg2
 import pytest
 from httpx import AsyncClient
 
-from testing.auth import AuthTestClient, TEST_MODE_HEADER, TEST_MODE_VALUE
+from busibox_common.testing.auth import AuthTestClient, TEST_MODE_HEADER, TEST_MODE_VALUE
 
 
 # =============================================================================

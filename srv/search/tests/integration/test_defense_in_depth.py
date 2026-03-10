@@ -20,8 +20,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 # Import shared testing utilities
-from testing.auth import AuthTestClient
-from testing.database import DatabasePool, RLSEnabledPool
+from busibox_common.testing.auth import AuthTestClient
+from busibox_common.testing.database import DatabasePool, RLSEnabledPool
 
 
 # =============================================================================

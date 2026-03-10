@@ -1,31 +1,43 @@
+"""
+Pytest configuration for AuthZ service tests.
+
+Unit tests use the reload_authz fixture and monkeypatched env vars.
+Integration tests (test_pvt.py, test_real_auth_integration.py) use real
+services and the shared busibox_common.testing.AuthTestClient for token
+management.
+"""
 import os
 import sys
 import importlib
+
 import pytest
 
-# Add shared testing library to path (deployed to ../src/testing/ relative to tests/)
-# When deployed: /srv/authz/app/src/testing/
-# When local: srv/authz/src/testing/
-_authz_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # Go up from tests/ to authz/
-_testing_path = os.path.join(_authz_root, "src", "testing")
+# ---------------------------------------------------------------------------
+# Shared testing library (available when busibox_common is on PYTHONPATH)
+# ---------------------------------------------------------------------------
 _has_shared_testing = False
+try:
+    from busibox_common.testing.auth import AuthTestClient, auth_client  # noqa: F401
+    from busibox_common.testing.environment import (
+        load_env_files,
+        create_service_auth_fixture,
+    )
+    from pathlib import Path
 
-if os.path.exists(_testing_path):
-    if _testing_path not in sys.path:
-        sys.path.insert(0, _testing_path)
+    load_env_files(Path(__file__).parent.parent)
+    set_auth_env = create_service_auth_fixture("authz")
     _has_shared_testing = True
-else:
-    # Fallback: try parent directory (for local dev)
-    _testing_path_alt = os.path.join(os.path.dirname(_authz_root), "shared", "testing")
-    if os.path.exists(_testing_path_alt):
-        if _testing_path_alt not in sys.path:
-            sys.path.insert(0, _testing_path_alt)
-        _has_shared_testing = True
+except ImportError:
+    pass  # Shared library not available (e.g. minimal unit-test run)
 
 # Enable pytest plugin for failed test filter generation (if available)
 if _has_shared_testing:
-    pytest_plugins = ["testing.pytest_failed_filter"]
+    pytest_plugins = ["busibox_common.testing.pytest_failed_filter"]
 
+
+# ---------------------------------------------------------------------------
+# Unit-test env vars (monkeypatched so they don't leak)
+# ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
 def set_env(monkeypatch):
@@ -45,9 +57,9 @@ def set_env(monkeypatch):
 @pytest.fixture(autouse=True)
 def add_src_to_path():
     """
-    Ensure `srv/authz/src` is importable for all tests.
+    Ensure ``srv/authz/src`` is importable for all tests.
     Some tests import modules directly (e.g. oauth.contracts) without using the
-    `reload_authz` fixture.
+    ``reload_authz`` fixture.
     """
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
     sys.path.insert(0, root)
@@ -60,7 +72,6 @@ def add_src_to_path():
 
 @pytest.fixture
 def reload_authz(monkeypatch):
-    # ensure src is on path
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
     sys.path.insert(0, root)
     modules = ["config", "routes.audit", "routes.oauth", "routes.internal"]
@@ -77,10 +88,20 @@ def reload_authz(monkeypatch):
     sys.path.remove(root)
 
 
-# Note: All tests now use real PostgreSQL database via test_real_auth_integration.py
-# Mock-based fixtures have been removed in favor of real integration testing
+# ---------------------------------------------------------------------------
+# Integration-test auth fixtures (require running authz + test DB)
+# ---------------------------------------------------------------------------
 
+@pytest.fixture
+def auth_headers():
+    """Get Authorization + X-Test-Mode headers for integration tests.
 
+    Requires a running authz service and busibox_common.testing installed.
+    Falls back to skip if not available.
+    """
+    if not _has_shared_testing:
+        pytest.skip("busibox_common.testing not available")
 
-
-
+    client = AuthTestClient()
+    client._bootstrap_admin_in_authz_db()
+    return client.get_auth_header(audience="authz-api")

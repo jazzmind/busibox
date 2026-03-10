@@ -61,7 +61,7 @@ def other_principal():
 async def authenticated_client(test_principal):
     """HTTP client authenticated as test-user with real JWT for service-to-service calls."""
     from app.auth.dependencies import get_principal
-    from testing.auth import AuthTestClient
+    from busibox_common.testing.auth import AuthTestClient
     
     async def override_get_principal():
         return test_principal
@@ -92,7 +92,7 @@ async def authenticated_client(test_principal):
 async def other_authenticated_client(other_principal):
     """HTTP client authenticated as other-user with real JWT for service-to-service calls."""
     from app.auth.dependencies import get_principal
-    from testing.auth import AuthTestClient
+    from busibox_common.testing.auth import AuthTestClient
     
     async def override_get_principal():
         return other_principal

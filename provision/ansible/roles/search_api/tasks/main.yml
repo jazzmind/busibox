@@ -86,7 +86,7 @@
   become: yes
   become_user: "{{ search_api_user }}"
 
-- name: Copy shared testing library
+- name: Copy shared testing library (backward-compat shims; canonical location is busibox_common/testing/)
   synchronize:
     src: "{{ playbook_dir }}/../../srv/shared/testing/"
     dest: /opt/search/src/testing/
@@ -99,7 +99,7 @@
   become: yes
   become_user: "{{ search_api_user }}"
 
-- name: Copy shared busibox_common library
+- name: Copy shared busibox_common library (includes busibox_common/testing/)
   synchronize:
     src: "{{ playbook_dir }}/../../srv/shared/busibox_common/"
     dest: /opt/search/src/busibox_common/

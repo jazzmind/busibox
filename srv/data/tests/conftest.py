@@ -1,32 +1,21 @@
 """
-Pytest configuration and shared fixtures.
+Pytest configuration and shared fixtures for Data service.
 
-Uses real JWT tokens from authz - no mocks.
+Uses real JWT tokens from authz via busibox_common.testing -- no mocks.
 Test user starts with NO roles/scopes. Tests must explicitly grant permissions
 using the admin API and clean up when done.
-
-Uses shared test_utils library for auth handling.
 """
 import os
-import sys
 from pathlib import Path
 
-# Add shared testing library to path FIRST (before any other imports)
-# When deployed: /srv/data/src/testing/ (via PYTHONPATH=/srv/data/src)
-# When local Docker: /app/shared/testing/ (via PYTHONPATH=/app/src:/app:/app/shared)
-# When local dev: ../../srv/shared/testing/
-_test_utils_paths = [
-    os.path.join(os.path.dirname(__file__), "..", "src"),  # Deployed: /srv/data/src (contains testing/)
-    os.path.join(os.path.dirname(__file__), "..", "..", "shared"),  # Local: srv/shared (contains testing/)
-]
-for _path in _test_utils_paths:
-    if os.path.exists(_path) and _path not in sys.path:
-        sys.path.insert(0, _path)
-
-# CRITICAL: Load environment variables BEFORE any other imports
-# This must happen at the very top of conftest.py before pytest imports test files
-# which may import api.main and trigger Config() initialization
-from testing.environment import load_env_files, get_test_doc_repo_path, create_service_auth_fixture
+# CRITICAL: Load environment variables BEFORE any other imports.
+# This must happen at the very top of conftest.py before pytest imports test
+# files which may import api.main and trigger Config() initialization.
+from busibox_common.testing.environment import (
+    load_env_files,
+    get_test_doc_repo_path,
+    create_service_auth_fixture,
+)
 load_env_files(Path(__file__).parent.parent)
 
 # Verify critical env vars are set
@@ -42,9 +31,9 @@ from unittest.mock import Mock
 from httpx import AsyncClient, ASGITransport
 
 # Import shared testing utilities
-from testing.auth import AuthTestClient, auth_client  # noqa: F401 - auth_client for fixture discovery
-from testing.fixtures import require_env
-from testing.database import RLSEnabledPool
+from busibox_common.testing.auth import AuthTestClient, auth_client  # noqa: F401
+from busibox_common.testing.fixtures import require_env
+from busibox_common.testing.database import RLSEnabledPool
 
 
 @contextmanager
@@ -100,7 +89,7 @@ def _suspend_admin_role(auth_client: AuthTestClient):
         yield
 
 # Enable pytest plugin for failed test filter generation
-pytest_plugins = ["testing.pytest_failed_filter"]
+pytest_plugins = ["busibox_common.testing.pytest_failed_filter"]
 
 
 # =============================================================================
@@ -176,7 +165,7 @@ def event_loop_policy():
 # AuthZ Admin Helpers - Using shared test_utils
 # ============================================================================
 
-# The auth_client fixture is imported at the top of this file from testing.auth
+# The auth_client fixture is imported at the top of this file from busibox_common.testing.auth
 # It's a session-scoped fixture that:
 # - Automatically cleans up stale test roles from previous runs
 # - Cleans up created roles at session end

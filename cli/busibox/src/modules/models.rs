@@ -71,6 +71,19 @@ pub struct DeployedModel {
     pub tensor_parallel: u16,
     pub assigned: bool,
     pub live_status: LiveStatus,
+    /// The name vLLM actually serves; use this for API requests.
+    pub served_model_name: String,
+}
+
+impl DeployedModel {
+    /// The model name to use in API requests: served_model_name if set, else the YAML key.
+    pub fn api_model_name(&self) -> &str {
+        if self.served_model_name.is_empty() {
+            &self.model_name
+        } else {
+            &self.served_model_name
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -120,6 +133,7 @@ struct ModelConfigEntry {
     port: Option<u16>,
     tensor_parallel: Option<u16>,
     assigned: Option<bool>,
+    served_model_name: Option<String>,
     #[serde(flatten)]
     _extra: HashMap<String, serde_yaml::Value>,
 }
@@ -148,6 +162,7 @@ impl DeployedModelSet {
                     tensor_parallel: entry.tensor_parallel.unwrap_or(1),
                     assigned: entry.assigned.unwrap_or(false),
                     live_status: LiveStatus::Unknown,
+                    served_model_name: entry.served_model_name.unwrap_or_default(),
                 }
             })
             .collect();

@@ -745,8 +745,7 @@ async def check_service_health(
             
             # API services
             'authz-api': ('authz-api', 8010, '/health/live', 'http', 'http'),
-            'config-api': ('config-api', 8012, '/health/live', 'http', 'http'),
-            # deploy-api runs on authz container - use localhost for self-check
+            'config-api': ('config-api' if is_docker_environment() else '127.0.0.1', 8012, '/health/live', 'http', 'http'),
             'deploy-api': ('127.0.0.1', 8011, '/health/live', 'http', 'http'),
             'data-api': ('data-api', 8002, '/health', 'http', 'http'),
             'data-worker': ('data-api', 8002, '/health', 'http', 'http'),  # Worker runs alongside data-api

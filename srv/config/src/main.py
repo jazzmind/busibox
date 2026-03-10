@@ -18,6 +18,7 @@ from busibox_common import AsyncPGPoolManager
 from config import config
 from schema import get_config_schema
 from services import config_store, app_registry
+from seed import seed_defaults
 from routes import public, authenticated, app_scoped, admin
 
 
@@ -72,6 +73,9 @@ async def lifespan(_app: FastAPI):
 
     config_store.set_pool(pool_mgr)
     app_registry.set_pool(pool_mgr)
+
+    async with pool_mgr.acquire() as conn:
+        await seed_defaults(conn)
 
     yield
 

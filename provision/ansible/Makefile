@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus neo4j nginx search search-api agent data data-api data-worker data-update-tests docs apps user-apps openwebui deploy-apps deploy-frontend deploy-busibox-portal deploy-busibox-admin deploy-busibox-agents deploy-busibox-chat deploy-busibox-appbuilder deploy-busibox-media deploy-busibox-documents deploy-app-ref verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-data test-data-all test-data-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge check-embeddings migrate-embeddings migrate-embeddings-force staging production env core core-nginx core-storage core-database core-vectorstore core-graph llm llm-vllm llm-litellm llm-colpali llm-media whisper-gpu kokoro-gpu apis apis-authz apis-data apis-search apis-agent apis-docs apis-bridge apps-frontend
+.PHONY: ping all files pg milvus neo4j nginx search search-api agent data data-api data-worker data-update-tests docs apps user-apps openwebui deploy-apps deploy-frontend deploy-busibox-portal deploy-busibox-admin deploy-busibox-agents deploy-busibox-chat deploy-busibox-appbuilder deploy-busibox-media deploy-busibox-documents deploy-app-ref verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-data test-data-all test-data-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge check-embeddings migrate-embeddings migrate-embeddings-force staging production env core core-nginx core-storage core-database core-vectorstore core-graph llm llm-vllm llm-litellm llm-colpali llm-media whisper-gpu kokoro-gpu apis apis-authz apis-data apis-search apis-agent apis-docs apis-bridge apis-config config-api apps-frontend
 
 # ============================================================================
 # ENVIRONMENT SELECTION (persists between runs via .busibox-state)
@@ -302,6 +302,9 @@ authz:
 
 deploy-api:
 	ansible-playbook -i $(INV) -l authz site.yml --tags deploy_api $(VAULT_FLAGS)
+
+config-api:
+	ansible-playbook -i $(INV) -l authz site.yml --tags config_api $(VAULT_FLAGS)
 
 litellm:
 	ansible-playbook -i $(INV) -l litellm site.yml --tags llm_litellm $(VAULT_FLAGS)
