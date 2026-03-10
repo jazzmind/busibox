@@ -69,6 +69,11 @@ class ExtractRequest(BaseModel):
         default=None,
         description="Key-value pairs merged into every extracted record (e.g. campaignId, stage from trigger config)",
     )
+    merge_into_record_id: Optional[str] = Field(
+        default=None,
+        description="Existing record ID to merge extracted data into. "
+                    "If not set, auto-matches by name/email before inserting.",
+    )
 
 
 def _parse_json_text(text: str) -> Optional[Dict[str, Any]]:
@@ -525,6 +530,71 @@ def _get_app_only_fields(schema_obj: Dict[str, Any]) -> List[str]:
         if isinstance(defn, dict) and defn.get("appOnly")
     ]
 
+
+def _merge_record_fields(
+    existing: Dict[str, Any],
+    new_data: Dict[str, Any],
+    schema_obj: Dict[str, Any],
+    file_id: str,
+) -> Dict[str, Any]:
+    """Merge *new_data* into *existing* record following schema-aware rules.
+
+    * **App-only fields** are never overwritten.
+    * **Array fields** are unioned (deduped by JSON serialisation).
+    * **Scalar fields** keep the existing value when non-empty; fill from
+      *new_data* only when the existing value is ``None`` or empty.
+    * **System fields** (``_sourceFileIds``, ``_extractedAt``) are always
+      updated.
+    """
+    fields = schema_obj.get("fields", {}) if isinstance(schema_obj, dict) else {}
+    app_only = {
+        name
+        for name, defn in fields.items()
+        if isinstance(defn, dict) and defn.get("appOnly")
+    }
+    array_fields = {
+        name
+        for name, defn in fields.items()
+        if isinstance(defn, dict) and defn.get("type") == "array"
+    }
+
+    merged = dict(existing)
+
+    for key, new_val in new_data.items():
+        if key.startswith("_") or key == "id":
+            continue
+        if key in app_only:
+            continue
+        if new_val is None or new_val == "" or new_val == []:
+            continue
+
+        old_val = merged.get(key)
+
+        if key in array_fields and isinstance(new_val, list):
+            old_list = old_val if isinstance(old_val, list) else []
+            seen = set()
+            combined: List[Any] = []
+            for item in old_list + new_val:
+                sig = json.dumps(item, sort_keys=True, default=str) if isinstance(item, (dict, list)) else str(item)
+                if sig not in seen:
+                    seen.add(sig)
+                    combined.append(item)
+            merged[key] = combined
+        else:
+            if old_val is None or old_val == "" or old_val == []:
+                merged[key] = new_val
+
+    # Update system tracking fields
+    existing_file_ids = list(merged.get("_sourceFileIds") or [])
+    if merged.get("_sourceFileId") and merged["_sourceFileId"] not in existing_file_ids:
+        existing_file_ids.append(merged["_sourceFileId"])
+    if file_id not in existing_file_ids:
+        existing_file_ids.append(file_id)
+    merged["_sourceFileIds"] = existing_file_ids
+    merged["_sourceFileId"] = file_id
+    merged["_extractedAt"] = new_data.get("_extractedAt", datetime.now(timezone.utc).isoformat())
+
+    return merged
 
 
 
@@ -1530,6 +1600,7 @@ def _validate_and_enrich_records(
             else:
                 row["_provenance"]["_coercions"] = active_coercions
         row["_sourceFileId"] = file_id
+        row["_sourceFileIds"] = [file_id]
         row["_extractedAt"] = now_iso
         row["_extractedBy"] = agent_id
         validated.append(row)
@@ -1736,25 +1807,32 @@ async def _run_tier2_grouped_extraction(
     agent_uuid: uuid.UUID,
     instructions: str,
     response_schema: Dict[str, Any],
+    full_markdown: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Tier 2 grouped extraction for long documents.
+    """Grouped extraction that works for documents of any size.
 
-    Groups related fields, retrieves relevant chunks per group via search,
-    runs one LLM call per group in parallel, then merges all results into a
-    single record.
+    Groups related fields, runs one LLM call per group in parallel, then
+    merges all results into a single record.
+
+    When *full_markdown* is provided (short docs), it is used directly as
+    context for every group, bypassing RAG retrieval.  For longer documents
+    where *full_markdown* is ``None``, relevant chunks are retrieved via
+    search for each field group.
     """
-    _extraction_tasks[task_id]["step"] = "tier2_grouped_retrieval"
+    _extraction_tasks[task_id]["step"] = "grouped_field_extraction"
 
-    try:
-        search_api_token = await get_service_token(
-            user_token=principal.token,
-            user_id=principal.sub,
-            target_audience="search-api",
-        )
-    except Exception as exc:
-        raise RuntimeError(f"Failed to get search-api token: {exc}") from exc
+    search_client: Optional[BusiboxClient] = None
+    if full_markdown is None:
+        try:
+            search_api_token = await get_service_token(
+                user_token=principal.token,
+                user_id=principal.sub,
+                target_audience="search-api",
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Failed to get search-api token: {exc}") from exc
+        search_client = BusiboxClient(search_api_token)
 
-    search_client = BusiboxClient(search_api_token)
     effective_schema = schema_obj if isinstance(schema_obj, dict) else {}
     fields = effective_schema.get("fields", {}) or {}
     schema_name = schema_doc.get("name")
@@ -1772,46 +1850,58 @@ async def _run_tier2_grouped_extraction(
     semaphore = asyncio.Semaphore(MAX_PARALLEL_CHUNK_RUNS)
 
     async def _extract_group(group_idx: int, field_names: List[str]) -> Dict[str, Any]:
-        _extraction_tasks[task_id]["step"] = f"tier2_group_{group_idx + 1}_of_{len(groups)}"
+        _extraction_tasks[task_id]["step"] = f"grouped_extract_{group_idx + 1}_of_{len(groups)}"
 
-        # Search for relevant context for every field in this group
-        search_tasks = []
-        for fname in field_names:
-            fdef = fields.get(fname)
-            if isinstance(fdef, dict):
-                search_tasks.append(
-                    _search_context_for_field(
-                        search_client=search_client,
-                        file_id=payload.file_id,
-                        field_name=fname,
-                        field_def=fdef,
-                        schema_name=schema_name,
+        if full_markdown is not None:
+            assembled = full_markdown
+            context_hint = (
+                "You are given the FULL document text. "
+                f"Extract ONLY these fields: {', '.join(field_names)}. "
+                "Ignore all other fields."
+            )
+        else:
+            # RAG mode: retrieve relevant chunks per field via search
+            search_tasks = []
+            for fname in field_names:
+                fdef = fields.get(fname)
+                if isinstance(fdef, dict) and search_client is not None:
+                    search_tasks.append(
+                        _search_context_for_field(
+                            search_client=search_client,
+                            file_id=payload.file_id,
+                            field_name=fname,
+                            field_def=fdef,
+                            schema_name=schema_name,
+                        )
                     )
-                )
-            else:
-                search_tasks.append(asyncio.sleep(0, result=""))
+                else:
+                    search_tasks.append(asyncio.sleep(0, result=""))
 
-        field_contexts = await asyncio.gather(*search_tasks)
+            field_contexts = await asyncio.gather(*search_tasks)
 
-        # Deduplicate and assemble context
-        seen: Dict[str, int] = {}
-        ordered: List[Tuple[int, str]] = []
-        for ctx_text in field_contexts:
-            if not ctx_text:
-                continue
-            for para in ctx_text.split("\n\n"):
-                para = para.strip()
-                if not para or para in seen:
+            seen: Dict[str, int] = {}
+            ordered: List[Tuple[int, str]] = []
+            for ctx_text in field_contexts:
+                if not ctx_text:
                     continue
-                order_key = len(seen)
-                chunk_match = re.search(r"chunk\s+(\d+)", para)
-                if chunk_match:
-                    order_key = int(chunk_match.group(1))
-                seen[para] = order_key
-                ordered.append((order_key, para))
+                for para in ctx_text.split("\n\n"):
+                    para = para.strip()
+                    if not para or para in seen:
+                        continue
+                    order_key = len(seen)
+                    chunk_match = re.search(r"chunk\s+(\d+)", para)
+                    if chunk_match:
+                        order_key = int(chunk_match.group(1))
+                    seen[para] = order_key
+                    ordered.append((order_key, para))
 
-        ordered.sort(key=lambda x: x[0])
-        assembled = "\n\n".join(c[1] for c in ordered)
+            ordered.sort(key=lambda x: x[0])
+            assembled = "\n\n".join(c[1] for c in ordered)
+            context_hint = (
+                f"Extract ONLY these fields: {', '.join(field_names)}. "
+                "This is a subset of the document (most relevant sections for these fields). "
+                "Ignore all other fields."
+            )
 
         if not assembled.strip():
             return {}
@@ -1825,12 +1915,7 @@ async def _run_tier2_grouped_extraction(
             file_id=payload.file_id,
             schema_obj=effective_schema,
             markdown=assembled,
-            instructions=(
-                f"{instructions}\n"
-                f"Extract ONLY these fields: {', '.join(field_names)}. "
-                "This is a subset of the document (most relevant sections for these fields). "
-                "Ignore all other fields."
-            ),
+            instructions=f"{instructions}\n{context_hint}",
             compact_mode=False,
             max_records=max_records,
         )
@@ -2049,10 +2134,11 @@ async def _run_extraction_pipeline(
     Background coroutine that performs LLM extraction, stores records, creates
     graph entities, indexes to Milvus, and updates file metadata.
 
-    Uses a three-tier approach based on document size:
-      - **direct** (<12k tokens): single-shot LLM call with full doc
-      - **rag** (12k-100k tokens): RAG-guided retrieval + LLM extraction
-      - **chunk_sweep** (>100k tokens): progressive chunk-by-chunk extraction
+    Primary strategy: grouped field extraction (parallel per-group LLM calls).
+    For short documents the full markdown is passed to each group; for longer
+    documents RAG retrieval provides relevant context per group.  Chunk-sweep
+    handles very large (>100k token) documents.  Single-shot direct extraction
+    is used only as a last-resort fallback.
 
     Progress is tracked via ``_extraction_tasks[task_id]`` and the file's
     ``metadata.extraction.status`` field (visible through normal file-metadata polling).
@@ -2060,6 +2146,26 @@ async def _run_extraction_pipeline(
     try:
         _extraction_tasks[task_id]["status"] = "running"
         _extraction_tasks[task_id]["step"] = f"llm_extraction_tier_{extraction_tier}"
+
+        # Re-assert running status in file metadata so that a previous
+        # "failed" badge is cleared even if a race occurred between the
+        # endpoint-level PATCH and this background task starting.
+        try:
+            await client.request(
+                "PATCH",
+                f"/files/{payload.file_id}",
+                json={
+                    "metadata": {
+                        "extraction": {
+                            "status": "running",
+                            "taskId": task_id,
+                            "updatedAt": datetime.now(timezone.utc).isoformat(),
+                        }
+                    }
+                },
+            )
+        except Exception:
+            pass
 
         run = None
         output: Dict[str, Any] = {}
@@ -2080,57 +2186,12 @@ async def _run_extraction_pipeline(
             },
         )
 
-        if extraction_tier == "rag":
-            # Try grouped extraction first (parallel per-group with RAG context)
-            try:
-                records = await _run_tier2_grouped_extraction(
-                    task_id=task_id,
-                    payload=payload,
-                    principal=principal,
-                    client=client,
-                    schema_obj=schema_obj if isinstance(schema_obj, dict) else {},
-                    schema_doc=schema_doc,
-                    agent_uuid=agent_uuid,
-                    instructions=instructions,
-                    response_schema=response_schema,
-                )
-                if records:
-                    output = {"result": "tier2-grouped", "tier": "grouped"}
-            except Exception as grouped_exc:
-                logger.warning(
-                    "Tier 2 grouped extraction failed, falling back to RAG",
-                    extra={"error": str(grouped_exc)},
-                )
-                records = []
+        # -- Primary strategy: grouped field extraction for all doc sizes --
+        markdown_tokens = _estimate_markdown_tokens(markdown)
+        use_full_markdown = markdown_tokens < TIER2_TOKEN_THRESHOLD
 
-            # Fall back to original RAG approach if grouped produced nothing
-            if not records:
-                try:
-                    records = await _run_tier2_rag_extraction(
-                        task_id=task_id,
-                        payload=payload,
-                        principal=principal,
-                        client=client,
-                        schema_obj=schema_obj if isinstance(schema_obj, dict) else {},
-                        schema_doc=schema_doc,
-                        agent_uuid=agent_uuid,
-                        instructions=instructions,
-                        response_schema=response_schema,
-                    )
-                    if records:
-                        records = await _merge_multi_record_results(
-                            records, schema_obj if isinstance(schema_obj, dict) else {},
-                            principal, agent_uuid,
-                        )
-                        output = {"result": "tier2-rag", "tier": "rag"}
-                except Exception as tier2_exc:
-                    logger.warning(
-                        "Tier 2 RAG extraction failed, falling back to direct",
-                        extra={"error": str(tier2_exc)},
-                    )
-                    records = []
-
-        elif extraction_tier == "chunk_sweep":
+        if extraction_tier == "chunk_sweep":
+            # Very large docs: try chunk sweep first
             try:
                 records = await _run_tier3_chunk_sweep(
                     task_id=task_id,
@@ -2150,16 +2211,43 @@ async def _run_extraction_pipeline(
                     output = {"result": "tier3-chunk-sweep", "tier": "chunk_sweep"}
             except Exception as tier3_exc:
                 logger.warning(
-                    "Tier 3 chunk sweep failed, falling back to direct with truncated markdown",
+                    "Tier 3 chunk sweep failed, falling back to grouped extraction",
                     extra={"error": str(tier3_exc)},
                 )
                 records = []
-                markdown = markdown[: TIER1_TOKEN_THRESHOLD * 4]
 
-        # Tier 1 (direct) or fallback from failed higher tiers
+        if not records:
+            # Grouped field extraction: works for short and medium docs alike.
+            # Short docs (<100k tokens): pass full markdown to each group.
+            # Medium docs: RAG-retrieve relevant chunks per group.
+            try:
+                records = await _run_tier2_grouped_extraction(
+                    task_id=task_id,
+                    payload=payload,
+                    principal=principal,
+                    client=client,
+                    schema_obj=schema_obj if isinstance(schema_obj, dict) else {},
+                    schema_doc=schema_doc,
+                    agent_uuid=agent_uuid,
+                    instructions=instructions,
+                    response_schema=response_schema,
+                    full_markdown=markdown if use_full_markdown else None,
+                )
+                if records:
+                    output = {"result": "grouped", "tier": "grouped"}
+            except Exception as grouped_exc:
+                logger.warning(
+                    "Grouped field extraction failed",
+                    extra={"error": str(grouped_exc)},
+                )
+                records = []
+
+        # -- Fallback: single-shot direct extraction (last resort) --
         max_records = _get_max_records(schema_obj if isinstance(schema_obj, dict) else {})
         if not records:
-            _extraction_tasks[task_id]["step"] = "tier1_direct_extraction"
+            _extraction_tasks[task_id]["step"] = "fallback_direct_extraction"
+            if markdown_tokens > TIER1_TOKEN_THRESHOLD * 4:
+                markdown = markdown[: TIER1_TOKEN_THRESHOLD * 4 * 4]
             prompt = _build_extraction_prompt(
                 schema_document_id=payload.schema_document_id,
                 file_id=payload.file_id,
@@ -2179,146 +2267,27 @@ async def _run_extraction_pipeline(
                         "response_schema": response_schema,
                     },
                     scopes=["agent.execute", "data.read", "data.write", "search.read", "graph.read", "graph.write"],
-                    purpose="structured-extraction-direct",
+                    purpose="structured-extraction-direct-fallback",
                     agent_tier="complex",
                 )
 
-            if run.status != "succeeded":
-                raise RuntimeError(
-                    f"Extraction run failed: run_id={run.id}, status={run.status}"
-                )
-
-            output = run.output or {}
-            if not isinstance(output, dict):
-                output = {"result": str(output)}
-            logger.info(
-                "Tier 1 direct extraction output",
-                extra={
-                    "run_id": str(run.id),
-                    "output_keys": list(output.keys()) if isinstance(output, dict) else type(output).__name__,
-                    "output_preview": str(output)[:500],
-                },
-            )
-            records = _extract_records(output)
-            logger.info(
-                "Tier 1 records parsed",
-                extra={"run_id": str(run.id), "record_count": len(records)},
-            )
-
-            # ---- Tier 1 missing-field retry ----
-            # If we got records but some fields are still null, do a
-            # targeted follow-up extracting only the missing fields.
-            if records:
-                effective_schema = schema_obj if isinstance(schema_obj, dict) else {}
-                for rec_idx, rec in enumerate(records):
-                    missing = _identify_missing_fields(rec, effective_schema)
-                    if not missing:
-                        continue
-                    logger.info(
-                        "Tier 1 missing-field retry",
-                        extra={"record_idx": rec_idx, "missing_fields": missing},
-                    )
-                    _extraction_tasks[task_id]["step"] = f"tier1_missing_field_retry_{rec_idx}"
-                    retry_schema = _build_records_response_schema(
-                        effective_schema, max_records=1, field_names=missing,
-                    )
-                    retry_prompt = _build_extraction_prompt(
-                        schema_document_id=payload.schema_document_id,
-                        file_id=payload.file_id,
-                        schema_obj=effective_schema,
-                        markdown=markdown,
-                        instructions=(
-                            f"{instructions}\n"
-                            "Some fields were not extracted in the first pass. "
-                            f"Extract ONLY these fields: {', '.join(missing)}. "
-                            "Return exactly one record with only these fields populated."
-                        ),
-                        compact_mode=False,
-                        max_records=1,
-                    )
-                    async with SessionLocal() as retry_session:
-                        retry_run = await create_run(
-                            session=retry_session,
-                            principal=principal,
-                            agent_id=agent_uuid,
-                            payload={
-                                "prompt": retry_prompt,
-                                "response_schema": retry_schema,
-                            },
-                            scopes=["agent.execute", "data.read", "data.write", "search.read", "graph.read", "graph.write"],
-                            purpose=f"structured-extraction-missing-fields-{rec_idx}",
-                            agent_tier="complex",
-                        )
-                    if retry_run.status == "succeeded":
-                        retry_output = retry_run.output or {}
-                        if not isinstance(retry_output, dict):
-                            retry_output = {"result": str(retry_output)}
-                        retry_recs = _extract_records(retry_output)
-                        if retry_recs:
-                            for field_name in missing:
-                                val = retry_recs[0].get(field_name)
-                                if val is not None and val != "" and val != []:
-                                    rec[field_name] = val
-                            logger.info(
-                                "Tier 1 missing-field retry merged",
-                                extra={
-                                    "record_idx": rec_idx,
-                                    "filled_fields": [
-                                        f for f in missing
-                                        if rec.get(f) is not None and rec.get(f) != "" and rec.get(f) != []
-                                    ],
-                                },
-                            )
-
-            if not records:
-                _extraction_tasks[task_id]["step"] = "tier1_retry"
-                retry_prompt = _build_extraction_prompt(
-                    schema_document_id=payload.schema_document_id,
-                    file_id=payload.file_id,
-                    schema_obj=schema_obj if isinstance(schema_obj, dict) else {},
-                    markdown=markdown,
-                    instructions=(
-                        f"{instructions} "
-                        "Previous output was invalid or non-parseable. "
-                        "Retry with compact output."
-                    ),
-                    compact_mode=True,
-                    max_records=max_records,
-                )
-                async with SessionLocal() as retry_session:
-                    retry_run = await create_run(
-                        session=retry_session,
-                        principal=principal,
-                        agent_id=agent_uuid,
-                        payload={
-                            "prompt": retry_prompt,
-                            "response_schema": response_schema,
-                        },
-                        scopes=["agent.execute", "data.read", "data.write", "search.read", "graph.read", "graph.write"],
-                        purpose="structured-extraction-retry",
-                        agent_tier="complex",
-                    )
+            if run and run.status == "succeeded":
+                output = run.output or {}
+                if not isinstance(output, dict):
+                    output = {"result": str(output)}
+                records = _extract_records(output)
                 logger.info(
-                    "Extraction retry run completed",
+                    "Fallback direct extraction output",
                     extra={
-                        "retry_run_id": str(retry_run.id),
-                        "retry_status": retry_run.status,
-                        "retry_output_preview": str(retry_run.output)[:500] if retry_run.output else "None",
+                        "run_id": str(run.id),
+                        "record_count": len(records),
                     },
                 )
-                if retry_run.status == "succeeded":
-                    retry_output = retry_run.output or {}
-                    if not isinstance(retry_output, dict):
-                        retry_output = {"result": str(retry_output)}
-                    retry_records = _extract_records(retry_output)
-                    logger.info(
-                        "Extraction retry records parsed",
-                        extra={"retry_run_id": str(retry_run.id), "record_count": len(retry_records)},
-                    )
-                    if retry_records:
-                        run = retry_run
-                        output = retry_output
-                        records = retry_records
+            elif run:
+                logger.warning(
+                    "Fallback direct extraction failed",
+                    extra={"run_id": str(run.id), "status": run.status},
+                )
 
         if not records:
             run_id = str(run.id) if run is not None else "unknown"
@@ -2391,45 +2360,132 @@ async def _run_extraction_pipeline(
                     if field_name not in rec or rec[field_name] is None:
                         rec[field_name] = value
 
-        # -- Phase 1: store records immediately so the frontend can show them --
+        # -- Phase 1: store records (merge-aware) --
         _extraction_tasks[task_id]["step"] = "storing_records"
 
+        effective_schema_for_merge = schema_obj if isinstance(schema_obj, dict) else {}
         insert_result: Dict[str, Any] = {"stored": False, "count": 0}
         if payload.store_results:
             try:
-                # Remove any previous records for this source file so
-                # re-extraction is idempotent (no duplicates).
-                try:
+                # Attempt to find an existing record to merge into
+                existing_record: Optional[Dict[str, Any]] = None
+
+                if payload.merge_into_record_id:
+                    try:
+                        qr = await client.request(
+                            "POST",
+                            f"/data/{payload.schema_document_id}/query",
+                            json={
+                                "where": {"field": "id", "op": "eq", "value": payload.merge_into_record_id},
+                                "limit": 1,
+                            },
+                        )
+                        recs = qr.get("records", [])
+                        if recs:
+                            existing_record = recs[0]
+                    except Exception:
+                        logger.debug("merge_into_record_id lookup failed (non-fatal)")
+                elif enriched_records:
+                    # Auto-match by name or email from first extracted record
+                    first = enriched_records[0]
+                    match_conditions: List[Dict[str, Any]] = []
+                    if first.get("name"):
+                        match_conditions.append({"field": "name", "op": "eq", "value": first["name"]})
+                    if first.get("email"):
+                        match_conditions.append({"field": "email", "op": "eq", "value": first["email"]})
+                    if match_conditions:
+                        where = match_conditions[0] if len(match_conditions) == 1 else {"or": match_conditions}
+                        try:
+                            qr = await client.request(
+                                "POST",
+                                f"/data/{payload.schema_document_id}/query",
+                                json={"where": where, "limit": 1},
+                            )
+                            recs = qr.get("records", [])
+                            # Only match if the existing record wasn't produced
+                            # by this same file (which would be a re-extraction,
+                            # not a merge).
+                            for r in recs:
+                                src_ids = r.get("_sourceFileIds") or []
+                                src_id = r.get("_sourceFileId")
+                                all_ids = set(src_ids)
+                                if src_id:
+                                    all_ids.add(src_id)
+                                if payload.file_id not in all_ids:
+                                    existing_record = r
+                                    break
+                        except Exception:
+                            logger.debug("Auto-match query failed (non-fatal)")
+
+                if existing_record and enriched_records:
+                    # Merge mode: combine extracted data into existing record
+                    merged = _merge_record_fields(
+                        existing_record,
+                        enriched_records[0],
+                        effective_schema_for_merge,
+                        payload.file_id,
+                    )
+                    record_id = existing_record.get("id")
+                    logger.info(
+                        "Merging extraction into existing record",
+                        extra={
+                            "record_id": record_id,
+                            "file_id": payload.file_id,
+                            "merged_source_file_ids": merged.get("_sourceFileIds"),
+                        },
+                    )
+                    # Build the update payload (everything except 'id')
+                    update_fields = {k: v for k, v in merged.items() if k != "id"}
                     await client.request(
-                        "DELETE",
+                        "PUT",
                         f"/data/{payload.schema_document_id}/records",
                         json={
-                            "where": {
-                                "field": "_sourceFileId",
-                                "op": "eq",
-                                "value": payload.file_id,
-                            }
+                            "updates": update_fields,
+                            "where": {"field": "id", "op": "eq", "value": record_id},
+                            "validate": True,
                         },
                     )
-                except Exception:
-                    logger.debug(
-                        "No previous records to delete (or delete failed)",
-                        extra={
-                            "file_id": payload.file_id,
-                            "schema_document_id": payload.schema_document_id,
-                        },
-                    )
+                    enriched_records = [merged]
+                    insert_result = {
+                        "stored": True,
+                        "count": 1,
+                        "recordIds": [record_id],
+                        "merged": True,
+                    }
+                else:
+                    # No merge target: delete previous records for this file
+                    # (idempotent re-extraction) and insert new.
+                    try:
+                        await client.request(
+                            "DELETE",
+                            f"/data/{payload.schema_document_id}/records",
+                            json={
+                                "where": {
+                                    "field": "_sourceFileId",
+                                    "op": "eq",
+                                    "value": payload.file_id,
+                                }
+                            },
+                        )
+                    except Exception:
+                        logger.debug(
+                            "No previous records to delete (or delete failed)",
+                            extra={
+                                "file_id": payload.file_id,
+                                "schema_document_id": payload.schema_document_id,
+                            },
+                        )
 
-                result = await client.request(
-                    "POST",
-                    f"/data/{payload.schema_document_id}/records",
-                    json={"records": enriched_records, "validate": True},
-                )
-                insert_result = {
-                    "stored": True,
-                    "count": result.get("count", len(enriched_records)),
-                    "recordIds": result.get("recordIds", []),
-                }
+                    result = await client.request(
+                        "POST",
+                        f"/data/{payload.schema_document_id}/records",
+                        json={"records": enriched_records, "validate": True},
+                    )
+                    insert_result = {
+                        "stored": True,
+                        "count": result.get("count", len(enriched_records)),
+                        "recordIds": result.get("recordIds", []),
+                    }
             except Exception as exc:
                 logger.error(
                     "Failed to store extracted records",
@@ -2629,22 +2685,32 @@ async def _run_extraction_pipeline(
         _extraction_tasks[task_id]["status"] = "failed"
         _extraction_tasks[task_id]["error"] = str(exc)
 
+        # Only write "failed" to file metadata if this task is still the
+        # active one.  A newer extraction may have started for the same file,
+        # and we must not overwrite its "running" status with our stale error.
         try:
-            await client.request(
-                "PATCH",
-                f"/files/{payload.file_id}",
-                json={
-                    "metadata": {
-                        "extraction": {
-                            "schemaDocumentId": payload.schema_document_id,
-                            "schemaName": schema_doc.get("name"),
-                            "status": "failed",
-                            "error": str(exc),
-                            "updatedAt": datetime.now(timezone.utc).isoformat(),
-                        }
-                    }
-                },
+            file_meta = await client.request("GET", f"/files/{payload.file_id}")
+            current_task_id = (
+                (file_meta.get("metadata") or {})
+                .get("extraction", {})
+                .get("taskId")
             )
+            if current_task_id == task_id:
+                await client.request(
+                    "PATCH",
+                    f"/files/{payload.file_id}",
+                    json={
+                        "metadata": {
+                            "extraction": {
+                                "schemaDocumentId": payload.schema_document_id,
+                                "schemaName": schema_doc.get("name"),
+                                "status": "failed",
+                                "error": str(exc),
+                                "updatedAt": datetime.now(timezone.utc).isoformat(),
+                            }
+                        }
+                    },
+                )
         except Exception:
             pass
 
