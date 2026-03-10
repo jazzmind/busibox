@@ -211,7 +211,7 @@ def config():
 @pytest.fixture
 def samples_dir():
     """Get path to testdocs/pdf/general directory."""
-    from testing.environment import get_test_doc_repo_path
+    from busibox_common.testing.environment import get_test_doc_repo_path
     
     # Get the test docs path from environment or sibling repo
     test_doc_path = get_test_doc_repo_path()

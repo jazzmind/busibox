@@ -44,6 +44,7 @@ def _row_to_dict(row) -> dict:
         "devMode": d.get("dev_mode", False),
         "primaryColor": d.get("primary_color"),
         "secondaryColor": d.get("secondary_color"),
+        "lastDeploymentStatus": d.get("last_deployment_status"),
         "createdAt": d["created_at"].isoformat() if d.get("created_at") else None,
         "updatedAt": d["updated_at"].isoformat() if d.get("updated_at") else None,
     }
@@ -84,9 +85,9 @@ async def create_app(data: dict) -> dict:
             id, name, description, type, sso_audience, url, deployed_path,
             icon_url, selected_icon, display_order, is_active, health_endpoint,
             github_repo, deployed_version, latest_version, update_available,
-            dev_mode, primary_color, secondary_color
+            dev_mode, primary_color, secondary_color, last_deployment_status
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
         )
         RETURNING *
     """
@@ -112,6 +113,7 @@ async def create_app(data: dict) -> dict:
             data.get("devMode", False),
             data.get("primaryColor"),
             data.get("secondaryColor"),
+            data.get("lastDeploymentStatus"),
         )
     return _row_to_dict(row)
 
@@ -139,6 +141,7 @@ async def update_app(app_id: str, updates: dict) -> Optional[dict]:
         "devMode": "dev_mode",
         "primaryColor": "primary_color",
         "secondaryColor": "secondary_color",
+        "lastDeploymentStatus": "last_deployment_status",
     }
 
     set_parts = []

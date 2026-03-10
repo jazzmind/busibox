@@ -1,4 +1,4 @@
-use crate::modules::benchmark::{BenchmarkConfig, BenchmarkResult};
+use crate::modules::benchmark::{self, BenchmarkConfig, BenchmarkResult};
 use crate::modules::hardware::HardwareProfile;
 use crate::modules::health::{GroupHealth, HealthUpdate, ServiceHealthResult};
 use crate::modules::models::{DeployedModel, DeployedModelSet, DeployedModelUpdate, ModelRecommendation, TierModel, TierModelSet};
@@ -133,6 +133,8 @@ pub struct App {
     pub benchmark_tick: usize,
     pub benchmark_rx: Option<mpsc::Receiver<BenchmarkUpdate>>,
     pub benchmark_config: BenchmarkConfig,
+    pub benchmark_mode: benchmark::BenchmarkMode,
+    pub benchmark_model_test_results: Vec<benchmark::ModelTestResult>,
 
     // Install state
     pub install_services: Vec<ServiceInstallState>,
@@ -463,6 +465,7 @@ pub enum ModelsManageUpdate {
 pub enum BenchmarkUpdate {
     Log(String),
     Result(BenchmarkResult),
+    ModelTestResult(benchmark::ModelTestResult),
     Complete,
 }
 
@@ -553,6 +556,8 @@ impl App {
             benchmark_tick: 0,
             benchmark_rx: None,
             benchmark_config: BenchmarkConfig::default(),
+            benchmark_mode: benchmark::BenchmarkMode::Performance,
+            benchmark_model_test_results: Vec::new(),
             install_services: Vec::new(),
             install_log: Vec::new(),
             install_log_visible: false,

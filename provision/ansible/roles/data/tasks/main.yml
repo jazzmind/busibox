@@ -110,7 +110,7 @@
       - "--exclude=*.pyc"
   tags: [data, data_deploy, data_tests, data_update_tests]
 
-- name: Copy shared testing library
+- name: Copy shared testing library (backward-compat shims; canonical location is busibox_common/testing/)
   synchronize:
     src: "{{ playbook_dir }}/../../srv/shared/testing/"
     dest: /srv/data/src/testing/
@@ -122,7 +122,7 @@
       - "--exclude=*.pyc"
   tags: [data, data_deploy, data_tests]
 
-- name: Copy shared busibox_common library
+- name: Copy shared busibox_common library (includes busibox_common/testing/)
   synchronize:
     src: "{{ playbook_dir }}/../../srv/shared/busibox_common/"
     dest: /srv/data/src/busibox_common/

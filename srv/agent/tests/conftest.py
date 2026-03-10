@@ -1,36 +1,25 @@
 """
 Pytest configuration and shared fixtures for Agent service.
 
-Uses real JWT tokens from authz - no mocks for auth tests.
-Uses shared test_utils library for auth handling.
+Uses real JWT tokens from authz via busibox_common.testing -- no mocks for
+integration tests.  Unit-test-only fixtures (mock_principal, client) are
+clearly marked; prefer real auth for anything that hits the network.
 """
 import os
-import sys
 from pathlib import Path
 
-# Add shared testing library to path FIRST (before any other imports)
-# When deployed: /srv/agent/shared/testing/ (via Ansible copy)
-# When local Docker: /app/shared/testing/ (via PYTHONPATH=/app/shared)
-# When local dev: ../../srv/shared/testing/
-_test_utils_paths = [
-    os.path.join(os.path.dirname(__file__), "..", "shared"),  # Deployed: /srv/agent/shared (contains testing/)
-    os.path.join(os.path.dirname(__file__), "..", "..", "shared"),  # Local: srv/shared (contains testing/)
-]
-for _path in _test_utils_paths:
-    if os.path.exists(_path) and _path not in sys.path:
-        sys.path.insert(0, _path)
-
-# CRITICAL: Load environment variables BEFORE any other imports
-# This must happen at the very top of conftest.py before pytest imports test files
-from testing.environment import load_env_files, create_service_auth_fixture
+# CRITICAL: Load environment variables BEFORE any other imports.
+# This must happen at the very top of conftest.py before pytest imports test
+# files which may trigger Settings/Config initialisation.
+from busibox_common.testing.environment import load_env_files, create_service_auth_fixture
 load_env_files(Path(__file__).parent.parent)
 
-# Override auth_audience to None for tests (skip audience validation)
-# This must be done AFTER loading env files since dotenv overrides env vars
+# Override auth_audience to None for tests (skip audience validation).
+# Must be done AFTER loading env files since dotenv overrides env vars.
 os.environ["auth_audience"] = ""
 
 # Enable pytest plugin for failed test filter generation
-pytest_plugins = ["testing.pytest_failed_filter"]
+pytest_plugins = ["busibox_common.testing.pytest_failed_filter"]
 
 # Clear settings cache immediately after loading env files
 try:
@@ -50,9 +39,9 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # Import shared testing utilities
-from testing.auth import AuthTestClient, auth_client  # noqa: F401 - auth_client for fixture discovery
-from testing.fixtures import require_env
-from testing.database import DatabasePool, RLSEnabledPool
+from busibox_common.testing.auth import AuthTestClient, auth_client  # noqa: F401
+from busibox_common.testing.fixtures import require_env
+from busibox_common.testing.database import DatabasePool, RLSEnabledPool
 
 from app.config.settings import get_settings
 from app.main import app
@@ -154,7 +143,11 @@ def set_agent_auth_env(monkeypatch):
 
 @pytest.fixture
 def mock_principal() -> Principal:
-    """Create mock authenticated principal using real test user."""
+    """Create mock authenticated principal using real test user.
+
+    UNIT TESTS ONLY -- bypasses real JWT validation.  For integration tests
+    use ``auth_client.get_token(audience="agent-api")`` and pass real headers.
+    """
     return Principal(
         sub=TEST_USER_ID,
         email=TEST_USER_EMAIL,
@@ -226,10 +219,10 @@ async def test_client(session_engine) -> AsyncGenerator[AsyncClient, None]:
 
 @pytest.fixture
 async def client(session_engine, mock_principal: Principal) -> AsyncClient:
-    """
-    Test HTTP client with mocked auth.
-    
-    Uses mock_principal instead of real JWT validation.
+    """Test HTTP client with mocked auth.
+
+    UNIT TESTS ONLY -- overrides ``get_principal`` so no real JWT is needed.
+    For integration tests use ``async_client`` + ``auth_headers`` instead.
     """
     from httpx import ASGITransport
     from app.auth.dependencies import get_principal

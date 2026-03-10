@@ -57,6 +57,7 @@ bash scripts/test-infrastructure.sh full
 
 ## Documentation
 
+- **[Authenticated Testing Guide](docs/developers/testing-auth-guide.md)** - How to write authenticated tests with `busibox_common.testing`
 - **[Testing Architecture](docs/developers/architecture/08-tests.md)** - Philosophy, execution methods, debugging
 - **[Test Databases](docs/developers/01-testing.md)** - Test database isolation and setup
 - **[Import Gotchas](docs/developers/reference/python-test-import-gotchas.md)** - Python import debugging

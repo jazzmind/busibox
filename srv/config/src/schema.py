@@ -70,12 +70,11 @@ def get_config_schema() -> SchemaManager:
             category    TEXT,
             description TEXT,
             created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-            UNIQUE (key, COALESCE(app_id, ''))
+            updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """)
 
+    schema.add_index("CREATE UNIQUE INDEX IF NOT EXISTS idx_config_key_app ON config_entries(key, COALESCE(app_id, ''))")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_config_scope ON config_entries(scope)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_config_app_id ON config_entries(app_id)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_config_tier ON config_entries(tier)")
@@ -84,29 +83,34 @@ def get_config_schema() -> SchemaManager:
     # ---- app_registry: installed application definitions ----
     schema.add_table("""
         CREATE TABLE IF NOT EXISTS app_registry (
-            id                  TEXT PRIMARY KEY,
-            name                TEXT NOT NULL,
-            description         TEXT,
-            type                TEXT NOT NULL DEFAULT 'LIBRARY',
-            sso_audience        TEXT,
-            url                 TEXT,
-            deployed_path       TEXT,
-            icon_url            TEXT,
-            selected_icon       TEXT,
-            display_order       INT DEFAULT 0,
-            is_active           BOOLEAN DEFAULT TRUE,
-            health_endpoint     TEXT,
-            github_repo         TEXT,
-            deployed_version    TEXT,
-            latest_version      TEXT,
-            update_available    BOOLEAN DEFAULT FALSE,
-            dev_mode            BOOLEAN DEFAULT FALSE,
-            primary_color       TEXT,
-            secondary_color     TEXT,
-            created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            id                      TEXT PRIMARY KEY,
+            name                    TEXT NOT NULL,
+            description             TEXT,
+            type                    TEXT NOT NULL DEFAULT 'LIBRARY',
+            sso_audience            TEXT,
+            url                     TEXT,
+            deployed_path           TEXT,
+            icon_url                TEXT,
+            selected_icon           TEXT,
+            display_order           INT DEFAULT 0,
+            is_active               BOOLEAN DEFAULT TRUE,
+            health_endpoint         TEXT,
+            github_repo             TEXT,
+            deployed_version        TEXT,
+            latest_version          TEXT,
+            update_available        BOOLEAN DEFAULT FALSE,
+            dev_mode                BOOLEAN DEFAULT FALSE,
+            primary_color           TEXT,
+            secondary_color         TEXT,
+            last_deployment_status  TEXT,
+            created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """)
+
+    schema.add_migration(
+        "ALTER TABLE app_registry ADD COLUMN IF NOT EXISTS last_deployment_status TEXT"
+    )
 
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_app_registry_type ON app_registry(type)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_app_registry_active ON app_registry(is_active)")

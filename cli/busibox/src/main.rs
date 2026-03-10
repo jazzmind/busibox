@@ -297,6 +297,9 @@ fn main() -> Result<()> {
                         Ok(app::BenchmarkUpdate::Result(result)) => {
                             app.benchmark_results.push(result);
                         }
+                        Ok(app::BenchmarkUpdate::ModelTestResult(result)) => {
+                            app.benchmark_model_test_results.push(result);
+                        }
                         Ok(app::BenchmarkUpdate::Complete) => {
                             app.benchmark_running = false;
                             app.benchmark_complete = true;

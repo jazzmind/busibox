@@ -1,8 +1,9 @@
 """
 Pytest configuration and fixtures for search API tests.
 
-ALL tests use real tokens from authz service - NO MOCKS.
-This ensures tests validate actual authentication and authorization behavior.
+ALL tests use real tokens from authz service via busibox_common.testing --
+NO MOCKS.  This ensures tests validate actual authentication and authorization
+behavior.
 
 Required environment variables:
 - AUTHZ_JWKS_URL: URL to authz JWKS endpoint
@@ -10,35 +11,22 @@ Required environment variables:
 """
 
 import os
-import sys
 import pytest
 import asyncio
 from pathlib import Path
 from typing import Dict, List
 from unittest.mock import Mock, AsyncMock
 
-# Add shared testing library to path
-# When deployed: /opt/search/src/testing/ (via Ansible copy)
-# When local Docker: /app/shared/testing/ (via PYTHONPATH=/app/shared)
-# When local dev: ../../srv/shared/testing/
-_test_utils_paths = [
-    os.path.join(os.path.dirname(__file__), "..", "src"),  # Deployed: /opt/search/src (contains testing/)
-    os.path.join(os.path.dirname(__file__), "..", "..", "shared"),  # Local: srv/shared (contains testing/)
-]
-for _path in _test_utils_paths:
-    if os.path.exists(_path) and _path not in sys.path:
-        sys.path.insert(0, _path)
-
 # Import shared utilities
-from testing.auth import AuthTestClient, auth_client, clean_test_user
-from testing.fixtures import require_env, get_authz_base_url
-from testing.environment import create_service_auth_fixture, load_env_files
+from busibox_common.testing.auth import AuthTestClient, auth_client, clean_test_user  # noqa: F401
+from busibox_common.testing.fixtures import require_env, get_authz_base_url
+from busibox_common.testing.environment import create_service_auth_fixture, load_env_files
 
 # Load environment files before other imports
 load_env_files(Path(__file__).parent.parent)
 
 # Enable pytest plugin for failed test filter generation
-pytest_plugins = ["testing.pytest_failed_filter"]
+pytest_plugins = ["busibox_common.testing.pytest_failed_filter"]
 
 
 # =============================================================================
@@ -107,8 +95,8 @@ def real_auth_header(real_access_token):
 # Common fixtures
 # =============================================================================
 
-# Event loop fixture is provided by testing.database module
-from testing.database import event_loop  # noqa: F401
+# Event loop fixture is provided by busibox_common.testing.database module
+from busibox_common.testing.database import event_loop  # noqa: F401
 
 
 @pytest.fixture

@@ -9,10 +9,11 @@ published: true
 # Testing Guide
 
 **Created**: 2025-12-09  
-**Last Updated**: 2026-01-16  
+**Last Updated**: 2026-03-10  
 **Status**: Active  
 **Category**: Guide  
 **Related Docs**:  
+- `developers/testing-auth-guide.md` -- authenticated testing with `busibox_common.testing`
 - `administrators/02-install.md`  
 - `architecture/08-tests.md`
 
@@ -20,13 +21,28 @@ published: true
 
 All tests run against dedicated test databases, separate from production:
 
-| Service | Test Database | Owner |
-|---------|---------------|-------|
-| Agent | `test_agent_server` | `busibox_test_user` |
-| AuthZ | `test_authz` | `busibox_test_user` |
-| Ingest | `test_files` | `busibox_test_user` |
+| Service       | Test Database   | Owner              |
+|---------------|-----------------|---------------------|
+| Agent         | `test_agent`    | `busibox_test_user` |
+| AuthZ         | `test_authz`    | `busibox_test_user` |
+| Data / Search | `test_files`    | `busibox_test_user` |
+| Config        | `test_config`   | `busibox_test_user` |
 
-This ensures tests never pollute production data. The `make test` commands automatically connect to the appropriate test databases.
+This ensures tests never pollute production data. The `make test` commands
+automatically connect to the appropriate test databases.
+
+## Authenticated Testing
+
+All integration tests use **real JWT tokens** obtained from the authz service.
+The shared `busibox_common.testing` package provides the `AuthTestClient`
+which handles user creation, token exchange, and cleanup.
+
+See **[Authenticated Testing Guide](testing-auth-guide.md)** for:
+- How to set up `conftest.py` for a new service
+- `AuthTestClient` API reference
+- When to use real auth vs mocks
+- Test database routing (`X-Test-Mode` header)
+- Troubleshooting
 
 ## Platform Checks (Ansible)
 - **Smoke/health**:
@@ -99,20 +115,28 @@ This ensures tests never pollute production data. The `make test` commands autom
 
 ## Bootstrap Test Credentials
 
-For local integration testing with real services:
+Test databases and the bootstrap test user are initialised automatically:
 
 ```bash
-cd provision/ansible
-make bootstrap-test-creds INV=inventory/staging
+# Docker development -- run once after first `docker compose up`
+make test-db-init
+
+# Or from within the manager container
+python scripts/docker/bootstrap-test-databases.py
 ```
 
-This generates:
-- Test OAuth client credentials
-- Admin token for RBAC operations
-- Test user with roles
-- Ready-to-copy `.env` variables
+This creates:
+- Signing keys in `test_authz`
+- Test email domains (`test.example.com`, `busibox.local`)
+- Test user `00000000-0000-0000-0000-000000000001`
+- Schemas for `test_files` and `test_agent`
 
-See `guides/bootstrap-test-credentials.md` for details.
+For Proxmox/staging/production, the Ansible `postgres` role handles test
+database creation when `enable_pytest_databases: true`.
+
+The `AuthTestClient` in `busibox_common.testing` automatically bootstraps
+the Admin role for the test user on first use, so no manual credential
+setup is needed.
 
 ## Apps
 - App-specific tests live in their repos (Busibox Portal, Busibox Agents). Run `npm test`/`npm run test:watch` per repo after wiring env vars to container endpoints.
@@ -126,10 +150,11 @@ See `guides/bootstrap-test-credentials.md` for details.
 
 ## Reference
 
+- [Authenticated Testing Guide](testing-auth-guide.md) — `AuthTestClient` API, conftest patterns, DB routing
 - [Python Test Import Gotchas](reference/python-test-import-gotchas.md) — Common import and path issues in pytest
 - [Test Environment Containers](reference/test-environment-containers.md) — Staging container IPs, DB names, bootstrap
 
 ## Related Documentation
-- **Detailed guides**: `guides/agent-server-testing.md`, `guides/bootstrap-test-credentials.md`
+- **Auth testing library**: `srv/shared/busibox_common/testing/` (install: `pip install busibox-common[testing]`)
 - **Test strategy**: `guides/testing/TEST_STRATEGY.md`
 - **Service testing**: `guides/testing/master-guide.md`

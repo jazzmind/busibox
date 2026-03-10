@@ -122,7 +122,7 @@
   when: agent_deployment_needed
   tags: [agent_api, agent_api_deploy]
 
-- name: Copy shared testing library
+- name: Copy shared testing library (backward-compat shims; canonical location is busibox_common/testing/)
   synchronize:
     src: "{{ playbook_dir }}/../../srv/shared/testing/"
     dest: "{{ agent_api_src_path }}/testing/"
@@ -135,7 +135,7 @@
   when: agent_deployment_needed
   tags: [agent_api, agent_api_deploy]
 
-- name: Copy shared busibox_common library
+- name: Copy shared busibox_common library (includes busibox_common/testing/)
   synchronize:
     src: "{{ playbook_dir }}/../../srv/shared/busibox_common/"
     dest: "{{ agent_api_src_path }}/busibox_common/"

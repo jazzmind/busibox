@@ -1,6 +1,6 @@
 use crate::app::{App, BenchmarkUpdate, Screen};
 use crate::modules::benchmark::{
-    self, BenchmarkConfig, BenchmarkResult,
+    self, BenchmarkConfig, BenchmarkMode, BenchmarkResult, ModelTestTier,
 };
 use crate::modules::models::{DeployedModel, LiveStatus};
 use crate::theme;
@@ -57,9 +57,17 @@ pub fn init_screen(app: &mut App, preselect_port: Option<u16>) {
     app.benchmark_tick = 0;
     app.benchmark_rx = None;
     app.benchmark_config = BenchmarkConfig::default();
+    app.benchmark_model_test_results = Vec::new();
 }
 
 pub fn render(f: &mut Frame, app: &App) {
+    match app.benchmark_mode {
+        BenchmarkMode::Performance => render_performance(f, app),
+        BenchmarkMode::ModelTests => render_model_tests(f, app),
+    }
+}
+
+fn render_performance(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -90,7 +98,10 @@ pub fn render(f: &mut Frame, app: &App) {
             Span::styled("Benchmark Complete", theme::title()),
         ]))
     } else {
-        Paragraph::new("Model Benchmark").style(theme::title())
+        Paragraph::new(Line::from(vec![
+            Span::styled("Model Benchmark", theme::title()),
+            Span::styled("  [Performance]", theme::info()),
+        ]))
     }
     .alignment(Alignment::Center);
     f.render_widget(title, chunks[0]);
@@ -125,22 +136,163 @@ pub fn render(f: &mut Frame, app: &App) {
     render_log(f, app, bottom_chunks[1]);
 
     // Help bar
+    render_help_bar(f, app, chunks[4]);
+}
+
+fn render_model_tests(f: &mut Frame, app: &App) {
+    let results_height = if app.benchmark_model_test_results.is_empty() {
+        0u16
+    } else {
+        (app.benchmark_model_test_results.len() as u16 + 4).min(16)
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),         // title
+            Constraint::Length(results_height), // test results table
+            Constraint::Min(3),            // log
+            Constraint::Length(2),         // help bar
+        ])
+        .margin(2)
+        .split(f.area());
+
+    let spinner_char = if app.benchmark_running {
+        SPINNER[app.benchmark_tick % SPINNER.len()]
+    } else {
+        ""
+    };
+
+    let title = if app.benchmark_running {
+        Paragraph::new(Line::from(vec![
+            Span::styled(format!("{spinner_char} "), theme::info()),
+            Span::styled("Running Model Tests...", theme::title()),
+        ]))
+    } else if app.benchmark_complete {
+        let passed = app.benchmark_model_test_results.iter().filter(|r| r.passed).count();
+        let total = app.benchmark_model_test_results.len();
+        let style = if passed == total { theme::success() } else { theme::warning() };
+        Paragraph::new(Line::from(vec![
+            Span::styled(format!("{passed}/{total} Passed"), style),
+            Span::styled("  Model Tests Complete", theme::title()),
+        ]))
+    } else {
+        Paragraph::new(Line::from(vec![
+            Span::styled("Model Tests", theme::title()),
+            Span::styled("  [Model Tests]", theme::info()),
+        ]))
+    }
+    .alignment(Alignment::Center);
+    f.render_widget(title, chunks[0]);
+
+    // Test results table
+    render_model_test_results(f, app, chunks[1]);
+
+    // Log
+    render_log(f, app, chunks[2]);
+
+    // Help bar
+    render_help_bar(f, app, chunks[3]);
+}
+
+fn render_model_test_results(f: &mut Frame, app: &App, area: Rect) {
+    if app.benchmark_model_test_results.is_empty() {
+        return;
+    }
+
+    let header = Row::new(vec![
+        Cell::from(Span::styled("Test", theme::heading())),
+        Cell::from(Span::styled("Tier", theme::heading())),
+        Cell::from(Span::styled("Status", theme::heading())),
+        Cell::from(Span::styled("Time", theme::heading())),
+        Cell::from(Span::styled("Response / Error", theme::heading())),
+    ])
+    .height(1);
+
+    let rows: Vec<Row> = app
+        .benchmark_model_test_results
+        .iter()
+        .map(|r| {
+            let name = if r.test_name.len() > 20 {
+                format!("{}…", &r.test_name[..19])
+            } else {
+                r.test_name.clone()
+            };
+
+            let (status_str, status_style) = if r.passed {
+                ("PASS", theme::success())
+            } else {
+                ("FAIL", theme::error())
+            };
+
+            let detail = if let Some(ref content) = r.response_content {
+                let truncated: String = content.chars().take(40).collect();
+                truncated
+            } else if let Some(ref err) = r.error {
+                let truncated: String = err.chars().take(40).collect();
+                truncated
+            } else {
+                "—".to_string()
+            };
+
+            Row::new(vec![
+                Cell::from(Span::styled(name, theme::info())),
+                Cell::from(Span::styled(r.tier.to_string(), theme::muted())),
+                Cell::from(Span::styled(status_str, status_style)),
+                Cell::from(Span::styled(format!("{:.0}ms", r.elapsed_ms), theme::normal())),
+                Cell::from(Span::styled(detail, theme::normal())),
+            ])
+        })
+        .collect();
+
+    let widths = [
+        Constraint::Min(15),
+        Constraint::Length(8),
+        Constraint::Length(6),
+        Constraint::Length(8),
+        Constraint::Min(20),
+    ];
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(theme::dim())
+                .title(" Test Results ")
+                .title_style(theme::heading()),
+        )
+        .row_highlight_style(theme::highlight());
+
+    f.render_widget(table, area);
+}
+
+fn render_help_bar(f: &mut Frame, app: &App, area: Rect) {
     let mut help_spans = vec![];
     if !app.benchmark_running {
-        help_spans.extend_from_slice(&[
-            Span::styled("↑/↓ ", theme::highlight()),
-            Span::styled("Select  ", theme::normal()),
-            Span::styled("Space ", theme::highlight()),
-            Span::styled("Toggle  ", theme::normal()),
-        ]);
-        let has_selected = app.benchmark_toggled.iter().any(|&t| t);
-        if has_selected {
+        if app.benchmark_mode == BenchmarkMode::Performance {
+            help_spans.extend_from_slice(&[
+                Span::styled("↑/↓ ", theme::highlight()),
+                Span::styled("Select  ", theme::normal()),
+                Span::styled("Space ", theme::highlight()),
+                Span::styled("Toggle  ", theme::normal()),
+            ]);
+            let has_selected = app.benchmark_toggled.iter().any(|&t| t);
+            if has_selected {
+                help_spans.extend_from_slice(&[
+                    Span::styled("Enter ", theme::highlight()),
+                    Span::styled("Run  ", theme::success()),
+                ]);
+            }
+        } else {
             help_spans.extend_from_slice(&[
                 Span::styled("Enter ", theme::highlight()),
-                Span::styled("Run  ", theme::success()),
+                Span::styled("Run Tests  ", theme::success()),
             ]);
         }
         help_spans.extend_from_slice(&[
+            Span::styled("Tab ", theme::highlight()),
+            Span::styled("Switch Mode  ", theme::normal()),
             Span::styled("Esc ", theme::muted()),
             Span::styled("Back", theme::muted()),
         ]);
@@ -153,7 +305,7 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 
     let help = Paragraph::new(Line::from(help_spans));
-    f.render_widget(help, chunks[4]);
+    f.render_widget(help, area);
 }
 
 fn render_model_selector(f: &mut Frame, app: &App, area: Rect) {
@@ -389,25 +541,51 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         KeyCode::Esc => {
             app.screen = Screen::ModelsManage;
         }
+        KeyCode::Tab | KeyCode::BackTab => {
+            app.benchmark_mode = match app.benchmark_mode {
+                BenchmarkMode::Performance => BenchmarkMode::ModelTests,
+                BenchmarkMode::ModelTests => BenchmarkMode::Performance,
+            };
+            // Clear results when switching modes
+            app.benchmark_results.clear();
+            app.benchmark_model_test_results.clear();
+            app.benchmark_log.clear();
+            app.benchmark_log_scroll = 0;
+            app.benchmark_complete = false;
+        }
         KeyCode::Up => {
-            if !app.benchmark_models.is_empty() && app.benchmark_selected > 0 {
+            if app.benchmark_mode == BenchmarkMode::Performance
+                && !app.benchmark_models.is_empty()
+                && app.benchmark_selected > 0
+            {
                 app.benchmark_selected -= 1;
             }
         }
         KeyCode::Down => {
-            if app.benchmark_selected + 1 < app.benchmark_models.len() {
+            if app.benchmark_mode == BenchmarkMode::Performance
+                && app.benchmark_selected + 1 < app.benchmark_models.len()
+            {
                 app.benchmark_selected += 1;
             }
         }
         KeyCode::Char(' ') => {
-            if let Some(toggled) = app.benchmark_toggled.get_mut(app.benchmark_selected) {
-                *toggled = !*toggled;
+            if app.benchmark_mode == BenchmarkMode::Performance {
+                if let Some(toggled) = app.benchmark_toggled.get_mut(app.benchmark_selected) {
+                    *toggled = !*toggled;
+                }
             }
         }
         KeyCode::Enter => {
-            let has_selected = app.benchmark_toggled.iter().any(|&t| t);
-            if has_selected && !app.benchmark_models.is_empty() {
-                start_benchmark(app);
+            match app.benchmark_mode {
+                BenchmarkMode::Performance => {
+                    let has_selected = app.benchmark_toggled.iter().any(|&t| t);
+                    if has_selected && !app.benchmark_models.is_empty() {
+                        start_benchmark(app);
+                    }
+                }
+                BenchmarkMode::ModelTests => {
+                    start_model_tests(app);
+                }
             }
         }
         _ => {}
@@ -496,19 +674,25 @@ fn start_benchmark(app: &mut App) {
                 let curl_cmd = benchmark::build_curl_command(
                     &vllm_ip,
                     model.port,
-                    &model.model_name,
+                    model.api_model_name(),
                     &config.prompt,
                     1,
                 );
                 match exec_curl(&curl_cmd, is_remote, &ssh_details) {
                     Ok(output) => {
                         if let Some(resp) = benchmark::parse_curl_response(&output) {
-                            let ms = resp.elapsed_secs * 1000.0;
-                            ttft_values.push(ms);
-                            let _ = tx.send(BenchmarkUpdate::Log(format!(
-                                "  ✓ {:.0} ms ({} tokens)",
-                                ms, resp.completion_tokens
-                            )));
+                            if let Some(ref err) = resp.error_message {
+                                let _ = tx.send(BenchmarkUpdate::Log(format!(
+                                    "  ERROR: API error: {err}"
+                                )));
+                            } else {
+                                let ms = resp.elapsed_secs * 1000.0;
+                                ttft_values.push(ms);
+                                let _ = tx.send(BenchmarkUpdate::Log(format!(
+                                    "  ✓ {:.0} ms ({} tokens)",
+                                    ms, resp.completion_tokens
+                                )));
+                            }
                         } else {
                             let _ = tx.send(BenchmarkUpdate::Log(
                                 "  ERROR: Could not parse response".into(),
@@ -542,14 +726,18 @@ fn start_benchmark(app: &mut App) {
                 let curl_cmd = benchmark::build_curl_command(
                     &vllm_ip,
                     model.port,
-                    &model.model_name,
+                    model.api_model_name(),
                     &config.prompt,
                     config.max_tokens_throughput,
                 );
                 match exec_curl(&curl_cmd, is_remote, &ssh_details) {
                     Ok(output) => {
                         if let Some(resp) = benchmark::parse_curl_response(&output) {
-                            if resp.elapsed_secs > 0.0 && resp.completion_tokens > 0 {
+                            if let Some(ref err) = resp.error_message {
+                                let _ = tx.send(BenchmarkUpdate::Log(format!(
+                                    "  ERROR: API error: {err}"
+                                )));
+                            } else if resp.elapsed_secs > 0.0 && resp.completion_tokens > 0 {
                                 let tps =
                                     resp.completion_tokens as f64 / resp.elapsed_secs;
                                 tps_values.push(tps);
@@ -585,7 +773,7 @@ fn start_benchmark(app: &mut App) {
             let parallel_cmd = benchmark::build_parallel_curl_command(
                 &vllm_ip,
                 model.port,
-                &model.model_name,
+                model.api_model_name(),
                 &config.prompt,
                 config.max_tokens_parallel,
                 config.parallel_count,
@@ -647,6 +835,228 @@ fn start_benchmark(app: &mut App) {
 
         let _ = tx.send(BenchmarkUpdate::Log(
             "✓ Benchmark complete".into(),
+        ));
+        let _ = tx.send(BenchmarkUpdate::Complete);
+    });
+}
+
+fn start_model_tests(app: &mut App) {
+    app.benchmark_running = true;
+    app.benchmark_complete = false;
+    app.benchmark_model_test_results.clear();
+    app.benchmark_log.clear();
+    app.benchmark_log_scroll = 0;
+    app.benchmark_tick = 0;
+
+    let selected_models: Vec<DeployedModel> = app
+        .benchmark_models
+        .iter()
+        .filter(|m| m.provider == "vllm" && m.assigned && m.port > 0)
+        .cloned()
+        .collect();
+
+    let is_remote = app
+        .active_profile()
+        .map(|(_, p)| p.remote)
+        .unwrap_or(false);
+
+    let is_proxmox = app
+        .active_profile()
+        .map(|(_, p)| p.backend == "proxmox")
+        .unwrap_or(false);
+
+    let ssh_details: Option<(String, String, String)> = if is_remote {
+        app.active_profile().and_then(|(_, p)| {
+            p.effective_host().map(|host| {
+                (
+                    host.to_string(),
+                    p.effective_user().to_string(),
+                    p.effective_ssh_key().to_string(),
+                )
+            })
+        })
+    } else {
+        None
+    };
+
+    let vllm_network_base: String = app
+        .active_profile()
+        .map(|(_, p)| p.vllm_network_base().to_string())
+        .unwrap_or_else(|| "10.96.200".to_string());
+
+    // Read model_config.yml for purposes -- try remote first, then local
+    let repo_root = app.repo_root.clone();
+    let config_path = repo_root.join("provision/ansible/group_vars/all/model_config.yml");
+    let config_contents = if is_remote {
+        if let Some((ref host, ref user, ref key)) = ssh_details {
+            let ssh = crate::modules::ssh::SshConnection::new(host, user, key);
+            let cmd = "cat ~/busibox/provision/ansible/group_vars/all/model_config.yml 2>/dev/null";
+            ssh.run(cmd).unwrap_or_default()
+        } else {
+            std::fs::read_to_string(&config_path).unwrap_or_default()
+        }
+    } else {
+        std::fs::read_to_string(&config_path).unwrap_or_default()
+    };
+
+    let purposes = benchmark::parse_model_purposes(&config_contents);
+    let testable = benchmark::testable_chat_purposes(&purposes);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.benchmark_rx = Some(rx);
+
+    std::thread::spawn(move || {
+        let vllm_ip = if is_proxmox {
+            format!("{vllm_network_base}.208")
+        } else {
+            "localhost".to_string()
+        };
+
+        // LiteLLM runs on .207 (agent-lxc container)
+        let litellm_ip = if is_proxmox {
+            format!("{vllm_network_base}.207")
+        } else {
+            "localhost".to_string()
+        };
+        let litellm_port: u16 = 4000;
+
+        let prompt = "Say hello in one word.";
+        let max_tokens: usize = 10;
+
+        // --- Phase 1: Direct vLLM tests ---
+        let _ = tx.send(BenchmarkUpdate::Log(
+            "=== Phase 1: Direct vLLM Tests ===".into(),
+        ));
+
+        for model in &selected_models {
+            let test_name = format!("vllm:{}", model.api_model_name());
+            let _ = tx.send(BenchmarkUpdate::Log(format!(
+                ">>> Testing {} (port {})...",
+                model.api_model_name(),
+                model.port
+            )));
+
+            let curl_cmd = benchmark::build_curl_command(
+                &vllm_ip,
+                model.port,
+                model.api_model_name(),
+                prompt,
+                max_tokens,
+            );
+
+            let result = match exec_curl(&curl_cmd, is_remote, &ssh_details) {
+                Ok(output) => {
+                    let mut r = benchmark::parse_model_test_response(&output);
+                    r.test_name = test_name;
+                    r.tier = ModelTestTier::DirectVllm;
+                    r
+                }
+                Err(e) => benchmark::ModelTestResult {
+                    test_name,
+                    tier: ModelTestTier::DirectVllm,
+                    passed: false,
+                    response_content: None,
+                    error: Some(e),
+                    elapsed_ms: 0.0,
+                },
+            };
+
+            let status = if result.passed { "PASS" } else { "FAIL" };
+            let detail = result
+                .response_content
+                .as_deref()
+                .or(result.error.as_deref())
+                .unwrap_or("—");
+            let _ = tx.send(BenchmarkUpdate::Log(format!(
+                "  {} [{status}] {:.0}ms - {}",
+                result.test_name, result.elapsed_ms, detail
+            )));
+
+            let _ = tx.send(BenchmarkUpdate::ModelTestResult(result));
+        }
+
+        // --- Phase 2: LiteLLM proxy tests ---
+        let _ = tx.send(BenchmarkUpdate::Log(String::new()));
+        let _ = tx.send(BenchmarkUpdate::Log(
+            "=== Phase 2: LiteLLM Proxy Tests ===".into(),
+        ));
+
+        // Read the litellm master key from the litellm container's config.
+        // On Proxmox, /etc/default/litellm is on the litellm LXC (container 210),
+        // not the host we SSH into. Use pct exec to read it.
+        let litellm_key = if is_remote {
+            if let Some((ref host, ref user, ref key)) = ssh_details {
+                let ssh = crate::modules::ssh::SshConnection::new(host, user, key);
+                // Try reading from the litellm container via pct (Proxmox)
+                let cmd = if is_proxmox {
+                    "pct exec 207 -- sh -c 'cat /etc/default/litellm 2>/dev/null' 2>/dev/null | sed -n \"s/^LITELLM_MASTER_KEY=//p\" | head -1"
+                } else {
+                    "sed -n 's/^LITELLM_MASTER_KEY=//p' /etc/default/litellm 2>/dev/null | head -1"
+                };
+                ssh.run(cmd).unwrap_or_default().trim().to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        if litellm_key.is_empty() && is_proxmox {
+            let _ = tx.send(BenchmarkUpdate::Log(
+                "  WARNING: Could not read LiteLLM master key; tests may fail with 401".into(),
+            ));
+        }
+
+        for purpose in &testable {
+            let test_name = format!("litellm:{purpose}");
+            let _ = tx.send(BenchmarkUpdate::Log(format!(
+                ">>> Testing purpose '{purpose}' via LiteLLM..."
+            )));
+
+            let curl_cmd = benchmark::build_litellm_curl_command(
+                &litellm_ip,
+                litellm_port,
+                purpose,
+                &litellm_key,
+                prompt,
+                max_tokens,
+            );
+
+            let result = match exec_curl(&curl_cmd, is_remote, &ssh_details) {
+                Ok(output) => {
+                    let mut r = benchmark::parse_model_test_response(&output);
+                    r.test_name = test_name;
+                    r.tier = ModelTestTier::LiteLLM;
+                    r
+                }
+                Err(e) => benchmark::ModelTestResult {
+                    test_name,
+                    tier: ModelTestTier::LiteLLM,
+                    passed: false,
+                    response_content: None,
+                    error: Some(e),
+                    elapsed_ms: 0.0,
+                },
+            };
+
+            let status = if result.passed { "PASS" } else { "FAIL" };
+            let detail = result
+                .response_content
+                .as_deref()
+                .or(result.error.as_deref())
+                .unwrap_or("—");
+            let _ = tx.send(BenchmarkUpdate::Log(format!(
+                "  {} [{status}] {:.0}ms - {}",
+                result.test_name, result.elapsed_ms, detail
+            )));
+
+            let _ = tx.send(BenchmarkUpdate::ModelTestResult(result));
+        }
+
+        // Summary
+        let _ = tx.send(BenchmarkUpdate::Log(String::new()));
+        let _ = tx.send(BenchmarkUpdate::Log(
+            "✓ Model tests complete".into(),
         ));
         let _ = tx.send(BenchmarkUpdate::Complete);
     });

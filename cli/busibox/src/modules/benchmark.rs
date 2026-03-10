@@ -1,4 +1,38 @@
 use serde_json::Value;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BenchmarkMode {
+    Performance,
+    ModelTests,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelTestResult {
+    pub test_name: String,
+    pub tier: ModelTestTier,
+    pub passed: bool,
+    pub response_content: Option<String>,
+    pub error: Option<String>,
+    pub elapsed_ms: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModelTestTier {
+    DirectVllm,
+    LiteLLM,
+    AgentApi,
+}
+
+impl std::fmt::Display for ModelTestTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ModelTestTier::DirectVllm => write!(f, "vLLM"),
+            ModelTestTier::LiteLLM => write!(f, "LiteLLM"),
+            ModelTestTier::AgentApi => write!(f, "Agent"),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct BenchmarkConfig {
@@ -48,6 +82,8 @@ impl BenchmarkResult {
 pub struct CurlResponse {
     pub completion_tokens: usize,
     pub elapsed_secs: f64,
+    /// Error message from the API if the response was an error (e.g. "model not found").
+    pub error_message: Option<String>,
 }
 
 /// Build a curl command that sends a chat completion request to vLLM and appends timing.
@@ -72,7 +108,7 @@ pub fn build_curl_command(
          -H 'Content-Type: application/json' \
          --max-time 120 \
          -d '{}' \
-         'http://{}:{}/v1/chat/completions'",
+         'http://{}:{}/v1/chat/completions'; true",
         body_str, vllm_ip, port
     )
 }
@@ -114,6 +150,17 @@ pub fn parse_curl_response(output: &str) -> Option<CurlResponse> {
     let json_part = output[..timing_pos].trim();
     let json: Value = serde_json::from_str(json_part).ok()?;
 
+    let error_message = json
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            json.get("message")
+                .and_then(|m| m.as_str())
+                .map(|s| s.to_string())
+        });
+
     let completion_tokens = json
         .get("usage")
         .and_then(|u| u.get("completion_tokens"))
@@ -123,6 +170,7 @@ pub fn parse_curl_response(output: &str) -> Option<CurlResponse> {
     Some(CurlResponse {
         completion_tokens,
         elapsed_secs,
+        error_message,
     })
 }
 
@@ -177,4 +225,155 @@ pub fn median(values: &mut [f64]) -> f64 {
     } else {
         values[mid]
     }
+}
+
+// --- Model Test helpers ---
+
+/// Build a curl command targeting LiteLLM proxy with auth header.
+pub fn build_litellm_curl_command(
+    litellm_ip: &str,
+    port: u16,
+    purpose_name: &str,
+    api_key: &str,
+    prompt: &str,
+    max_tokens: usize,
+) -> String {
+    let body = serde_json::json!({
+        "model": purpose_name,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "stream": false,
+    });
+    let body_str = body.to_string().replace('\'', "'\\''");
+
+    // Append `; true` so the command always exits 0 — ssh.run() treats
+    // non-zero exits as errors, but we want to parse the response ourselves.
+    if api_key.is_empty() {
+        format!(
+            "curl -s -w '\\n---BENCH_TIME:%{{time_total}}---' \
+             -H 'Content-Type: application/json' \
+             --max-time 60 \
+             -d '{}' \
+             'http://{}:{}/v1/chat/completions'; true",
+            body_str, litellm_ip, port
+        )
+    } else {
+        let escaped_key = api_key.replace('\'', "'\\''");
+        format!(
+            "curl -s -w '\\n---BENCH_TIME:%{{time_total}}---' \
+             -H 'Content-Type: application/json' \
+             -H 'Authorization: Bearer {}' \
+             --max-time 60 \
+             -d '{}' \
+             'http://{}:{}/v1/chat/completions'; true",
+            escaped_key, body_str, litellm_ip, port
+        )
+    }
+}
+
+/// Build a curl command targeting the Agent API.
+pub fn build_agent_api_curl_command(
+    agent_ip: &str,
+    port: u16,
+    purpose_name: &str,
+    prompt: &str,
+    max_tokens: usize,
+) -> String {
+    let body = serde_json::json!({
+        "model": purpose_name,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "stream": false,
+    });
+    let body_str = body.to_string().replace('\'', "'\\''");
+
+    format!(
+        "curl -s -w '\\n---BENCH_TIME:%{{time_total}}---' \
+         -H 'Content-Type: application/json' \
+         --max-time 60 \
+         -d '{}' \
+         'http://{}:{}/v1/chat/completions'; true",
+        body_str, agent_ip, port
+    )
+}
+
+/// Parse a model test response, checking for valid choices content.
+pub fn parse_model_test_response(output: &str) -> ModelTestResult {
+    let mut result = ModelTestResult {
+        test_name: String::new(),
+        tier: ModelTestTier::DirectVllm,
+        passed: false,
+        response_content: None,
+        error: None,
+        elapsed_ms: 0.0,
+    };
+
+    match parse_curl_response(output) {
+        Some(resp) => {
+            result.elapsed_ms = resp.elapsed_secs * 1000.0;
+
+            if let Some(ref err) = resp.error_message {
+                result.error = Some(err.clone());
+                return result;
+            }
+
+            // Try to extract the actual response content
+            let timing_pos = output.rfind("---BENCH_TIME:").unwrap_or(output.len());
+            let json_part = output[..timing_pos].trim();
+            if let Ok(json) = serde_json::from_str::<Value>(json_part) {
+                let content = json
+                    .get("choices")
+                    .and_then(|c| c.get(0))
+                    .and_then(|c| c.get("message"))
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_str())
+                    .map(|s| s.to_string());
+
+                if let Some(text) = content {
+                    if !text.is_empty() {
+                        result.passed = true;
+                        result.response_content = Some(text);
+                    } else {
+                        result.error = Some("Empty response content".to_string());
+                    }
+                } else {
+                    result.error = Some("No choices[0].message.content in response".to_string());
+                }
+            } else {
+                result.error = Some("Could not parse JSON response".to_string());
+            }
+        }
+        None => {
+            let preview: String = output.chars().take(120).collect();
+            result.error = Some(format!("Could not parse curl output: {preview}"));
+        }
+    }
+
+    result
+}
+
+/// Read model_purposes from a model_config.yml contents string.
+pub fn parse_model_purposes(config_contents: &str) -> HashMap<String, String> {
+    #[derive(serde::Deserialize)]
+    struct Config {
+        model_purposes: Option<HashMap<String, String>>,
+    }
+
+    serde_yaml::from_str::<Config>(config_contents)
+        .ok()
+        .and_then(|c| c.model_purposes)
+        .unwrap_or_default()
+}
+
+/// Purposes that are testable via LiteLLM chat completions (excludes embedding, reranking, media).
+pub fn testable_chat_purposes(purposes: &HashMap<String, String>) -> Vec<String> {
+    let skip = ["embedding", "reranking", "image", "transcribe", "voice", "flux", "whisper", "kokoro"];
+    let mut result: Vec<String> = purposes
+        .keys()
+        .filter(|k| !skip.iter().any(|s| k.as_str() == *s))
+        .cloned()
+        .collect();
+    result.sort();
+    result.dedup();
+    result
 }
