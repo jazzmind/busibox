@@ -65,6 +65,10 @@ class ExtractRequest(BaseModel):
     prompt_override: Optional[str] = Field(default=None, description="Optional custom extraction instructions")
     user_id: Optional[str] = Field(default=None, description="User ID for delegation-token mode")
     delegation_token: Optional[str] = Field(default=None, description="Delegation token for internal calls")
+    record_defaults: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Key-value pairs merged into every extracted record (e.g. campaignId, stage from trigger config)",
+    )
 
 
 def _parse_json_text(text: str) -> Optional[Dict[str, Any]]:
@@ -520,6 +524,8 @@ def _get_app_only_fields(schema_obj: Dict[str, Any]) -> List[str]:
         for name, defn in fields.items()
         if isinstance(defn, dict) and defn.get("appOnly")
     ]
+
+
 
 
 def _build_records_response_schema(
@@ -2375,6 +2381,15 @@ async def _run_extraction_pipeline(
                     "Could not fetch existing records for appOnly merge (non-fatal)",
                     extra={"file_id": payload.file_id},
                 )
+
+        # Apply record_defaults from trigger configuration (e.g. campaignId, stage).
+        # These are app-supplied values that should be set on every record produced
+        # by this extraction, regardless of what the LLM returns.
+        if payload.record_defaults:
+            for rec in enriched_records:
+                for field_name, value in payload.record_defaults.items():
+                    if field_name not in rec or rec[field_name] is None:
+                        rec[field_name] = value
 
         # -- Phase 1: store records immediately so the frontend can show them --
         _extraction_tasks[task_id]["step"] = "storing_records"

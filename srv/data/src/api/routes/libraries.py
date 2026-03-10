@@ -786,6 +786,11 @@ class CreateTriggerRequest(BaseModel):
     delegation_token: Optional[str] = Field(None, alias="delegationToken", description="Pre-authorized token for agent execution")
     delegation_scopes: Optional[List[str]] = Field(None, alias="delegationScopes", description="Scopes for delegation token")
     run_at_pass: Optional[List[int]] = Field(None, alias="runAtPass", description="Pipeline pass numbers at which to fire (default [3])")
+    record_defaults: Optional[Dict[str, Any]] = Field(
+        None,
+        alias="recordDefaults",
+        description="Key-value pairs merged into every record produced by this trigger's extraction (e.g. campaignId, stage)",
+    )
     
     class Config:
         populate_by_name = True
@@ -809,6 +814,11 @@ class UpdateTriggerRequest(BaseModel):
         alias="notificationConfig",
         description="Notification settings for notify triggers",
     )
+    record_defaults: Optional[Dict[str, Any]] = Field(
+        None,
+        alias="recordDefaults",
+        description="Key-value pairs merged into every record produced by this trigger's extraction",
+    )
     
     class Config:
         populate_by_name = True
@@ -816,6 +826,14 @@ class UpdateTriggerRequest(BaseModel):
 
 def trigger_to_response(trigger: dict) -> dict:
     """Convert a trigger DB row to API response format."""
+    record_defaults = trigger.get("record_defaults")
+    if isinstance(record_defaults, str):
+        import json as _json
+        try:
+            record_defaults = _json.loads(record_defaults)
+        except Exception:
+            record_defaults = None
+
     return {
         "id": str(trigger["id"]),
         "libraryId": str(trigger["library_id"]),
@@ -826,6 +844,7 @@ def trigger_to_response(trigger: dict) -> dict:
         "prompt": trigger.get("prompt"),
         "schemaDocumentId": str(trigger["schema_document_id"]) if trigger.get("schema_document_id") else None,
         "notificationConfig": trigger.get("notification_config"),
+        "recordDefaults": record_defaults,
         "isActive": trigger.get("is_active", True),
         "createdBy": str(trigger["created_by"]),
         "executionCount": trigger.get("execution_count", 0),
@@ -938,6 +957,7 @@ async def create_library_trigger(
             delegation_token=body.delegation_token,
             delegation_scopes=body.delegation_scopes,
             run_at_pass=body.run_at_pass,
+            record_defaults=body.record_defaults,
         )
         return JSONResponse(
             status_code=http_status.HTTP_201_CREATED,

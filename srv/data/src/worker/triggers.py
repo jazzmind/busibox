@@ -375,7 +375,8 @@ class TriggerMixin:
                 with conn.cursor() as cur:
                     cur.execute("""
                         SELECT id, trigger_type, agent_id, prompt, schema_document_id,
-                               notification_config, delegation_token, name
+                               notification_config, delegation_token, name,
+                               record_defaults
                         FROM library_triggers
                         WHERE library_id = %s AND is_active = true
                     """, (library_id,))
@@ -448,6 +449,17 @@ class TriggerMixin:
                 notification_config = trigger[5]
                 trigger_delegation_token = trigger[6]
                 trigger_name = trigger[7]
+                raw_record_defaults = trigger[8] if len(trigger) > 8 else None
+
+                trigger_record_defaults: Optional[dict] = None
+                if raw_record_defaults:
+                    if isinstance(raw_record_defaults, dict):
+                        trigger_record_defaults = raw_record_defaults
+                    elif isinstance(raw_record_defaults, str):
+                        try:
+                            trigger_record_defaults = json.loads(raw_record_defaults)
+                        except Exception:
+                            pass
 
                 if isinstance(notification_config, str):
                     try:
@@ -532,6 +544,7 @@ class TriggerMixin:
                     # Prefer per-job delegation token first (fresh token from upload/reprocess).
                     # Trigger-level token is a fallback and may be stale.
                     delegation_token=delegation_token or trigger_delegation_token,
+                    record_defaults=trigger_record_defaults,
                 )
                 completed_count += 1
                 if not success:
@@ -580,6 +593,7 @@ class TriggerMixin:
         user_id: str,
         library_id: str,
         delegation_token: Optional[str],
+        record_defaults: Optional[dict] = None,
     ) -> bool:
         """Fire a single library trigger by calling the Agent API."""
         # Extraction can take longer than regular webhook/workflow calls.
@@ -650,6 +664,8 @@ class TriggerMixin:
                 }
                 if agent_id:
                     extract_payload["agent_id"] = agent_id
+                if record_defaults:
+                    extract_payload["record_defaults"] = record_defaults
 
                 req = urllib.request.Request(
                     f"{agent_api_url}/extract",

@@ -321,6 +321,7 @@ def get_data_schema() -> SchemaManager:
             delegation_token TEXT,
             delegation_scopes JSONB DEFAULT '[]'::jsonb,
             run_at_pass JSONB DEFAULT '[3]'::jsonb,
+            record_defaults JSONB,
             execution_count INTEGER DEFAULT 0,
             last_execution_at TIMESTAMP,
             last_error TEXT,
@@ -817,6 +818,19 @@ def get_data_schema() -> SchemaManager:
         WHERE library_type IS NOT NULL
           AND library_type != 'CUSTOM'
           AND deleted_at IS NULL
+    """)
+
+    # record_defaults on library_triggers
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'library_triggers' AND column_name = 'record_defaults'
+            ) THEN
+                ALTER TABLE library_triggers ADD COLUMN record_defaults JSONB;
+            END IF;
+        END $$;
     """)
     
     # ==========================================================================
