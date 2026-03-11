@@ -222,9 +222,28 @@ start_server_instance() {
     mlx_python=$(get_mlx_python)
     mlx_pip=$(get_mlx_pip)
     
+    # mlx-lm >=0.31.0 required for Qwen3.5 model support
+    local need_install=0
     if ! "$mlx_python" -c "import mlx_lm" 2>/dev/null; then
+        need_install=1
+    else
+        local cur_ver
+        cur_ver=$("$mlx_python" -c "import importlib.metadata; print(importlib.metadata.version('mlx-lm'))" 2>/dev/null || echo "0.0.0")
+        if "$mlx_python" -c "
+import sys
+cur = tuple(int(x) for x in '${cur_ver}'.split('.')[:3])
+req = (0, 31, 0)
+sys.exit(0 if cur >= req else 1)
+" 2>/dev/null; then
+            : # version is fine
+        else
+            info "Upgrading mlx-lm ${cur_ver} → >=0.31.0 (Qwen3.5 support)..."
+            need_install=1
+        fi
+    fi
+    if [[ $need_install -eq 1 ]]; then
         info "Installing mlx-lm into virtual environment..."
-        "$mlx_pip" install -q mlx-lm huggingface_hub
+        "$mlx_pip" install -q -U "mlx-lm>=0.31.0" huggingface_hub
     fi
 
     # Install Outlines if requested and not already present

@@ -3699,16 +3699,31 @@ setup_mlx() {
     mlx_python=$(get_mlx_python)
     mlx_pip=$(get_mlx_pip)
     
-    # Install mlx-lm and huggingface_hub if not already installed
+    # Install/upgrade mlx-lm (>=0.31.0 required for Qwen3.5)
     info "Installing MLX-LM dependencies into virtual environment..."
+    local need_mlx_install=0
     if ! "$mlx_python" -c "import mlx_lm" 2>/dev/null; then
-        "$mlx_pip" install -q mlx-lm huggingface_hub || {
+        need_mlx_install=1
+    else
+        local cur_ver
+        cur_ver=$("$mlx_python" -c "import importlib.metadata; print(importlib.metadata.version('mlx-lm'))" 2>/dev/null || echo "0.0.0")
+        if "$mlx_python" -c "
+import sys
+cur = tuple(int(x) for x in '${cur_ver}'.split('.')[:3])
+sys.exit(0 if cur >= (0, 31, 0) else 1)
+" 2>/dev/null; then
+            info "MLX-LM ${cur_ver} already installed"
+        else
+            info "Upgrading mlx-lm ${cur_ver} → >=0.31.0 (Qwen3.5 support)..."
+            need_mlx_install=1
+        fi
+    fi
+    if [[ $need_mlx_install -eq 1 ]]; then
+        "$mlx_pip" install -q -U "mlx-lm>=0.31.0" huggingface_hub || {
             error "Failed to install mlx-lm"
             return 1
         }
         success "MLX-LM installed"
-    else
-        info "MLX-LM already installed"
     fi
     
     # Download small test model (Qwen3-0.6B-4bit ~400MB)
