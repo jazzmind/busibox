@@ -901,7 +901,12 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
         );
         let _ = tx.send(ManageUpdate::Log(format!("Running: make {make_args}")));
 
-        let result: color_eyre::Result<(i32, String)> = if is_remote {
+        let stream_tx = tx.clone();
+        let on_line = move |line: &str| {
+            let _ = stream_tx.send(ManageUpdate::Log(format!("  {line}")));
+        };
+
+        let result: color_eyre::Result<i32> = if is_remote {
             if let Some((ref host, ref user, ref key)) = ssh_details {
                 let ssh = crate::modules::ssh::SshConnection::new(
                     profile_host.as_deref().unwrap_or(host),
@@ -909,27 +914,21 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
                     key,
                 );
                 if let Some(ref vp) = vault_password {
-                    remote::exec_make_quiet_with_vault(&ssh, &remote_path, &make_args, vp)
+                    remote::exec_make_quiet_with_vault_streaming(&ssh, &remote_path, &make_args, vp, on_line)
                 } else {
-                    remote::exec_make_quiet(&ssh, &remote_path, &make_args)
+                    remote::exec_make_quiet_streaming(&ssh, &remote_path, &make_args, on_line)
                 }
             } else {
                 Err(color_eyre::eyre::eyre!("No SSH connection"))
             }
         } else if let Some(ref vp) = vault_password {
-            remote::run_local_make_quiet_with_vault(&repo_root, &make_args, vp)
+            remote::run_local_make_quiet_with_vault_streaming(&repo_root, &make_args, vp, on_line)
         } else {
-            remote::run_local_make_quiet(&repo_root, &make_args)
+            remote::run_local_make_quiet_streaming(&repo_root, &make_args, on_line)
         };
 
         match result {
-            Ok((0, output)) => {
-                for line in output.lines() {
-                    let trimmed = line.trim();
-                    if !trimmed.is_empty() {
-                        let _ = tx.send(ManageUpdate::Log(format!("  {trimmed}")));
-                    }
-                }
+            Ok(0) => {
                 let _ = tx.send(ManageUpdate::Log(format!(
                     "✓ {action} {service} successful"
                 )));
@@ -961,40 +960,33 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
                         );
                         let _ = tx.send(ManageUpdate::Log(format!("Running: make {vllm_args}")));
 
-                        let vllm_result: color_eyre::Result<(i32, String)> = if let Some((ref host, ref user, ref key)) = ssh_details {
+                        let vllm_tx = tx.clone();
+                        let vllm_on_line = move |line: &str| {
+                            let _ = vllm_tx.send(ManageUpdate::Log(format!("  {line}")));
+                        };
+
+                        let vllm_result: color_eyre::Result<i32> = if let Some((ref host, ref user, ref key)) = ssh_details {
                             let ssh = crate::modules::ssh::SshConnection::new(
                                 profile_host.as_deref().unwrap_or(host),
                                 user,
                                 key,
                             );
                             if let Some(ref vp) = vault_password {
-                                remote::exec_make_quiet_with_vault(&ssh, &remote_path, &vllm_args, vp)
+                                remote::exec_make_quiet_with_vault_streaming(&ssh, &remote_path, &vllm_args, vp, vllm_on_line)
                             } else {
-                                remote::exec_make_quiet(&ssh, &remote_path, &vllm_args)
+                                remote::exec_make_quiet_streaming(&ssh, &remote_path, &vllm_args, vllm_on_line)
                             }
                         } else {
                             Err(color_eyre::eyre::eyre!("No SSH connection"))
                         };
 
                         match vllm_result {
-                            Ok((0, vllm_out)) => {
-                                for line in vllm_out.lines() {
-                                    let trimmed = line.trim();
-                                    if !trimmed.is_empty() {
-                                        let _ = tx.send(ManageUpdate::Log(format!("  {trimmed}")));
-                                    }
-                                }
+                            Ok(0) => {
                                 let _ = tx.send(ManageUpdate::Log(
                                     "✓ vllm redeploy successful".into(),
                                 ));
                             }
-                            Ok((code, vllm_out)) => {
-                                for line in vllm_out.lines() {
-                                    let trimmed = line.trim();
-                                    if !trimmed.is_empty() {
-                                        let _ = tx.send(ManageUpdate::Log(format!("  {trimmed}")));
-                                    }
-                                }
+                            Ok(code) => {
                                 let _ = tx.send(ManageUpdate::Log(format!(
                                     "WARNING: vllm redeploy failed (exit code {code})"
                                 )));
@@ -1014,13 +1006,7 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
 
                 let _ = tx.send(ManageUpdate::Complete { success: true });
             }
-            Ok((code, output)) => {
-                for line in output.lines() {
-                    let trimmed = line.trim();
-                    if !trimmed.is_empty() {
-                        let _ = tx.send(ManageUpdate::Log(format!("  {trimmed}")));
-                    }
-                }
+            Ok(code) => {
                 let _ = tx.send(ManageUpdate::Log(format!(
                     "FAILED: {action} {service} (exit code {code})"
                 )));
@@ -1173,7 +1159,12 @@ pub fn spawn_install_with_env(app: &mut App, services: &str, extra_env: &str) {
         );
         let _ = tx.send(ManageUpdate::Log(format!("Running: make {make_args}")));
 
-        let result: color_eyre::Result<(i32, String)> = if is_remote {
+        let stream_tx = tx.clone();
+        let on_line = move |line: &str| {
+            let _ = stream_tx.send(ManageUpdate::Log(format!("  {line}")));
+        };
+
+        let result: color_eyre::Result<i32> = if is_remote {
             if let Some((ref host, ref user, ref key)) = ssh_details {
                 let ssh = crate::modules::ssh::SshConnection::new(
                     profile_host.as_deref().unwrap_or(host),
@@ -1181,39 +1172,27 @@ pub fn spawn_install_with_env(app: &mut App, services: &str, extra_env: &str) {
                     key,
                 );
                 if let Some(ref vp) = vault_password {
-                    remote::exec_make_quiet_with_vault(&ssh, &remote_path, &make_args, vp)
+                    remote::exec_make_quiet_with_vault_streaming(&ssh, &remote_path, &make_args, vp, on_line)
                 } else {
-                    remote::exec_make_quiet(&ssh, &remote_path, &make_args)
+                    remote::exec_make_quiet_streaming(&ssh, &remote_path, &make_args, on_line)
                 }
             } else {
                 Err(color_eyre::eyre::eyre!("No SSH connection"))
             }
         } else if let Some(ref vp) = vault_password {
-            remote::run_local_make_quiet_with_vault(&repo_root, &make_args, vp)
+            remote::run_local_make_quiet_with_vault_streaming(&repo_root, &make_args, vp, on_line)
         } else {
-            remote::run_local_make_quiet(&repo_root, &make_args)
+            remote::run_local_make_quiet_streaming(&repo_root, &make_args, on_line)
         };
 
         match result {
-            Ok((0, output)) => {
-                for line in output.lines() {
-                    let trimmed = line.trim();
-                    if !trimmed.is_empty() {
-                        let _ = tx.send(ManageUpdate::Log(format!("  {trimmed}")));
-                    }
-                }
+            Ok(0) => {
                 let _ = tx.send(ManageUpdate::Log(format!(
                     "✓ {services} installed successfully"
                 )));
                 let _ = tx.send(ManageUpdate::Complete { success: true });
             }
-            Ok((code, output)) => {
-                for line in output.lines() {
-                    let trimmed = line.trim();
-                    if !trimmed.is_empty() {
-                        let _ = tx.send(ManageUpdate::Log(format!("  {trimmed}")));
-                    }
-                }
+            Ok(code) => {
                 let _ = tx.send(ManageUpdate::Log(format!(
                     "✗ install {services} failed (exit code {code})"
                 )));
