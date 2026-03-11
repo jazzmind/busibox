@@ -73,6 +73,9 @@ pub struct Profile {
     /// Only relevant when backend == "docker" on macOS.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docker_runtime: Option<String>,
+    /// GitHub Personal Access Token for private repo access during deployment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_token: Option<String>,
 }
 
 impl Profile {

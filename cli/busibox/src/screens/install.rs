@@ -1085,12 +1085,17 @@ fn spawn_install_worker(app: &mut App) {
             crate::modules::hardware::LlmBackend::Cloud => "cloud".to_string(),
         }));
 
-    // Read GitHub token from ~/.gittoken (on the machine running the CLI)
-    let github_token: Option<String> = dirs::home_dir()
-        .map(|h| h.join(".gittoken"))
-        .and_then(|p| std::fs::read_to_string(&p).ok())
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty());
+    // Read GitHub token: profile first, then ~/.gittoken fallback
+    let github_token: Option<String> = app
+        .active_profile()
+        .and_then(|(_, p)| p.github_token.clone())
+        .or_else(|| {
+            dirs::home_dir()
+                .map(|h| h.join(".gittoken"))
+                .and_then(|p| std::fs::read_to_string(&p).ok())
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+        });
 
     // Check which repos are private and will need a token
     let private_repos: Vec<String> = vec![

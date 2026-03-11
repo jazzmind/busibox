@@ -381,6 +381,7 @@ fn save_profile_and_continue(app: &mut App) {
         network_base_octets: None,
         use_production_vllm: None,
         docker_runtime: None,
+        github_token: None,
     };
 
     match profile::upsert_profile(&app.repo_root, &profile_id, profile, true) {

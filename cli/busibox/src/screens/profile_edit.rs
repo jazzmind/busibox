@@ -27,9 +27,10 @@ const FIELD_LABELS: &[&str] = &[
     "Frontend Ref",
     "Site Domain",
     "SSL Certificate",
+    "GitHub Token",
 ];
 
-const FIELD_COUNT: usize = 16;
+const FIELD_COUNT: usize = 17;
 
 const FIELD_LABEL: usize = 0;
 const FIELD_ENVIRONMENT: usize = 1;
@@ -47,6 +48,7 @@ const FIELD_ALLOWED_DOMAINS: usize = 12;
 const FIELD_FRONTEND_REF: usize = 13;
 const FIELD_SITE_DOMAIN: usize = 14;
 const FIELD_SSL_CERT_NAME: usize = 15;
+const FIELD_GITHUB_TOKEN: usize = 16;
 
 fn visible_fields(profile: &profile::Profile) -> Vec<usize> {
     let mut fields: Vec<usize> = (0..FIELD_COUNT).collect();
@@ -500,6 +502,11 @@ fn handle_nav_mode(app: &mut App, key: KeyEvent) {
                 app.profile_edit_tier_selecting = true;
                 app.profile_editing = true;
                 app.input_mode = InputMode::Editing;
+            } else if app.profile_edit_field == FIELD_GITHUB_TOKEN {
+                let profile = get_editing_profile(app);
+                app.profile_edit_buffer = profile.github_token.clone().unwrap_or_default();
+                app.profile_editing = true;
+                app.input_mode = InputMode::Editing;
             } else {
                 let profile = get_editing_profile(app);
                 app.profile_edit_buffer = field_value(&profile, app.profile_edit_field);
@@ -677,6 +684,7 @@ fn default_profile() -> profile::Profile {
         network_base_octets: None,
         use_production_vllm: None,
         docker_runtime: None,
+        github_token: None,
     }
 }
 
@@ -718,6 +726,17 @@ fn field_value(profile: &profile::Profile, field: usize) -> String {
             .ssl_cert_name
             .clone()
             .unwrap_or_else(|| "(auto-detect)".into()),
+        FIELD_GITHUB_TOKEN => profile
+            .github_token
+            .as_ref()
+            .map(|t| {
+                if t.len() > 8 {
+                    format!("{}...{}", &t[..4], &t[t.len() - 4..])
+                } else {
+                    t.clone()
+                }
+            })
+            .unwrap_or_default(),
         _ => String::new(),
     }
 }
@@ -748,6 +767,7 @@ fn field_hint(field: usize, profile: &profile::Profile) -> String {
                 "(not applicable for local)".into()
             }
         }
+        FIELD_GITHUB_TOKEN => "Personal Access Token for private repo access".into(),
         _ => String::new(),
     }
 }
@@ -922,6 +942,15 @@ fn apply_field(app: &mut App, field: usize, value: &str) {
                 Some(value.to_string())
             };
         }
+        FIELD_GITHUB_TOKEN => {
+            if !value.contains("...") {
+                profile.github_token = if value.is_empty() {
+                    None
+                } else {
+                    Some(value.to_string())
+                };
+            }
+        }
         _ => {}
     }
 }
@@ -1018,6 +1047,17 @@ fn save_profile(app: &mut App) {
         return;
     }
 
+    // Snapshot the previous github_token before applying edits
+    let old_github_token: Option<String> = app
+        .profile_edit_id
+        .as_ref()
+        .and_then(|id| {
+            app.profiles
+                .as_ref()
+                .and_then(|pf| pf.profiles.get(id))
+                .and_then(|p| p.github_token.clone())
+        });
+
     if let Some(profiles) = &mut app.profiles {
         if let Some(ref id) = app.profile_edit_id {
             if let Some(p) = profiles.profiles.get_mut(id) {
@@ -1027,6 +1067,18 @@ fn save_profile(app: &mut App) {
             }
         }
     }
+
+    // Check if the github token changed
+    let new_github_token: Option<String> = app
+        .profile_edit_id
+        .as_ref()
+        .and_then(|id| {
+            app.profiles
+                .as_ref()
+                .and_then(|pf| pf.profiles.get(id))
+                .and_then(|p| p.github_token.clone())
+        });
+    let github_token_changed = new_github_token != old_github_token && new_github_token.is_some();
 
     if let Some(profiles) = &app.profiles {
         if let Some(ref id) = app.profile_edit_id {
@@ -1047,12 +1099,36 @@ fn save_profile(app: &mut App) {
                         let _ = profile::write_profile_state(&repo_root, id, p);
                     }
                 }
-                app.set_message("Profile saved", MessageKind::Success);
-                app.screen = Screen::ProfileSelect;
-                app.profile_edit_id = None;
-                app.profile_editing = false;
-                app.profile_edit_tier_selecting = false;
-                app.input_mode = InputMode::Normal;
+
+                // Write token to ~/.gittoken so future installs pick it up
+                if let Some(ref token) = new_github_token {
+                    if github_token_changed {
+                        if let Some(home) = dirs::home_dir() {
+                            let _ = std::fs::write(home.join(".gittoken"), token);
+                        }
+                    }
+                }
+
+                if github_token_changed {
+                    let token = new_github_token.as_deref().unwrap_or("");
+                    let extra_env = format!("GITHUB_AUTH_TOKEN={token}");
+                    app.set_message(
+                        "Profile saved — redeploying deploy-api with new GitHub token...",
+                        MessageKind::Success,
+                    );
+                    app.profile_edit_id = None;
+                    app.profile_editing = false;
+                    app.profile_edit_tier_selecting = false;
+                    app.input_mode = InputMode::Normal;
+                    super::manage::spawn_install_with_env(app, "deploy", &extra_env);
+                } else {
+                    app.set_message("Profile saved", MessageKind::Success);
+                    app.screen = Screen::ProfileSelect;
+                    app.profile_edit_id = None;
+                    app.profile_editing = false;
+                    app.profile_edit_tier_selecting = false;
+                    app.input_mode = InputMode::Normal;
+                }
             }
             Err(e) => {
                 app.set_message(

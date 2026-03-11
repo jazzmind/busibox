@@ -607,9 +607,22 @@ fn run_action(app: &mut App, action: &str) {
             .active_profile()
             .map(|(_, p)| p.backend.to_lowercase())
             .unwrap_or_else(|| "docker".into());
+        let llm_backend_val: String = app
+            .active_profile()
+            .and_then(|(_, p)| p.hardware.as_ref().map(|h| match h.llm_backend {
+                crate::modules::hardware::LlmBackend::Mlx => "mlx".to_string(),
+                crate::modules::hardware::LlmBackend::Vllm => "vllm".to_string(),
+                crate::modules::hardware::LlmBackend::Cloud => "cloud".to_string(),
+            }))
+            .unwrap_or_default();
+        let llm_export = if llm_backend_val.is_empty() {
+            String::new()
+        } else {
+            format!("LLM_BACKEND={llm_backend_val} ")
+        };
         let make_svc = service_to_make_name(&svc.name);
         let make_args = format!(
-            "manage SERVICE={make_svc} ACTION={action} BUSIBOX_ENV={env_val} BUSIBOX_BACKEND={backend_val}",
+            "{llm_export}manage SERVICE={make_svc} ACTION={action} BUSIBOX_ENV={env_val} BUSIBOX_BACKEND={backend_val}",
         );
         if is_remote {
             if let Some((_, profile)) = app.active_profile() {
@@ -879,8 +892,12 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
             .as_deref()
             .map(|d| format!("SITE_DOMAIN={d} "))
             .unwrap_or_default();
+        let llm_backend_export = profile_llm_backend
+            .as_deref()
+            .map(|b| format!("LLM_BACKEND={b} "))
+            .unwrap_or_default();
         let make_args = format!(
-            "{site_domain_export}manage SERVICE={service} ACTION={action} BUSIBOX_ENV={env_val} BUSIBOX_BACKEND={backend_val}"
+            "{site_domain_export}{llm_backend_export}manage SERVICE={service} ACTION={action} BUSIBOX_ENV={env_val} BUSIBOX_BACKEND={backend_val}"
         );
         let _ = tx.send(ManageUpdate::Log(format!("Running: make {make_args}")));
 
@@ -935,8 +952,12 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
                             .as_deref()
                             .map(|d| format!("SITE_DOMAIN={d} "))
                             .unwrap_or_default();
+                        let lb = profile_llm_backend
+                            .as_deref()
+                            .map(|b| format!("LLM_BACKEND={b} "))
+                            .unwrap_or_default();
                         let vllm_args = format!(
-                            "{sd}manage SERVICE=vllm ACTION=redeploy BUSIBOX_ENV={env_val} BUSIBOX_BACKEND={backend_val}"
+                            "{sd}{lb}manage SERVICE=vllm ACTION=redeploy BUSIBOX_ENV={env_val} BUSIBOX_BACKEND={backend_val}"
                         );
                         let _ = tx.send(ManageUpdate::Log(format!("Running: make {vllm_args}")));
 
@@ -1045,4 +1066,163 @@ fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
     }
     child.wait()?;
     Ok(())
+}
+
+/// Spawn a background worker that runs `make install SERVICE=<services> <extra_env>`
+/// and feeds output into the manage screen's log viewer.
+pub fn spawn_install_with_env(app: &mut App, services: &str, extra_env: &str) {
+    let (tx, rx) = std::sync::mpsc::channel::<ManageUpdate>();
+    app.manage_rx = Some(rx);
+    app.manage_log.clear();
+    app.manage_log_visible = true;
+    app.manage_log_scroll = 0;
+    app.manage_action_running = true;
+    app.manage_action_complete = false;
+    app.screen = Screen::Manage;
+
+    let is_remote = app.active_profile().map(|(_, p)| p.remote).unwrap_or(false);
+    let repo_root = app.repo_root.clone();
+    let vault_password = app.vault_password.clone();
+    let services = services.to_string();
+    let extra_env = extra_env.to_string();
+
+    let profile_env: Option<String> = app
+        .active_profile()
+        .map(|(_, p)| p.environment.clone());
+    let profile_backend: Option<String> = app
+        .active_profile()
+        .map(|(_, p)| p.backend.to_lowercase());
+    let profile_site_domain: Option<String> = app
+        .active_profile()
+        .and_then(|(_, p)| p.site_domain.clone())
+        .filter(|v| !v.trim().is_empty());
+    let profile_llm_backend: Option<String> = app
+        .active_profile()
+        .and_then(|(_, p)| {
+            p.hardware.as_ref().map(|h| match h.llm_backend {
+                crate::modules::hardware::LlmBackend::Mlx => "mlx".to_string(),
+                crate::modules::hardware::LlmBackend::Vllm => "vllm".to_string(),
+                crate::modules::hardware::LlmBackend::Cloud => "cloud".to_string(),
+            })
+        });
+
+    let ssh_details: Option<(String, String, String)> = if is_remote {
+        app.active_profile().and_then(|(_, p)| {
+            p.effective_host().map(|h| {
+                (
+                    h.to_string(),
+                    p.effective_user().to_string(),
+                    p.effective_ssh_key().to_string(),
+                )
+            })
+        })
+    } else {
+        None
+    };
+
+    let profile_remote_path: Option<String> = app
+        .active_profile()
+        .map(|(_, p)| p.effective_remote_path().to_string());
+    let profile_host: Option<String> = app
+        .active_profile()
+        .and_then(|(_, p)| p.effective_host().map(|s| s.to_string()));
+
+    std::thread::spawn(move || {
+        let remote_path = profile_remote_path
+            .as_deref()
+            .unwrap_or("~/busibox")
+            .to_string();
+
+        let _ = tx.send(ManageUpdate::Log(format!(
+            "Installing {services} with updated settings..."
+        )));
+
+        if is_remote {
+            if let Some((ref host, ref user, ref key)) = ssh_details {
+                let display_host = profile_host.as_deref().unwrap_or(host);
+                let _ = tx.send(ManageUpdate::Log(format!(
+                    "Syncing files to {display_host}:{remote_path}..."
+                )));
+                let ssh = crate::modules::ssh::SshConnection::new(display_host, user, key);
+                if let Err(e) = remote::ensure_remote_dir(&ssh, &remote_path) {
+                    let _ = tx.send(ManageUpdate::Log(format!("ERROR: {e}")));
+                    let _ = tx.send(ManageUpdate::Complete { success: false });
+                    return;
+                }
+                if let Err(e) = remote::sync(&repo_root, display_host, user, key, &remote_path) {
+                    let _ = tx.send(ManageUpdate::Log(format!("ERROR: rsync failed: {e}")));
+                    let _ = tx.send(ManageUpdate::Complete { success: false });
+                    return;
+                }
+                let _ = tx.send(ManageUpdate::Log("✓ Files synced".into()));
+            }
+        }
+
+        let env_val = profile_env.as_deref().unwrap_or("development");
+        let backend_val = profile_backend.as_deref().unwrap_or("docker");
+        let site_domain_export = profile_site_domain
+            .as_deref()
+            .map(|d| format!("SITE_DOMAIN={d} "))
+            .unwrap_or_default();
+        let llm_backend_export = profile_llm_backend
+            .as_deref()
+            .map(|b| format!("LLM_BACKEND={b} "))
+            .unwrap_or_default();
+        let make_args = format!(
+            "{extra_env} {site_domain_export}{llm_backend_export}install SERVICE={services} BUSIBOX_ENV={env_val} BUSIBOX_BACKEND={backend_val}"
+        );
+        let _ = tx.send(ManageUpdate::Log(format!("Running: make {make_args}")));
+
+        let result: color_eyre::Result<(i32, String)> = if is_remote {
+            if let Some((ref host, ref user, ref key)) = ssh_details {
+                let ssh = crate::modules::ssh::SshConnection::new(
+                    profile_host.as_deref().unwrap_or(host),
+                    user,
+                    key,
+                );
+                if let Some(ref vp) = vault_password {
+                    remote::exec_make_quiet_with_vault(&ssh, &remote_path, &make_args, vp)
+                } else {
+                    remote::exec_make_quiet(&ssh, &remote_path, &make_args)
+                }
+            } else {
+                Err(color_eyre::eyre::eyre!("No SSH connection"))
+            }
+        } else if let Some(ref vp) = vault_password {
+            remote::run_local_make_quiet_with_vault(&repo_root, &make_args, vp)
+        } else {
+            remote::run_local_make_quiet(&repo_root, &make_args)
+        };
+
+        match result {
+            Ok((0, output)) => {
+                for line in output.lines() {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        let _ = tx.send(ManageUpdate::Log(format!("  {trimmed}")));
+                    }
+                }
+                let _ = tx.send(ManageUpdate::Log(format!(
+                    "✓ {services} installed successfully"
+                )));
+                let _ = tx.send(ManageUpdate::Complete { success: true });
+            }
+            Ok((code, output)) => {
+                for line in output.lines() {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        let _ = tx.send(ManageUpdate::Log(format!("  {trimmed}")));
+                    }
+                }
+                let _ = tx.send(ManageUpdate::Log(format!(
+                    "✗ install {services} failed (exit code {code})"
+                )));
+                let _ = tx.send(ManageUpdate::Complete { success: false });
+            }
+            Err(e) => {
+                let _ = tx.send(ManageUpdate::Log(format!("ERROR: {e}")));
+                let _ = tx.send(ManageUpdate::Complete { success: false });
+            }
+        }
+    });
 }
