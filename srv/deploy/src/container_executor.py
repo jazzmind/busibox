@@ -663,6 +663,7 @@ async def execute_ssh_command(host: str, command: str, timeout: int = 300) -> Tu
         '-o', 'StrictHostKeyChecking=no',
         '-o', 'UserKnownHostsFile=/dev/null',
         '-o', 'ConnectTimeout=10',
+        '-o', 'LogLevel=ERROR',
         f'root@{host}',
         command
     ]
@@ -675,7 +676,20 @@ async def execute_ssh_command(host: str, command: str, timeout: int = 300) -> Tu
     
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return stdout.decode(), stderr.decode(), proc.returncode or 0
+        stdout_str = stdout.decode()
+        stderr_str = stderr.decode()
+        
+        # SSH writes host key warnings and banners to stderr even on success.
+        # Filter these out so they don't mask the remote command's actual errors.
+        # Keep only lines that aren't SSH client noise.
+        ssh_noise_prefixes = ("Warning: Permanently added", "Connection to")
+        filtered_stderr_lines = [
+            line for line in stderr_str.splitlines()
+            if line.strip() and not any(line.strip().startswith(p) for p in ssh_noise_prefixes)
+        ]
+        filtered_stderr = "\n".join(filtered_stderr_lines)
+        
+        return stdout_str, filtered_stderr, proc.returncode or 0
     except asyncio.TimeoutError:
         proc.kill()
         return "", "Command timed out", 1
@@ -815,7 +829,7 @@ fi
     stdout, stderr, code = await execute_in_container(install_cmd, timeout=300)
     
     if code != 0:
-        logs.append(f"❌ Failed to install prerequisites: {stderr or stdout}")
+        logs.append(f"❌ Failed to install prerequisites: {stderr.strip() or stdout.strip() or 'no output'}")
         return False
     
     # Log what happened
@@ -900,7 +914,8 @@ git clone --branch {deploy_config.githubBranch} --depth 1 {repo_url} {app_path}
     stdout, stderr, code = await execute_in_container(command, timeout=600)
     
     if code != 0:
-        logs.append(f"❌ Git operation failed: {stderr}")
+        combined = "\n".join(filter(None, [stderr.strip(), stdout.strip()]))
+        logs.append(f"❌ Git operation failed: {combined or 'no output'}")
         return False, app_path
     
     logs.append(f"✅ Repository ready at {app_path}")
@@ -1140,7 +1155,12 @@ cd {app_path}
     stdout, stderr, code = await execute_in_container(command, timeout=900)
     
     if code != 0:
-        logs.append(f"❌ Build failed: {stderr or stdout}")
+        # Include both streams so SSH noise in stderr doesn't mask the real error in stdout
+        combined = "\n".join(filter(None, [stderr.strip(), stdout.strip()]))
+        # Truncate to last 2000 chars to avoid massive log entries
+        if len(combined) > 2000:
+            combined = "...(truncated)...\n" + combined[-2000:]
+        logs.append(f"❌ Build failed (exit code {code}): {combined or 'no output'}")
         return False
     
     # For Next.js standalone mode, copy static files
@@ -1200,7 +1220,7 @@ npm run migrate 2>&1
     stdout, stderr, code = await execute_in_container(command, timeout=300)
     
     if code != 0:
-        logs.append(f"❌ Migrations failed: {stderr or stdout}")
+        logs.append(f"❌ Migrations failed: {stderr.strip() or stdout.strip() or 'no output'}")
         return False
     
     logs.append("✅ Migrations completed")
