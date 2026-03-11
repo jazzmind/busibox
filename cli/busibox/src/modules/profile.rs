@@ -140,7 +140,7 @@ pub fn profiles_path(repo_root: &Path) -> PathBuf {
     repo_root.join(".busibox").join("profiles.json")
 }
 
-/// Load profiles from disk.
+/// Load profiles from disk. Auto-migrates old-style profile IDs on first load.
 pub fn load_profiles(repo_root: &Path) -> Result<ProfilesFile> {
     let path = profiles_path(repo_root);
     if !path.exists() {
@@ -151,7 +151,8 @@ pub fn load_profiles(repo_root: &Path) -> Result<ProfilesFile> {
         });
     }
     let contents = std::fs::read_to_string(&path)?;
-    let profiles: ProfilesFile = serde_json::from_str(&contents)?;
+    let mut profiles: ProfilesFile = serde_json::from_str(&contents)?;
+    migrate_profile_ids(repo_root, &mut profiles);
     Ok(profiles)
 }
 
@@ -304,4 +305,136 @@ pub fn write_profile_state(repo_root: &Path, profile_id: &str, profile: &Profile
     let content = lines.join("\n") + "\n";
     std::fs::write(&state_file, content)?;
     Ok(())
+}
+
+/// Sanitize a hostname/IP for use in a profile ID.
+/// Lowercases, replaces non-alphanumeric chars with hyphens, collapses runs,
+/// and trims leading/trailing hyphens.
+pub fn sanitize_host(host: &str) -> String {
+    let lowered: String = host
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+        .collect();
+    let mut result = String::new();
+    let mut prev_hyphen = true; // trim leading hyphens
+    for c in lowered.chars() {
+        if c == '-' {
+            if !prev_hyphen {
+                result.push('-');
+            }
+            prev_hyphen = true;
+        } else {
+            result.push(c);
+            prev_hyphen = false;
+        }
+    }
+    result.trim_end_matches('-').to_string()
+}
+
+/// Build a profile ID from host, environment, and backend.
+/// Local profiles use "local" as the host prefix.
+/// Remote profiles use the sanitized hostname/IP.
+pub fn build_profile_id(host: &str, environment: &str, backend: &str) -> String {
+    let prefix = sanitize_host(host);
+    format!("{prefix}-{environment}-{backend}")
+}
+
+const OLD_STYLE_ENVIRONMENTS: &[&str] = &["production", "staging", "development"];
+const OLD_STYLE_BACKENDS: &[&str] = &["docker", "proxmox"];
+
+/// Check if a profile ID uses the old `{environment}-{backend}` naming scheme.
+fn is_old_style_id(id: &str) -> bool {
+    for env in OLD_STYLE_ENVIRONMENTS {
+        for backend in OLD_STYLE_BACKENDS {
+            if id == format!("{env}-{backend}") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Compute the new-style profile ID for a profile.
+fn compute_new_profile_id(profile: &Profile) -> String {
+    let host = if profile.remote {
+        profile
+            .remote_host
+            .as_deref()
+            .unwrap_or("remote")
+    } else {
+        "local"
+    };
+    build_profile_id(host, &profile.environment, &profile.backend)
+}
+
+/// Migrate old-style profile IDs (`{env}-{backend}`) to new host-prefixed IDs.
+/// Renames the HashMap entry, vault key file, and state directory.
+/// Returns true if any migrations were performed.
+pub fn migrate_profile_ids(repo_root: &Path, profiles: &mut ProfilesFile) -> bool {
+    let mut renames: Vec<(String, String)> = Vec::new();
+
+    for (id, profile) in &profiles.profiles {
+        if !is_old_style_id(id) {
+            continue;
+        }
+        let new_id = compute_new_profile_id(profile);
+        if *id == new_id {
+            continue;
+        }
+        if profiles.profiles.contains_key(&new_id) {
+            eprintln!(
+                "[profile migration] Skipping '{id}' -> '{new_id}': target ID already exists"
+            );
+            continue;
+        }
+        renames.push((id.clone(), new_id));
+    }
+
+    if renames.is_empty() {
+        return false;
+    }
+
+    for (old_id, new_id) in &renames {
+        eprintln!("[profile migration] Renaming profile '{old_id}' -> '{new_id}'");
+
+        if let Some(profile) = profiles.profiles.remove(old_id) {
+            profiles.profiles.insert(new_id.clone(), profile);
+        }
+
+        if profiles.active == *old_id {
+            profiles.active = new_id.clone();
+        }
+
+        // Rename vault key file: ~/.busibox/vault-keys/{old}.enc -> {new}.enc
+        if let Ok(keys_dir) = crate::modules::vault::vault_keys_dir() {
+            let old_key = keys_dir.join(format!("{old_id}.enc"));
+            let new_key = keys_dir.join(format!("{new_id}.enc"));
+            if old_key.exists() && !new_key.exists() {
+                if let Err(e) = std::fs::rename(&old_key, &new_key) {
+                    eprintln!(
+                        "[profile migration] Warning: could not rename vault key: {e}"
+                    );
+                }
+            }
+        }
+
+        // Rename state directory: .busibox/profiles/{old} -> {new}
+        let old_dir = repo_root.join(".busibox").join("profiles").join(old_id);
+        let new_dir = repo_root.join(".busibox").join("profiles").join(new_id);
+        if old_dir.exists() && !new_dir.exists() {
+            if let Err(e) = std::fs::rename(&old_dir, &new_dir) {
+                eprintln!(
+                    "[profile migration] Warning: could not rename state dir: {e}"
+                );
+            }
+        }
+    }
+
+    // Save the updated profiles
+    if let Err(e) = save_profiles(repo_root, profiles) {
+        eprintln!("[profile migration] Warning: could not save migrated profiles: {e}");
+    }
+
+    true
 }

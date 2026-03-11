@@ -324,7 +324,12 @@ fn save_profile_and_continue(app: &mut App) {
     };
 
     let backend_lower = backend.to_lowercase();
-    let profile_id = format!("{}-{}", environment, backend_lower);
+    let host_prefix = if is_remote {
+        app.remote_host_input.as_str()
+    } else {
+        "local"
+    };
+    let profile_id = profile::build_profile_id(host_prefix, environment, &backend_lower);
 
     let profile = Profile {
         environment: environment.to_string(),
