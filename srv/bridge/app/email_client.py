@@ -131,6 +131,7 @@ class EmailClient:
             raise RuntimeError("Resend API key not configured")
 
         from_email = self._get_from_email(s)
+        logger.info(f"[EMAIL] Resend request: from={from_email!r}, to={to!r}")
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 "https://api.resend.com/emails",
@@ -146,7 +147,10 @@ class EmailClient:
                     "text": text,
                 },
             )
-            resp.raise_for_status()
+            if not resp.is_success:
+                body = resp.text
+                logger.error(f"[EMAIL] Resend API error {resp.status_code}: {body}")
+                raise RuntimeError(f"Resend API {resp.status_code}: {body}")
             data = resp.json()
             logger.info(f"[EMAIL] Sent via Resend to {to}: {subject} (id={data.get('id')})")
             return {"provider": "resend", "success": True, "id": data.get("id")}
