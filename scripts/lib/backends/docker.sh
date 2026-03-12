@@ -236,6 +236,7 @@ backend_service_action() {
                 cd "$REPO_ROOT"
                 export CORE_APPS_MODE
                 export CORE_APPS_SOURCE
+                export ENABLED_APPS="all"
                 if [[ "$env" == "development" ]]; then
                     info "Development mode detected; clearing core-apps cache volumes..."
                     docker stop "$container" >/dev/null 2>&1 || true
@@ -332,6 +333,9 @@ backend_service_action() {
             fi
 
             local cmd="ansible-playbook -i ${inventory} ${playbook} --tags ${tag} -e docker_force_recreate=true"
+            if [[ "$service" == "core-apps" ]]; then
+                cmd="${cmd} -e enabled_apps=all"
+            fi
 
             local _vpd="${BUSIBOX_VAULT_PASS_DIR:-${HOME}}"
             local vault_pass_file="${_vpd}/.busibox-vault-pass-${prefix}"

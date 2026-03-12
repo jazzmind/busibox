@@ -162,10 +162,18 @@ install() {
     # Get the Python path from venv
     PYTHON_PATH="${MLX_VENV_DIR}/bin/python3"
     
-    # Read token from env file if available
+    # Read token from env file if available.
+    # Prioritize the env file matching BUSIBOX_ENV so the token matches what
+    # the Makefile reads from $(ENV_FILE).
     HOST_AGENT_TOKEN=""
     HOST_AGENT_PORT="8089"
-    for env_name in "dev" "demo" "staging" "prod"; do
+    local env_search_order=("dev" "demo" "staging" "prod")
+    case "${BUSIBOX_ENV:-}" in
+        production)  env_search_order=("prod" "dev" "demo" "staging") ;;
+        staging)     env_search_order=("staging" "dev" "demo" "prod") ;;
+        demo)        env_search_order=("demo" "dev" "staging" "prod") ;;
+    esac
+    for env_name in "${env_search_order[@]}"; do
         env_file="${REPO_ROOT}/.env.${env_name}"
         if [[ -f "$env_file" ]]; then
             # Use the LAST definition if duplicated and strip line breaks.

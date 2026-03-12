@@ -62,8 +62,16 @@ def load_token_from_env():
     if TOKEN:
         return
     
-    # Try to find .env.dev or .env.demo file
-    for env_name in ["dev", "demo", "staging", "prod"]:
+    busibox_env = os.getenv("BUSIBOX_ENV", "")
+    env_order = ["dev", "demo", "staging", "prod"]
+    if busibox_env == "production":
+        env_order = ["prod", "dev", "demo", "staging"]
+    elif busibox_env == "staging":
+        env_order = ["staging", "dev", "demo", "prod"]
+    elif busibox_env == "demo":
+        env_order = ["demo", "dev", "staging", "prod"]
+
+    for env_name in env_order:
         env_file = BUSIBOX_ROOT / f".env.{env_name}"
         if env_file.exists():
             with open(env_file) as f:
