@@ -147,12 +147,23 @@ pub fn init_screen(app: &mut App) {
         .map(|h| matches!(h.llm_backend, LlmBackend::Mlx))
         .unwrap_or(false);
 
+    let has_custom_deployed = !is_mlx && has_deployed_config(app);
+    app.models_manage_is_custom = has_custom_deployed;
+
     if let Some((_, profile)) = app.active_profile() {
-        if let Some(tier) = profile.effective_model_tier() {
+        let explicit_custom = profile
+            .model_tier
+            .as_deref()
+            .map(|t| t.eq_ignore_ascii_case("custom"))
+            .unwrap_or(false);
+
+        if explicit_custom && has_custom_deployed {
+            app.models_manage_tier_selected = CUSTOM_TIER_INDEX;
+            app.models_manage_current_tier = Some("custom".to_string());
+        } else if let Some(tier) = profile.effective_model_tier() {
             app.models_manage_tier_selected = tier.index();
             app.models_manage_current_tier = Some(tier.name().to_string());
-        } else if !is_mlx && has_deployed_config(app) {
-            app.models_manage_is_custom = true;
+        } else if has_custom_deployed {
             app.models_manage_tier_selected = CUSTOM_TIER_INDEX;
             app.models_manage_current_tier = Some("custom".to_string());
         }

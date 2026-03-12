@@ -401,8 +401,17 @@ fn render_status_panel(f: &mut Frame, app: &App, area: Rect) {
     } else if let Some(ref tier_set) = app.active_tier_models {
         // Fallback: show registry-based models when model_config.yml is unavailable
         lines.push(Line::from(""));
+        let expected_label = if tier_set
+            .tier_description
+            .to_ascii_lowercase()
+            .contains("custom")
+        {
+            "Custom".to_string()
+        } else {
+            tier_set.tier.to_string()
+        };
         lines.push(Line::from(Span::styled(
-            format!("Expected Models ({})", tier_set.tier),
+            format!("Expected Models ({expected_label})"),
             theme::heading(),
         )));
 
@@ -850,8 +859,29 @@ pub fn load_active_tier_models(app: &mut App) {
     let config_path = app
         .repo_root
         .join("provision/ansible/group_vars/all/model_registry.yml");
+    let deployed_model_config_path = app
+        .repo_root
+        .join("provision/ansible/group_vars/all/model_config.yml");
 
-    app.active_tier_models = TierModelSet::from_config(&config_path, tier, backend).ok();
+    let explicit_custom = profile
+        .model_tier
+        .as_deref()
+        .map(|t| t.eq_ignore_ascii_case("custom"))
+        .unwrap_or(false);
+
+    app.active_tier_models = if explicit_custom
+        && deployed_model_config_path.exists()
+        && config_path.exists()
+    {
+        TierModelSet::from_deployed_config(
+            &deployed_model_config_path,
+            &config_path,
+            backend,
+        )
+        .ok()
+    } else {
+        TierModelSet::from_config(&config_path, tier, backend).ok()
+    };
 
     // Also trigger deployed model loading for hybrid dashboard
     trigger_deployed_model_loading(app);

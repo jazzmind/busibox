@@ -86,8 +86,8 @@ pub struct App {
     pub models_manage_tier_selected: usize,
     pub models_manage_loaded: bool,
     pub models_manage_current_tier: Option<String>,
-    /// When true, the active config was loaded from model_config.yml (custom/deployed)
-    /// rather than a standard tier preset from model_registry.yml.
+    /// When true, show the "Custom" tier entry sourced from deployed
+    /// model_config.yml alongside standard presets.
     pub models_manage_is_custom: bool,
     pub models_manage_model_selected: usize,
     pub models_manage_focus: ModelsFocus,
