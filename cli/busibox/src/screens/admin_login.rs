@@ -22,8 +22,9 @@ pub fn render(f: &mut Frame, app: &App) {
         .alignment(Alignment::Center);
     f.render_widget(logo, chunks[0]);
 
-    // Title
-    let title = Paragraph::new("Admin Login")
+    // Title — show which mode is active
+    let mode_label = if app.admin_login_use_setup { "Admin Login (Setup)" } else { "Admin Login" };
+    let title = Paragraph::new(mode_label)
         .style(theme::heading())
         .alignment(Alignment::Center);
     f.render_widget(title, chunks[1]);
@@ -123,16 +124,17 @@ pub fn render(f: &mut Frame, app: &App) {
     f.render_widget(content, chunks[2]);
 
     // Help bar
+    let toggle_hint = if app.admin_login_use_setup { "s→Login" } else { "s→Setup" };
     let help_text = if app.admin_login_loading {
-        " Generating..."
+        " Generating...".to_string()
     } else if app.admin_login_magic_link.is_some() {
-        " o Open Browser  c Copy Link  r Regenerate  Esc Back"
+        format!(" o Open Browser  c Copy Link  r Regenerate  {toggle_hint}  Esc Back")
     } else if app.admin_login_error.is_some() {
-        " c Copy Output  r Retry  Esc Back"
+        format!(" c Copy Output  r Retry  {toggle_hint}  Esc Back")
     } else {
-        " Esc Back"
+        " Esc Back".to_string()
     };
-    let help = Paragraph::new(Line::from(Span::styled(help_text, theme::muted())));
+    let help = Paragraph::new(Line::from(Span::styled(&help_text, theme::muted())));
     f.render_widget(help, chunks[3]);
 }
 
@@ -164,7 +166,15 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::Char('r') => {
-            // Regenerate credentials
+            app.admin_login_magic_link = None;
+            app.admin_login_totp_code = None;
+            app.admin_login_verify_url = None;
+            app.admin_login_error = None;
+            app.admin_login_loading = true;
+            app.pending_admin_login = true;
+        }
+        KeyCode::Char('s') => {
+            app.admin_login_use_setup = !app.admin_login_use_setup;
             app.admin_login_magic_link = None;
             app.admin_login_totp_code = None;
             app.admin_login_verify_url = None;

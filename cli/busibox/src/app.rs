@@ -266,6 +266,7 @@ pub struct App {
     pub admin_login_verify_url: Option<String>,
     pub admin_login_error: Option<String>,
     pub admin_login_loading: bool,
+    pub admin_login_use_setup: bool,
 
     // Pending admin login generation
     pub pending_admin_login: bool,
@@ -648,6 +649,7 @@ impl App {
             admin_login_verify_url: None,
             admin_login_error: None,
             admin_login_loading: false,
+            admin_login_use_setup: false,
             pending_admin_login: false,
             pending_sync_admin_login: false,
             pending_code_sync: false,

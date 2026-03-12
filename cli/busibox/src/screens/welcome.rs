@@ -700,6 +700,7 @@ fn handle_action_select(app: &mut App, action: &str) {
             app.admin_login_verify_url = None;
             app.admin_login_error = None;
             app.admin_login_loading = true;
+            app.admin_login_use_setup = app.deployment_state != crate::app::DeploymentState::Complete;
             app.screen = Screen::AdminLogin;
             app.pending_admin_login = true;
         }
