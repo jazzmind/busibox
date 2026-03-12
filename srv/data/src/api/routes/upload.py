@@ -393,20 +393,74 @@ async def upload_file(
         existing = await pg_service.check_duplicate(content_hash, request) if should_check_duplicate else None
         
         if existing:
-            # Duplicate detected - reuse vectors
+            # Duplicate detected - reuse vectors but keep the upload context
+            # (library, visibility, roles, filename) from this request.
             logger.info(
                 "Duplicate file detected, reusing vectors",
                 file_id=file_id,
                 existing_file_id=existing["file_id"],
                 content_hash=content_hash,
+                library_id=resolved_library_id,
+                visibility=visibility,
             )
             
+            # Build trigger metadata for duplicates that land in trigger-enabled libraries
+            active_trigger_count = await _get_active_library_trigger_count(
+                pg_service=pg_service,
+                library_id=resolved_library_id,
+            )
+            dup_metadata = {}
+            if active_trigger_count > 0:
+                dup_metadata["triggerStatus"] = {
+                    "state": "pending",
+                    "queuedAt": datetime.utcnow().isoformat(),
+                    "triggerCount": active_trigger_count,
+                    "completedCount": 0,
+                    "failedCount": 0,
+                }
+
             await pg_service.reuse_vectors(
                 file_id,
                 existing["file_id"],
                 user_id,
                 request=request,
+                filename=file.filename,
+                original_filename=file.filename,
+                storage_path=storage_path,
+                visibility=visibility,
+                role_ids=parsed_role_ids if visibility == "shared" else None,
+                library_id=resolved_library_id,
+                metadata=dup_metadata if dup_metadata else None,
             )
+
+            # For duplicates in trigger-enabled libraries, queue a trigger-only
+            # job so the worker fires library triggers (e.g. schema extraction).
+            if active_trigger_count > 0:
+                delegation_token = await _create_delegation_token_for_processing(
+                    user_token=user_token,
+                    file_id=file_id,
+                ) if user_token else None
+
+                await redis_service.ensure_consumer_group()
+                await redis_service.add_job(
+                    file_id=file_id,
+                    user_id=user_id,
+                    storage_path=storage_path,
+                    mime_type=file.content_type,
+                    original_filename=file.filename,
+                    processing_config={"force_reprocess": True, "start_pass": 2},
+                    visibility=visibility,
+                    role_ids=parsed_role_ids if visibility == "shared" else None,
+                    delegation_token=delegation_token,
+                )
+
+                # Reset status to "processing" so the worker picks it up
+                async with pg_service.pool.acquire() as conn:
+                    await conn.execute("""
+                        UPDATE data_status
+                        SET stage = 'processing', progress = 50, completed_at = NULL, updated_at = NOW()
+                        WHERE file_id = $1
+                    """, uuid.UUID(file_id))
             
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
@@ -416,10 +470,13 @@ async def upload_file(
                     "mimeType": file.content_type,
                     "sizeBytes": file_size,
                     "url": f"/files/{file_id}",
-                    "status": "completed",
+                    "status": "completed" if active_trigger_count == 0 else "processing",
                     "duplicate": True,
                     "message": "File already processed, vectors reused",
                     "existingFileId": existing["file_id"],
+                    "visibility": visibility,
+                    "roles": parsed_role_ids if visibility == "shared" else None,
+                    "libraryId": resolved_library_id,
                 }
             )
         

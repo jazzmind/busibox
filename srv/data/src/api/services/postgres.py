@@ -558,22 +558,40 @@ class PostgresService:
         existing_file_id: str,
         user_id: str,
         request=None,
+        filename: Optional[str] = None,
+        original_filename: Optional[str] = None,
+        storage_path: Optional[str] = None,
+        visibility: str = "personal",
+        role_ids: Optional[List[str]] = None,
+        library_id: Optional[str] = None,
+        metadata: Optional[Dict] = None,
     ):
         """
         Link new file to existing vectors (duplicate content).
         
         Creates a new file record linked to existing vectors via content_hash.
         Also copies markdown and image paths so the duplicate file has full functionality.
+        Uses the caller-provided filename, visibility, library_id, and role_ids
+        rather than copying from the existing record, so the new record reflects
+        the actual upload context.
         
         Args:
             new_file_id: ID for the new file record
             existing_file_id: ID of the existing file to copy from
             user_id: User ID for the new file
             request: FastAPI Request for RLS context (required)
+            filename: Filename for the new record (falls back to existing)
+            original_filename: Original filename (falls back to existing)
+            storage_path: Storage path for the new upload (falls back to existing)
+            visibility: 'personal' or 'shared'
+            role_ids: Role IDs for shared visibility
+            library_id: Target library UUID
+            metadata: Optional metadata dict for the new record
         """
         import json
         async with self.acquire(request) as conn:
-            # Copy file record from existing file (including markdown/images)
+            await self._ensure_document_roles(conn)
+
             existing = await conn.fetchrow("""
                 SELECT 
                     filename, original_filename, mime_type, size_bytes,
@@ -586,45 +604,66 @@ class PostgresService:
             if not existing:
                 raise ValueError(f"Existing file {existing_file_id} not found")
             
-            # Create new file record with same content_hash AND markdown/image paths
-            await conn.execute("""
-                INSERT INTO data_files (
-                    file_id, user_id, owner_id, filename, original_filename,
-                    mime_type, size_bytes, storage_path, content_hash,
-                    metadata, permissions, chunk_count, vector_count, visibility,
-                    has_markdown, markdown_path, images_path, image_count
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-            """,
-                uuid.UUID(new_file_id),
-                uuid.UUID(user_id),
-                uuid.UUID(user_id),  # owner_id = user_id
-                existing["filename"],
-                existing["original_filename"],
-                existing["mime_type"],
-                existing["size_bytes"],
-                existing["storage_path"],
-                existing["content_hash"],
-                existing["metadata"],
-                json.dumps({"visibility": "personal"}),
-                existing.get("chunk_count", 0),
-                existing.get("vector_count", 0),
-                "personal",  # visibility
-                existing.get("has_markdown", False),
-                existing.get("markdown_path"),
-                existing.get("images_path"),
-                existing.get("image_count", 0),
-            )
-            
-            # Create completed status
-            await conn.execute("""
-                INSERT INTO data_status (
-                    file_id, stage, progress, completed_at
-                ) VALUES ($1, $2, $3, NOW())
-            """,
-                uuid.UUID(new_file_id),
-                "completed",
-                100,
-            )
+            use_filename = filename or existing["filename"]
+            use_original = original_filename or existing["original_filename"]
+            use_storage = storage_path or existing["storage_path"]
+            use_metadata = json.dumps(metadata) if metadata else existing["metadata"]
+            lib_uuid = uuid.UUID(library_id) if library_id else None
+
+            async with conn.transaction():
+                await conn.execute("""
+                    INSERT INTO data_files (
+                        file_id, user_id, owner_id, filename, original_filename,
+                        mime_type, size_bytes, storage_path, content_hash,
+                        metadata, permissions, chunk_count, vector_count, visibility,
+                        has_markdown, markdown_path, images_path, image_count,
+                        library_id
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                """,
+                    uuid.UUID(new_file_id),
+                    uuid.UUID(user_id),
+                    uuid.UUID(user_id),
+                    use_filename,
+                    use_original,
+                    existing["mime_type"],
+                    existing["size_bytes"],
+                    use_storage,
+                    existing["content_hash"],
+                    use_metadata,
+                    json.dumps({"visibility": visibility}),
+                    existing.get("chunk_count", 0),
+                    existing.get("vector_count", 0),
+                    visibility,
+                    existing.get("has_markdown", False),
+                    existing.get("markdown_path"),
+                    existing.get("images_path"),
+                    existing.get("image_count", 0),
+                    lib_uuid,
+                )
+                
+                # Create completed status
+                await conn.execute("""
+                    INSERT INTO data_status (
+                        file_id, stage, progress, completed_at
+                    ) VALUES ($1, $2, $3, NOW())
+                """,
+                    uuid.UUID(new_file_id),
+                    "completed",
+                    100,
+                )
+
+                if visibility == "shared" and role_ids:
+                    for role_id in role_ids:
+                        await conn.execute("""
+                            INSERT INTO document_roles (
+                                file_id, role_id, role_name, added_by
+                            ) VALUES ($1, $2, $3, $4)
+                        """,
+                            uuid.UUID(new_file_id),
+                            uuid.UUID(role_id),
+                            f"Role-{role_id[:8]}",
+                            uuid.UUID(user_id),
+                        )
             
             logger.info(
                 "Vectors reused for duplicate",
@@ -632,6 +671,9 @@ class PostgresService:
                 existing_file_id=existing_file_id,
                 user_id=user_id,
                 has_markdown=existing.get("has_markdown", False),
+                visibility=visibility,
+                library_id=library_id,
+                role_count=len(role_ids) if role_ids else 0,
             )
     
     # ========================================================================

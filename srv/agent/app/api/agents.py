@@ -199,17 +199,7 @@ async def create_agent_definition(
     if existing:
         is_owner = existing.created_by == principal.sub
 
-        if existing.is_builtin and not is_owner:
-            # Built-in agent created by someone else — return as-is (idempotent)
-            logger.info(
-                "agent_create_skipped_builtin_exists",
-                agent_id=str(existing.id),
-                agent_name=existing.name,
-                user_id=principal.sub,
-            )
-            return AgentDefinitionRead.model_validate(existing)
-
-        if not existing.is_builtin and not is_owner:
+        if not is_owner and not existing.is_builtin:
             raise HTTPException(
                 status_code=409,
                 detail=f"An agent named '{payload.name}' already exists (owned by another user)",
