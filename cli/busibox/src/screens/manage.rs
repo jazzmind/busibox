@@ -352,7 +352,7 @@ fn render_log_viewer(f: &mut Frame, app: &App) {
     }
 
     let help_text = if app.manage_waiting_confirm.is_some() {
-        " y Yes (overwrite)  n No (keep existing)  ↑/↓ Scroll"
+        " y Yes (regenerate remote -> replace local)  n No (keep local saved config)  ↑/↓ Scroll"
     } else if app.manage_log_streaming && app.manage_action_running {
         " ↑/↓ Scroll  End Auto-scroll  c Copy  Esc Stop tailing"
     } else if app.manage_action_running {
@@ -746,11 +746,15 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
 
                 let should_generate = if local_model_cfg.exists() {
                     let _ = tx.send(ManageUpdate::Log(
-                        "Existing model_config.yml found locally.".into(),
+                        format!(
+                            "Existing local model_config.yml found at {}.",
+                            local_model_cfg.display()
+                        ),
                     ));
                     let (confirm_tx, confirm_rx) = std::sync::mpsc::channel::<bool>();
                     let _ = tx.send(ManageUpdate::WaitForConfirm {
-                        prompt: "Overwrite existing model_config.yml?".to_string(),
+                        prompt: "Regenerate from remote model pipeline and replace local model_config.yml?"
+                            .to_string(),
                         response: confirm_tx,
                     });
                     match confirm_rx.recv() {
@@ -858,7 +862,11 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
                     model_config_regenerated = true;
                 } else {
                     let _ = tx.send(ManageUpdate::Log(
-                        "Keeping existing model_config.yml".into(),
+                        "Keeping existing local model_config.yml (saved model-screen config)".into(),
+                    ));
+                    let _ = tx.send(ManageUpdate::Log(
+                        "Using existing local model_config.yml for LiteLLM deploy (no defaults applied)"
+                            .into(),
                     ));
                 }
             }
