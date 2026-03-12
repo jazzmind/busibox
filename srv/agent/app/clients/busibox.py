@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -7,6 +8,10 @@ from app.config.settings import get_settings
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+_RETRYABLE_STATUS_CODES = {502, 503, 504}
+_MAX_RETRIES = 3
+_RETRY_BACKOFF_BASE = 0.5  # seconds
 
 
 class BusiboxClient:
@@ -42,10 +47,10 @@ class BusiboxClient:
         timeout: int = 30,
     ) -> Dict[str, Any]:
         """
-        Generic HTTP request to data-api.
+        Generic HTTP request to data-api with automatic retry for transient errors.
 
-        Used by data tools (create_data_document, query_data, insert_records, etc.)
-        to make arbitrary requests to the data-api service.
+        Retries on connection errors and 502/503/504 responses with exponential
+        backoff (up to ``_MAX_RETRIES`` attempts).
 
         Args:
             method: HTTP method (GET, POST, PUT, DELETE)
@@ -55,18 +60,40 @@ class BusiboxClient:
             timeout: Request timeout in seconds
         """
         base_url = str(settings.data_api_url).rstrip('/')
+        url = f"{base_url}{path}"
+        last_exc: Exception | None = None
 
-        async with httpx.AsyncClient() as client:
-            resp = await client.request(
-                method=method,
-                url=f"{base_url}{path}",
-                json=json,
-                params=params,
-                headers=self._headers_for("data-api"),
-                timeout=timeout,
+        for attempt in range(_MAX_RETRIES):
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.request(
+                        method=method,
+                        url=url,
+                        json=json,
+                        params=params,
+                        headers=self._headers_for("data-api"),
+                        timeout=timeout,
+                    )
+                if resp.status_code not in _RETRYABLE_STATUS_CODES:
+                    resp.raise_for_status()
+                    return resp.json()
+
+                last_exc = httpx.HTTPStatusError(
+                    f"Server error {resp.status_code}",
+                    request=resp.request,
+                    response=resp,
+                )
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+                last_exc = exc
+
+            wait = _RETRY_BACKOFF_BASE * (2 ** attempt)
+            logger.warning(
+                "Retrying %s %s (attempt %d/%d) after %.1fs: %s",
+                method, path, attempt + 1, _MAX_RETRIES, wait, last_exc,
             )
-            resp.raise_for_status()
-            return resp.json()
+            await asyncio.sleep(wait)
+
+        raise last_exc  # type: ignore[misc]
 
     async def search(
         self,
