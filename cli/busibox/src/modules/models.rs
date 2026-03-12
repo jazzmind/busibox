@@ -320,6 +320,119 @@ fn check_vllm_model_live(
     }
 }
 
+// --- MLX deployed model loading ---
+
+/// Query an MLX server port for the currently loaded model name.
+/// Returns the model ID string if the server is responding, None otherwise.
+pub fn query_mlx_model(
+    port: u16,
+    is_remote: bool,
+    ssh_details: &Option<(String, String, String)>,
+) -> Option<String> {
+    let curl_cmd = format!(
+        "curl -s --max-time 5 'http://localhost:{port}/v1/models'"
+    );
+
+    let output = if is_remote {
+        if let Some((ref host, ref user, ref key_path)) = ssh_details {
+            let ssh = crate::modules::ssh::SshConnection::new(host, user, key_path);
+            let full_cmd = format!(
+                "{}{}",
+                crate::modules::remote::SHELL_PATH_PREAMBLE,
+                curl_cmd
+            );
+            ssh.run(&full_cmd).unwrap_or_default()
+        } else {
+            return None;
+        }
+    } else {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&curl_cmd)
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default()
+    };
+
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Parse OpenAI-style response: {"data": [{"id": "model-name", ...}]}
+    let parsed: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    parsed["data"]
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|m| m["id"].as_str())
+        .map(|s| s.to_string())
+}
+
+/// Start loading MLX deployed models in a background thread.
+/// Queries /v1/models on the primary (8080) and fast (18081) ports.
+pub fn start_mlx_model_loading(
+    is_remote: bool,
+    ssh_details: Option<(String, String, String)>,
+) -> mpsc::Receiver<DeployedModelUpdate> {
+    let (tx, rx) = mpsc::channel();
+
+    std::thread::spawn(move || {
+        let mlx_ports: &[(u16, &str)] = &[(8080, "primary"), (18081, "fast")];
+        let mut models = Vec::new();
+
+        for &(port, role) in mlx_ports {
+            let _ = tx.send(DeployedModelUpdate::ModelStatus {
+                port,
+                status: LiveStatus::Checking,
+            });
+
+            match query_mlx_model(port, is_remote, &ssh_details) {
+                Some(model_name) => {
+                    let short = model_name
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&model_name)
+                        .to_string();
+                    models.push(DeployedModel {
+                        model_name: model_name.clone(),
+                        model_key: short,
+                        provider: "mlx".to_string(),
+                        gpu: "apple".to_string(),
+                        port,
+                        tensor_parallel: 1,
+                        assigned: true,
+                        live_status: LiveStatus::Running,
+                        served_model_name: model_name,
+                    });
+                }
+                None => {
+                    models.push(DeployedModel {
+                        model_name: format!("({role})"),
+                        model_key: role.to_string(),
+                        provider: "mlx".to_string(),
+                        gpu: "apple".to_string(),
+                        port,
+                        tensor_parallel: 1,
+                        assigned: true,
+                        live_status: LiveStatus::Down,
+                        served_model_name: String::new(),
+                    });
+                }
+            }
+        }
+
+        let model_set = DeployedModelSet {
+            models,
+            loaded_from: "mlx".to_string(),
+        };
+
+        let _ = tx.send(DeployedModelUpdate::ConfigLoaded(model_set));
+        let _ = tx.send(DeployedModelUpdate::Complete);
+    });
+
+    rx
+}
+
 // --- Model registry types ---
 
 #[derive(Debug, Deserialize)]

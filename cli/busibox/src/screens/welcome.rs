@@ -74,7 +74,7 @@ pub fn render(f: &mut Frame, app: &App) {
             Span::styled(msg.as_str(), style)
         } else {
             Span::styled(
-                " ↑/↓ Navigate  Enter Select  s Sync  r Refresh  m Models  p Profiles  q Quit",
+                " ↑/↓ Navigate  Enter Select  t Tunnel  s Sync  r Refresh  m Models  p Profiles  q Quit",
                 theme::muted(),
             )
         };
@@ -159,6 +159,26 @@ fn render_system_info(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled("  Host:  ", theme::muted()),
                 Span::styled("localhost", theme::normal()),
             ]));
+        }
+    }
+
+    // SSH tunnel status
+    if let Some((_, profile)) = app.active_profile() {
+        if profile.remote {
+            info_lines.push(Line::from(""));
+            if app.ssh_tunnel_active {
+                info_lines.push(Line::from(vec![
+                    Span::styled("  🔗 ", theme::success()),
+                    Span::styled("Tunnel: ", theme::muted()),
+                    Span::styled("https://localhost:4443", theme::success()),
+                ]));
+            } else {
+                info_lines.push(Line::from(vec![
+                    Span::styled("  ○ ", theme::dim()),
+                    Span::styled("Tunnel: ", theme::muted()),
+                    Span::styled("off — press 't' to connect", theme::dim()),
+                ]));
+            }
         }
     }
 
@@ -619,6 +639,9 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                 }
             }
         }
+        KeyCode::Char('t') => {
+            app.toggle_ssh_tunnel();
+        }
         KeyCode::Char('s') => {
             if let Some((_, profile)) = app.active_profile() {
                 if profile.remote {
@@ -942,17 +965,18 @@ pub fn trigger_deployed_model_loading(app: &mut App) {
 
     let is_remote = profile.remote;
     let is_proxmox = profile.backend == "proxmox";
-    let is_mlx = profile
-        .hardware
-        .as_ref()
+    let effective_hw = if is_remote {
+        app.remote_hardware
+            .as_ref()
+            .or(profile.hardware.as_ref())
+    } else {
+        app.local_hardware
+            .as_ref()
+            .or(profile.hardware.as_ref())
+    };
+    let is_mlx = effective_hw
         .map(|h| matches!(h.llm_backend, LlmBackend::Mlx))
         .unwrap_or(false);
-
-    // MLX profiles don't use vLLM model_config.yml
-    if is_mlx {
-        app.deployed_models = None;
-        return;
-    }
 
     let ssh_details = if is_remote {
         let ssh_host = profile.effective_host().unwrap_or("localhost").to_string();
@@ -963,18 +987,22 @@ pub fn trigger_deployed_model_loading(app: &mut App) {
         None
     };
 
-    let vllm_network_base = profile.vllm_network_base().to_string();
-
     app.deployed_models_loading = true;
 
-    let rx = models::start_deployed_model_loading(
-        app.repo_root.clone(),
-        is_remote,
-        is_proxmox,
-        ssh_details,
-        vllm_network_base,
-    );
-    app.deployed_models_rx = Some(rx);
+    if is_mlx {
+        let rx = models::start_mlx_model_loading(is_remote, ssh_details);
+        app.deployed_models_rx = Some(rx);
+    } else {
+        let vllm_network_base = profile.vllm_network_base().to_string();
+        let rx = models::start_deployed_model_loading(
+            app.repo_root.clone(),
+            is_remote,
+            is_proxmox,
+            ssh_details,
+            vllm_network_base,
+        );
+        app.deployed_models_rx = Some(rx);
+    }
 }
 
 /// Process deployed model updates from the background thread. Called from the main loop.

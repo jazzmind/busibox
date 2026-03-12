@@ -53,15 +53,19 @@ fn main() -> Result<()> {
         Err(_) => {}
     }
 
-    // Check model cache status for the active profile (local only, fast)
+    // Restore remote hardware from saved profile so tier/cache logic works
     if app.has_profiles() {
         if let Some((_, profile)) = app.active_profile() {
-            if !profile.remote {
-                screens::welcome::check_model_cache(&mut app);
+            if profile.remote {
+                app.remote_hardware = profile.hardware.clone();
             }
         }
+    }
+
+    // Check model cache status for the active profile
+    if app.has_profiles() {
+        screens::welcome::check_model_cache(&mut app);
         screens::welcome::load_active_tier_models(&mut app);
-        // Auto-detect deployment state on startup
         screens::welcome::trigger_health_checks(&mut app);
     }
 
@@ -170,7 +174,14 @@ fn main() -> Result<()> {
                     match rx.try_recv() {
                         Ok(app::ManageUpdate::Log(msg)) => {
                             app.manage_log.push(msg);
-                            if app.manage_action_running {
+                            const MAX_LOG_LINES: usize = 5000;
+                            if app.manage_log.len() > MAX_LOG_LINES {
+                                let excess = app.manage_log.len() - MAX_LOG_LINES;
+                                app.manage_log.drain(..excess);
+                                app.manage_log_scroll =
+                                    app.manage_log_scroll.saturating_sub(excess);
+                            }
+                            if app.manage_log_autoscroll {
                                 app.manage_log_scroll =
                                     app.manage_log.len().saturating_sub(1);
                             }
@@ -189,6 +200,8 @@ fn main() -> Result<()> {
                         }
                         Ok(app::ManageUpdate::Complete { success }) => {
                             app.manage_action_running = false;
+                            app.manage_log_streaming = false;
+                            app.manage_log_child_pid = None;
                             if app.manage_log_visible {
                                 app.manage_action_complete = true;
                                 app.manage_log_scroll =
@@ -488,6 +501,7 @@ fn main() -> Result<()> {
         trigger_side_effects(&mut app);
     }
 
+    app.kill_ssh_tunnel();
     tui::restore()?;
     Ok(())
 }
@@ -993,8 +1007,8 @@ fn handle_admin_login(app: &mut App) {
                     magic_link = re_domain(&magic_link);
                     verify_url = re_domain(&verify_url);
 
-                    // Start SSH tunnel if not already running
-                    if app.ssh_tunnel_process.is_none() {
+                    // Start SSH tunnel if not already running (skip if persistent tunnel is active)
+                    if app.ssh_tunnel_process.is_none() && !app.ssh_tunnel_active {
                         if let Some(ssh) = &app.ssh_connection {
                             let key = crate::modules::ssh::shellexpand_path(&ssh.key_path);
                             let mut tunnel_args: Vec<String> = vec![

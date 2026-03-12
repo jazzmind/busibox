@@ -108,8 +108,8 @@ PRIMARY_LOG_FILE="/tmp/mlx-lm-server.log"
 FAST_PID_FILE="/tmp/mlx-lm-fast-server.pid"
 FAST_LOG_FILE="/tmp/mlx-lm-fast-server.log"
 
-# Get models
-eval "$(bash "${SCRIPT_DIR}/get-models.sh" all)"
+# Get models -- use tier-based lookup so LLM_TIER controls which models load
+eval "$(USE_TIER_ONLY=1 bash "${SCRIPT_DIR}/get-models.sh" all)"
 
 stop_server_instance() {
     local pid_file="$1"

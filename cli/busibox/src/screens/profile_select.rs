@@ -178,6 +178,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                                 };
                                 app.set_message(&msg, MessageKind::Success);
                                 if is_active {
+                                    app.kill_ssh_tunnel();
                                     app.health_results.clear();
                                     app.health_groups.clear();
                                     app.vault_password = None;
@@ -242,6 +243,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                                 MessageKind::Success,
                             );
                             app.vault_password = None;
+                            app.kill_ssh_tunnel();
                             if vault::has_vault_key(&switched_profile) {
                                 app.pending_vault_setup = true;
                             }
@@ -249,6 +251,8 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                             app.health_results.clear();
                             app.health_groups.clear();
                             app.action_menu_selected = 0;
+                            app.models_manage_loaded = false;
+                            app.deployed_models = None;
                             app.screen = Screen::Welcome;
                             app.menu_selected = 0;
                             crate::screens::welcome::load_active_tier_models(app);

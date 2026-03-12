@@ -92,7 +92,7 @@ pub fn render(f: &mut Frame, app: &App) {
         }
 
         lines.push(Line::from(""));
-        if app.ssh_tunnel_process.is_some() {
+        if app.ssh_tunnel_active || app.ssh_tunnel_process.is_some() {
             lines.push(Line::from(Span::styled(
                 "  SSH tunnel active (local:4443 → remote:443)",
                 theme::muted(),

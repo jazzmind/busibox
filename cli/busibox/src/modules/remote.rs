@@ -173,129 +173,8 @@ pub fn run_local_make(repo_root: &Path, args: &str) -> Result<i32> {
     Ok(status.code().unwrap_or(1))
 }
 
-/// Run a local make command with USE_MANAGER=0, capture all output, return (exit_code, output).
-/// This prevents make output from bleeding into the TUI.
-pub fn run_local_make_quiet(repo_root: &Path, args: &str) -> Result<(i32, String)> {
-    let output = Command::new("make")
-        .args(args.split_whitespace())
-        .env("USE_MANAGER", "0")
-        .current_dir(repo_root)
-        .output()?;
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Ok((output.status.code().unwrap_or(1), strip_ansi(&combined)))
-}
-
-/// Execute a make command on the remote host, capture output, return (exit_code, output).
-/// This prevents SSH output from bleeding into the TUI.
-pub fn exec_make_quiet(
-    ssh: &SshConnection,
-    remote_path: &str,
-    make_args: &str,
-) -> Result<(i32, String)> {
-    let cmd = format!(
-        "{SHELL_PATH_PREAMBLE}\
-         [ -f \"$HOME/.profile\" ] && . \"$HOME/.profile\" 2>/dev/null || true; \
-         [ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\" 2>/dev/null || true; \
-         cd {remote_path} && USE_MANAGER=0 make {make_args} 2>&1"
-    );
-    let mut args: Vec<String> = vec![
-        "-o".into(),
-        "BatchMode=yes".into(),
-        "-o".into(),
-        "StrictHostKeyChecking=accept-new".into(),
-        "-o".into(),
-        "ConnectTimeout=10".into(),
-    ];
-    let key = crate::modules::ssh::shellexpand_path(&ssh.key_path);
-    if !key.is_empty() && Path::new(&key).exists() {
-        args.push("-i".into());
-        args.push(key);
-    }
-    args.push(ssh.ssh_target());
-    args.push(cmd);
-
-    let output = Command::new("ssh").args(&args).output()?;
-    let exit_code = output.status.code().unwrap_or(1);
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Ok((exit_code, strip_ansi(&combined)))
-}
-
-/// Like `run_local_make_quiet` but injects the vault password via
-/// the `ANSIBLE_VAULT_PASSWORD` environment variable so shell scripts
-/// can pick it up without a plaintext file on disk.
-pub fn run_local_make_quiet_with_vault(
-    repo_root: &Path,
-    args: &str,
-    vault_password: &str,
-) -> Result<(i32, String)> {
-    let output = Command::new("make")
-        .args(args.split_whitespace())
-        .env("USE_MANAGER", "0")
-        .env("ANSIBLE_VAULT_PASSWORD", vault_password)
-        .current_dir(repo_root)
-        .output()?;
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Ok((output.status.code().unwrap_or(1), strip_ansi(&combined)))
-}
-
-/// Like `exec_make_quiet` but securely delivers the vault password to the
-/// remote host via ANSIBLE_VAULT_PASSWORD env var. The env var is read by
-/// scripts/lib/vault-pass-from-env.sh which Ansible uses as --vault-password-file.
-pub fn exec_make_quiet_with_vault(
-    ssh: &SshConnection,
-    remote_path: &str,
-    make_args: &str,
-    vault_password: &str,
-) -> Result<(i32, String)> {
-    let escaped_pw = vault_password.replace('\'', "'\\''");
-
-    let cmd = format!(
-        "{SHELL_PATH_PREAMBLE}\
-         [ -f \"$HOME/.profile\" ] && . \"$HOME/.profile\" 2>/dev/null || true; \
-         [ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\" 2>/dev/null || true; \
-         export ANSIBLE_VAULT_PASSWORD='{escaped_pw}'; \
-         cd {remote_path} && USE_MANAGER=0 make {make_args} 2>&1"
-    );
-    let mut args: Vec<String> = vec![
-        "-o".into(),
-        "BatchMode=yes".into(),
-        "-o".into(),
-        "StrictHostKeyChecking=accept-new".into(),
-        "-o".into(),
-        "ConnectTimeout=10".into(),
-    ];
-    let key = crate::modules::ssh::shellexpand_path(&ssh.key_path);
-    if !key.is_empty() && Path::new(&key).exists() {
-        args.push("-i".into());
-        args.push(key);
-    }
-    args.push(ssh.ssh_target());
-    args.push(cmd);
-
-    let output = Command::new("ssh").args(&args).output()?;
-    let exit_code = output.status.code().unwrap_or(1);
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Ok((exit_code, strip_ansi(&combined)))
-}
-
-/// Like `run_local_make_quiet` but streams output line-by-line via a callback
-/// instead of buffering until the process exits.
+/// Run a local make command with USE_MANAGER=0, streaming output line-by-line
+/// via a callback instead of buffering until the process exits.
 pub fn run_local_make_quiet_streaming<F>(
     repo_root: &Path,
     args: &str,
@@ -331,7 +210,7 @@ where
     Ok(status.code().unwrap_or(1))
 }
 
-/// Like `run_local_make_quiet_with_vault` but streams output line-by-line.
+/// Run a local make command with vault password injected, streaming output line-by-line.
 pub fn run_local_make_quiet_with_vault_streaming<F>(
     repo_root: &Path,
     args: &str,
@@ -369,7 +248,7 @@ where
     Ok(status.code().unwrap_or(1))
 }
 
-/// Like `exec_make_quiet` but streams output line-by-line via a callback.
+/// Execute a make command on the remote host, streaming output line-by-line via a callback.
 pub fn exec_make_quiet_streaming<F>(
     ssh: &SshConnection,
     remote_path: &str,
@@ -426,7 +305,7 @@ where
     Ok(status.code().unwrap_or(1))
 }
 
-/// Like `exec_make_quiet_with_vault` but streams output line-by-line.
+/// Execute a make command on the remote host with vault password injected, streaming output line-by-line.
 pub fn exec_make_quiet_with_vault_streaming<F>(
     ssh: &SshConnection,
     remote_path: &str,
