@@ -20,7 +20,7 @@ from typing import Optional, Union
 import aiosmtplib
 
 from .config import Settings
-from .config_api_client import EmailSettings, get_email_settings
+from .config_api_client import EmailSettings, get_email_settings, clear_config_cache
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +220,12 @@ class EmailClient:
         """Send a test email to verify configuration."""
         s = await self._resolve_settings(session_jwt)
         provider = self._get_provider(s)
+        # Config is cached for regular sends; for test-email, retry once with a
+        # forced refresh so UI changes are reflected immediately.
+        if provider == "none" and session_jwt:
+            clear_config_cache()
+            s = await self._resolve_settings(session_jwt)
+            provider = self._get_provider(s)
         if provider == "none":
             raise RuntimeError("No email provider configured. Configure SMTP or Resend first.")
         now = datetime.utcnow().isoformat() + "Z"
