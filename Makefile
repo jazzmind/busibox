@@ -1194,10 +1194,18 @@ mlx-start:
 	if curl -sf http://localhost:8089/health >/dev/null 2>&1; then \
 		echo "Using host-agent to start MLX..."; \
 		if [ -n "$$TOKEN" ]; then \
-			curl -sf -X POST http://localhost:8089/mlx/start \
+			TMPOUT=$$(mktemp); \
+			HTTP_CODE=$$(curl -s -o "$$TMPOUT" -w '%{http_code}' -X POST http://localhost:8089/mlx/start \
 				-H "Content-Type: application/json" \
 				-H "Authorization: Bearer $$TOKEN" \
-				-d '{"model_type": "dual"}' | bash scripts/lib/host-agent-format.sh && echo "MLX server started" || echo "Failed - check host-agent logs"; \
+				-d '{"model_type": "dual"}'); \
+			if [ "$$HTTP_CODE" -ge 200 ] && [ "$$HTTP_CODE" -lt 300 ] 2>/dev/null; then \
+				cat "$$TMPOUT" | bash scripts/lib/host-agent-format.sh && echo "MLX server started" || echo "Failed - check host-agent logs"; \
+			else \
+				echo "Host-agent /mlx/start returned HTTP $$HTTP_CODE"; \
+				cat "$$TMPOUT" 2>/dev/null; echo; \
+			fi; \
+			rm -f "$$TMPOUT"; \
 		else \
 			echo "Warning: HOST_AGENT_TOKEN not found in $(ENV_FILE)"; \
 			curl -sf -X POST http://localhost:8089/mlx/start \
