@@ -201,6 +201,7 @@ dependencies = [
  "crossterm",
  "ctrlc",
  "dirs",
+ "libc",
  "rand",
  "ratatui",
  "regex",

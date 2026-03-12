@@ -133,6 +133,7 @@ fn get_bootstrap_stages(app: &App) -> Vec<(&'static str, &'static str, Vec<Strin
         ("Docker Cleanup", "Stop conflicting containers", vec!["_docker_cleanup".into()]),
         ("Database", "PostgreSQL", vec!["postgres".into()]),
         ("Authentication", "AuthZ API", vec!["authz".into()]),
+        ("Configuration", "Config API", vec!["config".into()]),
         ("Deployment", "Deploy API", vec!["deploy".into()]),
     ];
 
@@ -169,6 +170,7 @@ fn get_update_stages(app: &App) -> Vec<(&'static str, &'static str, Vec<String>)
         ("Data", "Data API & Worker", vec!["data".into()]),
         ("Search", "Search API", vec!["search".into()]),
         ("Agent", "Agent API", vec!["agent".into()]),
+        ("Configuration", "Config API", vec!["config".into()]),
         ("Deployment", "Deploy API", vec!["deploy".into()]),
         ("Bridge", "Bridge Service", vec!["bridge".into()]),
         ("Docs", "Docs API", vec!["docs".into()]),

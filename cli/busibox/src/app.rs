@@ -167,6 +167,13 @@ pub struct App {
     pub manage_rx: Option<mpsc::Receiver<ManageUpdate>>,
     pub manage_waiting_confirm: Option<std::sync::mpsc::Sender<bool>>,
     pub manage_confirm_prompt: String,
+    /// PID of the child process streaming live logs (docker logs -f / journalctl -f).
+    /// Used to kill the stream when the user closes the log viewer.
+    pub manage_log_child_pid: Option<u32>,
+    /// When true, the log viewer auto-scrolls to follow new output.
+    pub manage_log_autoscroll: bool,
+    /// True when the log viewer is showing a live tail stream (not a completed action).
+    pub manage_log_streaming: bool,
 
     // Scroll state (model download, hardware report, ssh setup)
     pub model_download_scroll: usize,
@@ -268,6 +275,10 @@ pub struct App {
     pub pending_code_sync: bool,
 
     pub ssh_tunnel_process: Option<std::process::Child>,
+
+    /// Persistent SSH tunnel (survives screen navigation). Forwards local:4443 → remote:443.
+    pub ssh_tunnel_active: bool,
+    pub ssh_tunnel_child: Option<std::process::Child>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -586,6 +597,9 @@ impl App {
             manage_rx: None,
             manage_waiting_confirm: None,
             manage_confirm_prompt: String::new(),
+            manage_log_child_pid: None,
+            manage_log_autoscroll: true,
+            manage_log_streaming: false,
             model_download_scroll: 0,
             hardware_report_scroll: 0,
             ssh_setup_scroll: 0,
@@ -638,6 +652,8 @@ impl App {
             pending_sync_admin_login: false,
             pending_code_sync: false,
             ssh_tunnel_process: None,
+            ssh_tunnel_active: false,
+            ssh_tunnel_child: None,
         }
     }
 
@@ -667,6 +683,79 @@ impl App {
 
     pub fn clear_message(&mut self) {
         self.status_message = None;
+    }
+
+    pub fn kill_ssh_tunnel(&mut self) {
+        if let Some(ref mut child) = self.ssh_tunnel_child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.ssh_tunnel_child = None;
+        self.ssh_tunnel_active = false;
+    }
+
+    pub fn toggle_ssh_tunnel(&mut self) {
+        if self.ssh_tunnel_active {
+            self.kill_ssh_tunnel();
+            self.set_message("SSH tunnel stopped", MessageKind::Info);
+            return;
+        }
+
+        let profile = match self.active_profile() {
+            Some((_, p)) if p.remote => p.clone(),
+            _ => {
+                self.set_message("SSH tunnel requires a remote profile", MessageKind::Warning);
+                return;
+            }
+        };
+
+        let host = match profile.effective_host() {
+            Some(h) => h.to_string(),
+            None => {
+                self.set_message("No remote host configured", MessageKind::Warning);
+                return;
+            }
+        };
+        let user = profile.effective_user().to_string();
+        let key = crate::modules::ssh::shellexpand_path(profile.effective_ssh_key());
+
+        let mut args: Vec<String> = vec![
+            "-N".into(),
+            "-L".into(),
+            "4443:localhost:443".into(),
+            "-o".into(),
+            "StrictHostKeyChecking=accept-new".into(),
+            "-o".into(),
+            "ExitOnForwardFailure=yes".into(),
+        ];
+        if !key.is_empty() && std::path::Path::new(&key).exists() {
+            args.push("-i".into());
+            args.push(key);
+        }
+        args.push(format!("{user}@{host}"));
+
+        match std::process::Command::new("ssh")
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(child) => {
+                self.ssh_tunnel_child = Some(child);
+                self.ssh_tunnel_active = true;
+                self.set_message(
+                    "SSH tunnel active — https://localhost:4443",
+                    MessageKind::Success,
+                );
+            }
+            Err(e) => {
+                self.set_message(
+                    &format!("Failed to start SSH tunnel: {e}"),
+                    MessageKind::Error,
+                );
+            }
+        }
     }
 
     pub fn backend_choices(&self) -> &[&str] {

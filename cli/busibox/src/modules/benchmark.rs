@@ -21,7 +21,6 @@ pub struct ModelTestResult {
 pub enum ModelTestTier {
     DirectVllm,
     LiteLLM,
-    AgentApi,
 }
 
 impl std::fmt::Display for ModelTestTier {
@@ -29,7 +28,6 @@ impl std::fmt::Display for ModelTestTier {
         match self {
             ModelTestTier::DirectVllm => write!(f, "vLLM"),
             ModelTestTier::LiteLLM => write!(f, "LiteLLM"),
-            ModelTestTier::AgentApi => write!(f, "Agent"),
         }
     }
 }
@@ -269,32 +267,6 @@ pub fn build_litellm_curl_command(
             escaped_key, body_str, litellm_ip, port
         )
     }
-}
-
-/// Build a curl command targeting the Agent API.
-pub fn build_agent_api_curl_command(
-    agent_ip: &str,
-    port: u16,
-    purpose_name: &str,
-    prompt: &str,
-    max_tokens: usize,
-) -> String {
-    let body = serde_json::json!({
-        "model": purpose_name,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
-        "stream": false,
-    });
-    let body_str = body.to_string().replace('\'', "'\\''");
-
-    format!(
-        "curl -s -w '\\n---BENCH_TIME:%{{time_total}}---' \
-         -H 'Content-Type: application/json' \
-         --max-time 60 \
-         -d '{}' \
-         'http://{}:{}/v1/chat/completions'; true",
-        body_str, agent_ip, port
-    )
 }
 
 /// Parse a model test response, checking for valid choices content.

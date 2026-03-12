@@ -143,15 +143,18 @@ pub fn init_screen(app: &mut App) {
     app.models_manage_model_selected = 0;
     app.models_manage_gpu_assignments.clear();
 
-    // If a deployed model_config.yml exists, default to showing it as "Custom"
-    if has_deployed_config(app) {
-        app.models_manage_is_custom = true;
-        app.models_manage_tier_selected = CUSTOM_TIER_INDEX;
-        app.models_manage_current_tier = Some("custom".to_string());
-    } else if let Some((_, profile)) = app.active_profile() {
+    let is_mlx = get_hardware(app)
+        .map(|h| matches!(h.llm_backend, LlmBackend::Mlx))
+        .unwrap_or(false);
+
+    if let Some((_, profile)) = app.active_profile() {
         if let Some(tier) = profile.effective_model_tier() {
             app.models_manage_tier_selected = tier.index();
             app.models_manage_current_tier = Some(tier.name().to_string());
+        } else if !is_mlx && has_deployed_config(app) {
+            app.models_manage_is_custom = true;
+            app.models_manage_tier_selected = CUSTOM_TIER_INDEX;
+            app.models_manage_current_tier = Some("custom".to_string());
         }
     }
 
@@ -1900,20 +1903,40 @@ fn apply_tier_inner(app: &mut App, deploy: bool) {
 
         if vllm_changed && deploy {
             // Step 2: Deploy LLM services
-            let _ = tx.send(ModelsManageUpdate::Log(
-                "--- Step 2/5: Deploying vLLM services ---".into(),
-            ));
+            if backend_str == "mlx" {
+                let _ = tx.send(ModelsManageUpdate::Log(
+                    "--- Step 2/5: Redeploying MLX models ---".into(),
+                ));
 
-            let download_args = format!("install SERVICE={llm_svc}");
-            step2_ok = run_make_step(
-                &tx,
-                is_remote,
-                &repo_root,
-                &ssh_details,
-                &remote_path,
-                &download_args,
-                vault_password.as_deref(),
-            );
+                let mlx_args = format!(
+                    "manage SERVICE=mlx ACTION=redeploy LLM_BACKEND=mlx LLM_TIER={}",
+                    shell_escape(&tier_name)
+                );
+                step2_ok = run_make_step(
+                    &tx,
+                    is_remote,
+                    &repo_root,
+                    &ssh_details,
+                    &remote_path,
+                    &mlx_args,
+                    vault_password.as_deref(),
+                );
+            } else {
+                let _ = tx.send(ModelsManageUpdate::Log(
+                    "--- Step 2/5: Deploying vLLM services ---".into(),
+                ));
+
+                let download_args = format!("install SERVICE={llm_svc}");
+                step2_ok = run_make_step(
+                    &tx,
+                    is_remote,
+                    &repo_root,
+                    &ssh_details,
+                    &remote_path,
+                    &download_args,
+                    vault_password.as_deref(),
+                );
+            }
 
             if !step2_ok {
                 let _ = tx.send(ModelsManageUpdate::Log(
@@ -1921,8 +1944,30 @@ fn apply_tier_inner(app: &mut App, deploy: bool) {
                 ));
             }
 
-            // Step 3: Wait for all vLLM models to be available
-            if backend_str == "vllm" {
+            // Step 3: Wait for models to be available
+            if backend_str == "mlx" {
+                let _ = tx.send(ModelsManageUpdate::Log(
+                    "--- Step 3/5: Waiting for MLX models to become available ---".into(),
+                ));
+
+                let mlx_ports: Vec<u16> = vec![8080, 18081];
+                let all_ready = wait_for_mlx_models(
+                    &tx,
+                    &mlx_ports,
+                    is_remote,
+                    &ssh_details,
+                );
+
+                if all_ready {
+                    let _ = tx.send(ModelsManageUpdate::Log(
+                        "✓ All MLX models are responding".into(),
+                    ));
+                } else {
+                    let _ = tx.send(ModelsManageUpdate::Log(
+                        "WARNING: Some MLX models did not become ready within timeout — proceeding anyway".into(),
+                    ));
+                }
+            } else if backend_str == "vllm" {
                 let _ = tx.send(ModelsManageUpdate::Log(
                     "--- Step 3/5: Waiting for vLLM models to become available ---".into(),
                 ));
@@ -1966,7 +2011,11 @@ fn apply_tier_inner(app: &mut App, deploy: bool) {
                 "--- Step 4/5: Deploying saved config to LiteLLM ---".into(),
             ));
 
-            let litellm_args = "install SERVICE=litellm".to_string();
+            let litellm_args = if let Some(ref b) = llm_backend {
+                format!("install SERVICE=litellm LLM_BACKEND={} LLM_TIER={}", shell_escape(b), shell_escape(&tier_name))
+            } else {
+                "install SERVICE=litellm".to_string()
+            };
             step3_ok = run_make_step(
                 &tx,
                 is_remote,
@@ -1984,7 +2033,7 @@ fn apply_tier_inner(app: &mut App, deploy: bool) {
             }
         } else {
             let _ = tx.send(ModelsManageUpdate::Log(
-                "--- Steps 2-4 skipped (no vLLM changes) ---".into(),
+                "--- Steps 2-4 skipped (no changes) ---".into(),
             ));
         }
 
@@ -2307,6 +2356,49 @@ fn check_vllm_ports_healthy(
 
 /// Poll vLLM ports until all respond with HTTP 200 on /v1/models.
 /// Returns true if all became ready within the timeout (10 minutes).
+fn wait_for_mlx_models(
+    tx: &std::sync::mpsc::Sender<ModelsManageUpdate>,
+    ports: &[u16],
+    is_remote: bool,
+    ssh_details: &Option<(String, String, String)>,
+) -> bool {
+    use crate::modules::models::query_mlx_model;
+    use std::time::{Duration, Instant};
+
+    let timeout = Duration::from_secs(300);
+    let poll_interval = Duration::from_secs(10);
+    let start = Instant::now();
+
+    let mut remaining: Vec<u16> = ports.to_vec();
+
+    while !remaining.is_empty() && start.elapsed() < timeout {
+        std::thread::sleep(poll_interval);
+
+        let mut still_waiting = vec![];
+        for &port in &remaining {
+            if query_mlx_model(port, is_remote, ssh_details).is_some() {
+                let _ = tx.send(ModelsManageUpdate::Log(format!(
+                    "  ✓ MLX port {port} ready"
+                )));
+            } else {
+                still_waiting.push(port);
+            }
+        }
+
+        if !still_waiting.is_empty() {
+            let elapsed = start.elapsed().as_secs();
+            let _ = tx.send(ModelsManageUpdate::Log(format!(
+                "  Waiting for MLX ports {:?} ({elapsed}s elapsed)...",
+                still_waiting
+            )));
+        }
+
+        remaining = still_waiting;
+    }
+
+    remaining.is_empty()
+}
+
 fn wait_for_vllm_models(
     tx: &std::sync::mpsc::Sender<ModelsManageUpdate>,
     ports: &[u16],

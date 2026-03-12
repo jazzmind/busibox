@@ -190,6 +190,16 @@ build_app() {
     log_info "Building ${app_name} (${filter})..."
     cd "${MONOREPO_DIR}"
 
+    # Clean previous build artifacts to prevent stale chunk errors
+    if [ -d "${full_app_dir}/.next" ]; then
+        log_info "Cleaning previous .next build for ${app_name}..."
+        rm -rf "${full_app_dir}/.next"
+    fi
+    if [ -d "${srv_dir}" ]; then
+        log_info "Cleaning previous deployment for ${app_name}..."
+        rm -rf "${srv_dir}/.next"
+    fi
+
     # Set build-time env vars
     export NEXT_PUBLIC_BASE_PATH="${base_path}"
 

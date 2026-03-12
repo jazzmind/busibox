@@ -210,12 +210,19 @@ pub fn render(f: &mut Frame, app: &App) {
         }
     }
 
-    let help_text = if app.manage_services.is_empty() {
-        " Enter Load  Esc Back"
+    let mut help_spans: Vec<Span> = Vec::new();
+    if app.manage_services.is_empty() {
+        help_spans.push(Span::styled(" Enter Load  Esc Back", theme::muted()));
     } else {
-        " r Restart  l Logs  s Stop/Start  d Redeploy  Enter Refresh  Esc Back"
-    };
-    let help = Paragraph::new(Line::from(Span::styled(help_text, theme::muted())));
+        help_spans.push(Span::styled(
+            " r Restart  l Tail logs  s Stop/Start  d Redeploy  t Tunnel  Enter Refresh  Esc Back",
+            theme::muted(),
+        ));
+    }
+    if app.ssh_tunnel_active {
+        help_spans.push(Span::styled("  🔗 tunnel:4443", theme::success()));
+    }
+    let help = Paragraph::new(Line::from(help_spans));
     f.render_widget(help, chunks[2]);
 }
 
@@ -237,7 +244,12 @@ fn render_log_viewer(f: &mut Frame, app: &App) {
         .map(|s| s.name.as_str())
         .unwrap_or("service");
 
-    let title = Paragraph::new(format!("Action Log — {svc_name}"))
+    let title_text = if app.manage_log_streaming {
+        format!("Live Logs — {svc_name}")
+    } else {
+        format!("Action Log — {svc_name}")
+    };
+    let title = Paragraph::new(title_text)
         .style(theme::title())
         .alignment(Alignment::Center);
     f.render_widget(title, chunks[0]);
@@ -250,6 +262,12 @@ fn render_log_viewer(f: &mut Frame, app: &App) {
             Span::styled("? ", theme::warning()),
             Span::styled(&app.manage_confirm_prompt, theme::warning()),
             Span::styled("  [y/n]", theme::muted()),
+        ]))
+        .alignment(Alignment::Center)
+    } else if app.manage_log_streaming && app.manage_action_running {
+        Paragraph::new(Line::from(vec![
+            Span::styled(format!("{spinner_char} "), theme::info()),
+            Span::styled("Streaming live logs...", theme::info()),
         ]))
         .alignment(Alignment::Center)
     } else if app.manage_action_running {
@@ -335,10 +353,12 @@ fn render_log_viewer(f: &mut Frame, app: &App) {
 
     let help_text = if app.manage_waiting_confirm.is_some() {
         " y Yes (overwrite)  n No (keep existing)  ↑/↓ Scroll"
+    } else if app.manage_log_streaming && app.manage_action_running {
+        " ↑/↓ Scroll  End Auto-scroll  c Copy  Esc Stop tailing"
     } else if app.manage_action_running {
         " ↑/↓ Scroll  (waiting for action to complete...)"
     } else {
-        " ↑/↓ Scroll  c Copy  Esc/l Close log viewer"
+        " ↑/↓ Scroll  c Copy  Esc Close"
     };
     let help = Paragraph::new(Line::from(Span::styled(help_text, theme::muted())));
     f.render_widget(help, chunks[3]);
@@ -372,11 +392,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
             run_action(app, "restart");
         }
         KeyCode::Char('l') => {
-            if !app.manage_log.is_empty() {
+            if app.manage_log_streaming {
                 app.manage_log_visible = true;
-                app.manage_log_scroll = app.manage_log.len().saturating_sub(1);
             } else {
-                run_action(app, "logs");
+                spawn_log_tail_worker(app);
             }
         }
         KeyCode::Char('s') => {
@@ -393,6 +412,9 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Char('d') => {
             run_action(app, "redeploy");
+        }
+        KeyCode::Char('t') => {
+            app.toggle_ssh_tunnel();
         }
         _ => {}
     }
@@ -431,13 +453,16 @@ fn handle_log_viewer_key(app: &mut App, key: KeyEvent) {
     }
 
     match key.code {
-        KeyCode::Esc | KeyCode::Char('l') => {
-            if !app.manage_action_running {
-                app.manage_log_visible = false;
+        KeyCode::Esc | KeyCode::Char('q') => {
+            let was_streaming = app.manage_log_streaming;
+            kill_log_stream(app);
+            app.manage_log_visible = false;
+            if !was_streaming {
                 load_service_status(app);
             }
         }
         KeyCode::Up | KeyCode::Char('k') => {
+            app.manage_log_autoscroll = false;
             if app.manage_log_scroll > 0 {
                 app.manage_log_scroll -= 1;
             }
@@ -446,17 +471,17 @@ fn handle_log_viewer_key(app: &mut App, key: KeyEvent) {
             app.manage_log_scroll += 1;
         }
         KeyCode::Home => {
+            app.manage_log_autoscroll = false;
             app.manage_log_scroll = 0;
         }
         KeyCode::End => {
+            app.manage_log_autoscroll = true;
             app.manage_log_scroll = app.manage_log.len().saturating_sub(1);
         }
         KeyCode::Char('c') => {
-            if !app.manage_action_running {
-                let log_text = app.manage_log.join("\n");
-                let _ = copy_to_clipboard(&log_text);
-                app.set_message("Log copied to clipboard", MessageKind::Info);
-            }
+            let log_text = app.manage_log.join("\n");
+            let _ = copy_to_clipboard(&log_text);
+            app.set_message("Log copied to clipboard", MessageKind::Info);
         }
         _ => {}
     }
@@ -596,57 +621,6 @@ fn run_action(app: &mut App, action: &str) {
         None => return,
     };
 
-    // For logs, signal the main loop to run interactively (with TUI suspended)
-    if action == "logs" {
-        let is_remote = app.active_profile().map(|(_, p)| p.remote).unwrap_or(false);
-        let env_val = app
-            .active_profile()
-            .map(|(_, p)| p.environment.as_str())
-            .unwrap_or("development");
-        let backend_val = app
-            .active_profile()
-            .map(|(_, p)| p.backend.to_lowercase())
-            .unwrap_or_else(|| "docker".into());
-        let llm_backend_val: String = app
-            .active_profile()
-            .and_then(|(_, p)| p.hardware.as_ref().map(|h| match h.llm_backend {
-                crate::modules::hardware::LlmBackend::Mlx => "mlx".to_string(),
-                crate::modules::hardware::LlmBackend::Vllm => "vllm".to_string(),
-                crate::modules::hardware::LlmBackend::Cloud => "cloud".to_string(),
-            }))
-            .unwrap_or_default();
-        let llm_export = if llm_backend_val.is_empty() {
-            String::new()
-        } else {
-            format!("LLM_BACKEND={llm_backend_val} ")
-        };
-        let make_svc = service_to_make_name(&svc.name);
-        let make_args = format!(
-            "{llm_export}manage SERVICE={make_svc} ACTION={action} BUSIBOX_ENV={env_val} BUSIBOX_BACKEND={backend_val}",
-        );
-        if is_remote {
-            if let Some((_, profile)) = app.active_profile() {
-                if let Some(host) = profile.effective_host() {
-                    let user = profile.effective_user();
-                    let key = profile.effective_ssh_key();
-                    let remote_path = profile.effective_remote_path();
-                    let env_prefix = "";
-                    app.pending_interactive_cmd = Some(format!(
-                        "REMOTE:{}:{}:{}:cd {} && {} USE_MANAGER=0 make {}",
-                        host, user, key, remote_path, env_prefix, make_args
-                    ));
-                } else {
-                    app.set_message("No host configured for remote profile", MessageKind::Error);
-                }
-            } else {
-                app.set_message("No active profile", MessageKind::Error);
-            }
-        } else {
-            app.pending_interactive_cmd = Some(make_args);
-        }
-        return;
-    }
-
     // All other actions (restart, redeploy, stop, start) use async worker with log viewer
     let make_svc = service_to_make_name(&svc.name).to_string();
     spawn_action_worker(app, &make_svc, action);
@@ -655,11 +629,15 @@ fn run_action(app: &mut App, action: &str) {
 fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
     use crate::modules::hardware::LlmBackend;
 
+    kill_log_stream(app);
+
     let (tx, rx) = std::sync::mpsc::channel::<ManageUpdate>();
     app.manage_rx = Some(rx);
     app.manage_log.clear();
     app.manage_log_visible = true;
     app.manage_log_scroll = 0;
+    app.manage_log_autoscroll = true;
+    app.manage_log_streaming = false;
     app.manage_action_running = true;
     app.manage_action_complete = false;
 
@@ -1022,6 +1000,199 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
     });
 }
 
+fn kill_log_stream(app: &mut App) {
+    if let Some(pid) = app.manage_log_child_pid.take() {
+        unsafe {
+            libc::kill(pid as i32, libc::SIGTERM);
+        }
+    }
+    app.manage_log_streaming = false;
+    app.manage_action_running = false;
+}
+
+/// Spawn a background worker that tails live application logs into the TUI log viewer.
+/// Docker: `make manage SERVICE=x ACTION=logs`
+/// Proxmox: same (underlying script uses journalctl -f)
+fn spawn_log_tail_worker(app: &mut App) {
+    let svc = match app.manage_services.get(app.manage_selected) {
+        Some(s) => s.clone(),
+        None => return,
+    };
+
+    kill_log_stream(app);
+
+    let make_svc = service_to_make_name(&svc.name).to_string();
+
+    let (tx, rx) = std::sync::mpsc::channel::<ManageUpdate>();
+    app.manage_rx = Some(rx);
+    app.manage_log.clear();
+    app.manage_log_visible = true;
+    app.manage_log_scroll = 0;
+    app.manage_log_autoscroll = true;
+    app.manage_action_running = true;
+    app.manage_action_complete = false;
+    app.manage_log_streaming = true;
+
+    let is_remote = app.active_profile().map(|(_, p)| p.remote).unwrap_or(false);
+    let repo_root = app.repo_root.clone();
+
+    let profile_env: Option<String> = app
+        .active_profile()
+        .map(|(_, p)| p.environment.clone());
+    let profile_backend: Option<String> = app
+        .active_profile()
+        .map(|(_, p)| p.backend.to_lowercase());
+    let profile_llm_backend: Option<String> = app
+        .active_profile()
+        .and_then(|(_, p)| {
+            p.hardware.as_ref().map(|h| match h.llm_backend {
+                crate::modules::hardware::LlmBackend::Mlx => "mlx".to_string(),
+                crate::modules::hardware::LlmBackend::Vllm => "vllm".to_string(),
+                crate::modules::hardware::LlmBackend::Cloud => "cloud".to_string(),
+            })
+        });
+    let profile_site_domain: Option<String> = app
+        .active_profile()
+        .and_then(|(_, p)| p.site_domain.clone())
+        .filter(|v| !v.trim().is_empty());
+
+    let ssh_details: Option<(String, String, String)> = if is_remote {
+        app.active_profile().and_then(|(_, p)| {
+            p.effective_host().map(|h| {
+                (
+                    h.to_string(),
+                    p.effective_user().to_string(),
+                    p.effective_ssh_key().to_string(),
+                )
+            })
+        })
+    } else {
+        None
+    };
+
+    let profile_remote_path: Option<String> = app
+        .active_profile()
+        .map(|(_, p)| p.effective_remote_path().to_string());
+    let profile_host: Option<String> = app
+        .active_profile()
+        .and_then(|(_, p)| p.effective_host().map(|s| s.to_string()));
+
+    let (pid_tx, pid_rx) = std::sync::mpsc::channel::<u32>();
+
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        use std::process::{Command, Stdio};
+
+        let env_val = profile_env.as_deref().unwrap_or("development");
+        let backend_val = profile_backend.as_deref().unwrap_or("docker");
+        let site_domain_export = profile_site_domain
+            .as_deref()
+            .map(|d| format!("SITE_DOMAIN={d} "))
+            .unwrap_or_default();
+        let llm_backend_export = profile_llm_backend
+            .as_deref()
+            .map(|b| format!("LLM_BACKEND={b} "))
+            .unwrap_or_default();
+        let make_args = format!(
+            "{site_domain_export}{llm_backend_export}manage SERVICE={make_svc} ACTION=logs BUSIBOX_ENV={env_val} BUSIBOX_BACKEND={backend_val}"
+        );
+
+        let child_result: std::io::Result<std::process::Child> = if is_remote {
+            if let Some((ref host, ref user, ref key)) = ssh_details {
+                let display_host = profile_host.as_deref().unwrap_or(host);
+                let remote_path = profile_remote_path
+                    .as_deref()
+                    .unwrap_or("~/busibox");
+
+                let full_cmd = format!(
+                    "{preamble}\
+                     [ -f \"$HOME/.profile\" ] && . \"$HOME/.profile\" 2>/dev/null || true; \
+                     [ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\" 2>/dev/null || true; \
+                     export PYTHONUNBUFFERED=1; \
+                     cd {remote_path} && USE_MANAGER=0 make {make_args} 2>&1",
+                    preamble = remote::SHELL_PATH_PREAMBLE,
+                );
+                let mut args: Vec<String> = vec![
+                    "-o".into(), "BatchMode=yes".into(),
+                    "-o".into(), "StrictHostKeyChecking=accept-new".into(),
+                    "-o".into(), "ConnectTimeout=10".into(),
+                ];
+                let key_path = crate::modules::ssh::shellexpand_path(key);
+                if !key_path.is_empty() && std::path::Path::new(&key_path).exists() {
+                    args.push("-i".into());
+                    args.push(key_path);
+                }
+                let ssh_target = format!("{user}@{display_host}");
+                args.push(ssh_target);
+                args.push(full_cmd);
+
+                Command::new("ssh")
+                    .args(&args)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+            } else {
+                let _ = tx.send(ManageUpdate::Log("ERROR: No SSH connection configured".into()));
+                let _ = tx.send(ManageUpdate::Complete { success: false });
+                return;
+            }
+        } else {
+            Command::new("make")
+                .args(make_args.split_whitespace())
+                .env("USE_MANAGER", "0")
+                .env("PYTHONUNBUFFERED", "1")
+                .current_dir(&repo_root)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        };
+
+        let mut child = match child_result {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tx.send(ManageUpdate::Log(format!("ERROR: Failed to start log tail: {e}")));
+                let _ = tx.send(ManageUpdate::Complete { success: false });
+                return;
+            }
+        };
+
+        let _ = pid_tx.send(child.id());
+
+        let _ = tx.send(ManageUpdate::Log(format!(
+            "Tailing logs for {make_svc}... (Esc to stop)"
+        )));
+        let _ = tx.send(ManageUpdate::Log(String::new()));
+
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => {
+                let _ = tx.send(ManageUpdate::Log("ERROR: No stdout from log process".into()));
+                let _ = tx.send(ManageUpdate::Complete { success: false });
+                return;
+            }
+        };
+        let reader = std::io::BufReader::new(stdout);
+        for line in reader.lines() {
+            match line {
+                Ok(l) => {
+                    let cleaned = remote::strip_ansi(&l);
+                    let _ = tx.send(ManageUpdate::Log(cleaned));
+                }
+                Err(_) => break,
+            }
+        }
+
+        let _ = child.wait();
+        let _ = tx.send(ManageUpdate::Log(String::new()));
+        let _ = tx.send(ManageUpdate::Log("--- Log stream ended ---".into()));
+        let _ = tx.send(ManageUpdate::Complete { success: true });
+    });
+
+    if let Ok(pid) = pid_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        app.manage_log_child_pid = Some(pid);
+    }
+}
+
 fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
     use std::io::Write;
     use std::process::{Command, Stdio};
@@ -1057,11 +1228,15 @@ fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
 /// Spawn a background worker that runs `make install SERVICE=<services> <extra_env>`
 /// and feeds output into the manage screen's log viewer.
 pub fn spawn_install_with_env(app: &mut App, services: &str, extra_env: &str) {
+    kill_log_stream(app);
+
     let (tx, rx) = std::sync::mpsc::channel::<ManageUpdate>();
     app.manage_rx = Some(rx);
     app.manage_log.clear();
     app.manage_log_visible = true;
     app.manage_log_scroll = 0;
+    app.manage_log_autoscroll = true;
+    app.manage_log_streaming = false;
     app.manage_action_running = true;
     app.manage_action_complete = false;
     app.screen = Screen::Manage;

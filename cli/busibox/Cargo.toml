@@ -27,6 +27,7 @@ argon2 = "0.5"
 base64 = "0.22"
 rpassword = "7"
 rand = "0.8"
+libc = "0.2"
 
 [profile.release]
 strip = true
