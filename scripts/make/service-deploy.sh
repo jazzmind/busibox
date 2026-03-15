@@ -22,6 +22,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # Source libraries
 source "${REPO_ROOT}/scripts/lib/ui.sh"
+source "${REPO_ROOT}/scripts/lib/prereqs.sh"
 source "${REPO_ROOT}/scripts/lib/profiles.sh"
 source "${REPO_ROOT}/scripts/lib/state.sh"
 source "${REPO_ROOT}/scripts/lib/vault.sh"
@@ -463,6 +464,11 @@ main() {
     
     info "Services to deploy: ${BOLD}${services}${NC}"
     echo ""
+    
+    # Ansible is required for docker and proxmox backends
+    if [[ "$backend" != "k8s" ]]; then
+        ensure_ansible quiet || exit 1
+    fi
     
     # K8s backend: optimize for full-stack deployment
     if [[ "$backend" == "k8s" ]]; then
