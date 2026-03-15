@@ -325,7 +325,7 @@ def _required_env_for_service(service: str) -> list[str]:
         logical = "core-apps"
     required = {
         "litellm": ["POSTGRES_PASSWORD", "LITELLM_MASTER_KEY", "LITELLM_SALT_KEY"],
-        "core-apps": ["GITHUB_AUTH_TOKEN"],
+        # GITHUB_AUTH_TOKEN no longer required - repos are public
     }
     return required.get(logical, [])
 

@@ -43,7 +43,12 @@
     BUSIBOX_HOST_PATH: "{{ docker_compose_dir }}"
     BUSIBOX_REPO_ROOT: "{{ docker_compose_dir }}"
     # Secrets injected from encrypted Ansible vault at runtime
-    POSTGRES_PASSWORD: "{{ secrets.postgresql.password | default('') }}"
+    # Fall back to postgres_password (from inventory) to stay consistent with
+    # docker-compose.yml's ${POSTGRES_PASSWORD:-devpassword} default and the
+    # ALTER USER in the postgres role.  An empty value here would let
+    # docker-compose interpolation use 'devpassword' while Ansible's ALTER USER
+    # might set a different vault-sourced password, causing auth failures.
+    POSTGRES_PASSWORD: "{{ secrets.postgresql.password | default(postgres_password | default('devpassword')) }}"
     MINIO_ACCESS_KEY: "{{ secrets.minio.root_user | default('minioadmin') }}"
     MINIO_SECRET_KEY: "{{ secrets.minio.root_password | default('') }}"
     SSO_JWT_SECRET: "{{ secrets.jwt_secret | default('') }}"
