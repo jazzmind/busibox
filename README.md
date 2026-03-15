@@ -200,20 +200,27 @@ make mcp   # Build all servers and write Cursor config
 ## Project Structure
 
 ```
-busibox/
-├── docs/                   # Documentation (by audience)
-├── srv/                    # Service source code
-│   ├── agent/              #   Agent API (FastAPI)
-│   ├── data/               #   Data API + Ingest Worker
-│   ├── docs/               #   Docs API
-│   └── deploy/             #   Deploy API
+busibox/                        # This repo — infrastructure, APIs, provisioning
+├── docs/                       #   Documentation (by audience)
+├── srv/                        #   Service source code
+│   ├── agent/                  #     Agent API (FastAPI)
+│   ├── data/                   #     Data API + Ingest Worker
+│   ├── docs/                   #     Docs API
+│   └── deploy/                 #     Deploy API
 ├── provision/
-│   ├── ansible/            #   Ansible roles and inventory
-│   └── pct/                #   Proxmox container scripts
-├── scripts/                # Admin workstation scripts
-├── tools/                  # MCP servers and utilities
-└── specs/                  # Project specifications
+│   ├── ansible/                #     Ansible roles and inventory
+│   └── pct/                    #     Proxmox container scripts
+├── scripts/                    #   Admin workstation scripts
+├── tools/                      #   MCP servers and utilities
+└── specs/                      #   Project specifications
 ```
+
+**Related repositories:**
+
+| Repo | What It Contains |
+|------|-----------------|
+| [busibox-frontend](https://github.com/jazzmind/busibox-frontend) | All frontend apps (Portal, Agents, Admin, Chat, App Builder, Media, Documents) and the `@jazzmind/busibox-app` shared library |
+| [busibox-template](https://github.com/jazzmind/busibox-template) | Starter template for building new apps on the Busibox platform |
 
 ---
 
