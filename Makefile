@@ -1533,8 +1533,7 @@ k8s-connect-status:
 #   make busibox          # Build and run the CLI
 
 busibox-build:
-	@. "$$HOME/.cargo/env" 2>/dev/null; cd cli/busibox && CARGO_TARGET_DIR=target cargo build --release
-	@echo "Built: cli/busibox/target/release/busibox"
+	@bash scripts/make/busibox-cli.sh build
 
 busibox:
-	@. "$$HOME/.cargo/env" 2>/dev/null; cd cli/busibox && CARGO_TARGET_DIR=target cargo run --release
+	@bash scripts/make/busibox-cli.sh run
