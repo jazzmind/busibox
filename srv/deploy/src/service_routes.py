@@ -1102,6 +1102,11 @@ async def start_service_sse(
             try:
                 # Mark as deploying
                 await mark_service_deploying(service, True)
+                
+                # Heartbeat interval for SSE keepalive (seconds).
+                # Prevents Node.js fetch (undici) 30s bodyTimeout from killing the stream.
+                heartbeat_interval = 15
+                
                 # Validate service name
                 if not service or not all(c.isalnum() or c in '-_' for c in service):
                     yield f"data: {json.dumps({'type': 'error', 'message': 'Invalid service name', 'done': True})}\n\n"
@@ -1459,7 +1464,6 @@ async def start_service_sse(
                         
                         deploy_done_count = 0
                         deploy_last_event_time = asyncio.get_event_loop().time()
-                        heartbeat_interval = 15
                         while deploy_done_count < 2:
                             now = asyncio.get_event_loop().time()
                             try:
@@ -1620,9 +1624,6 @@ async def start_service_sse(
                 stderr_task = asyncio.create_task(read_stream(process.stderr, "stderr"))
                 
                 # Yield messages from queue with heartbeat to prevent proxy idle timeouts.
-                # Node.js fetch (undici) has a 30s default bodyTimeout between chunks;
-                # docker compose can be silent for longer (e.g. pulling images, health waits).
-                heartbeat_interval = 15
                 done_count = 0
                 last_event_time = asyncio.get_event_loop().time()
                 while done_count < 2:
@@ -1685,16 +1686,48 @@ async def start_service_sse(
                     except Exception as e:
                         logger.warning(f"[SSE] Error connecting {service} to network: {e}")
                     
-                    # Start init container if one exists for this service
-                    # Docker Compose's depends_on with condition: service_healthy will wait for the service to be healthy
+                    # Start init container if one exists for this service.
+                    # docker compose up -d returns before the service is healthy,
+                    # so we must wait for health before running the init container.
                     init_containers = {
-                        'minio': 'minio-init',
-                        'milvus': 'milvus-init',
+                        'minio': ('minio-init', 'http://minio:9000/minio/health/live'),
+                        'milvus': ('milvus-init', 'http://milvus:9091/healthz'),
                     }
                     
                     if service in init_containers:
-                        init_service = init_containers[service]
-                        yield f"data: {json.dumps({'type': 'info', 'message': f'Starting init container {init_service}...'})}\n\n"
+                        init_service, health_url = init_containers[service]
+                        
+                        # Wait for the service to become healthy before running init.
+                        # Milvus has a 90s start_period; minio is usually faster.
+                        yield f"data: {json.dumps({'type': 'info', 'message': f'Waiting for {service} to become healthy before initialization...'})}\n\n"
+                        max_health_wait = 180  # 3 minutes
+                        health_start = asyncio.get_event_loop().time()
+                        service_healthy = False
+                        last_health_msg_time = health_start
+                        
+                        while asyncio.get_event_loop().time() - health_start < max_health_wait:
+                            try:
+                                async with httpx.AsyncClient() as hc:
+                                    resp = await hc.get(health_url, timeout=5.0)
+                                    if resp.status_code == 200:
+                                        service_healthy = True
+                                        break
+                            except Exception:
+                                pass
+                            
+                            now = asyncio.get_event_loop().time()
+                            if now - last_health_msg_time >= heartbeat_interval:
+                                elapsed = int(now - health_start)
+                                yield f"data: {json.dumps({'type': 'info', 'message': f'Waiting for {service} to be healthy ({elapsed}s elapsed)...'})}\n\n"
+                                last_health_msg_time = now
+                            await asyncio.sleep(5)
+                        
+                        if not service_healthy:
+                            yield f"data: {json.dumps({'type': 'warning', 'message': f'{service} did not become healthy within {max_health_wait}s, attempting init anyway...'})}\n\n"
+                        else:
+                            yield f"data: {json.dumps({'type': 'success', 'message': f'{service} is healthy'})}\n\n"
+                        
+                        yield f"data: {json.dumps({'type': 'info', 'message': f'Running {init_service}...'})}\n\n"
                         
                         # Remove existing init container if it exists (to avoid name conflicts)
                         rm_cmd = get_docker_compose_base_cmd(busibox_host_path)
@@ -1706,10 +1739,9 @@ async def start_service_sse(
                             env=env,
                             cwd=busibox_host_path,
                         )
-                        await rm_process.wait()  # Don't care about return code - container might not exist
+                        await rm_process.wait()
                         
-                        # Start init container (depends_on will ensure service is healthy first)
-                        # Use --force-recreate to ensure we get a fresh container
+                        # Run init container (foreground, --no-deps since we already verified health)
                         init_cmd = get_docker_compose_base_cmd(busibox_host_path)
                         init_cmd.extend(['up', '--no-deps', '--force-recreate', init_service])
                         init_process = await asyncio.create_subprocess_exec(
@@ -1720,7 +1752,7 @@ async def start_service_sse(
                             cwd=busibox_host_path,
                         )
                         
-                        # Stream init container output
+                        # Stream init container output with heartbeat
                         init_queue = asyncio.Queue()
                         
                         async def read_init_stream(stream, stream_type):
@@ -1764,7 +1796,7 @@ async def start_service_sse(
                         if init_returncode == 0:
                             yield f"data: {json.dumps({'type': 'success', 'message': f'Init container {init_service} completed successfully', 'done': True})}\n\n"
                         else:
-                            yield f"data: {json.dumps({'type': 'warning', 'message': f'Init container {init_service} completed with code {init_returncode}', 'done': True})}\n\n"
+                            yield f"data: {json.dumps({'type': 'warning', 'message': f'Init container {init_service} exited with code {init_returncode}. The collection may already exist.', 'done': True})}\n\n"
                     else:
                         yield f"data: {json.dumps({'type': 'success', 'message': f'Service {service} started successfully', 'done': True})}\n\n"
                 else:
