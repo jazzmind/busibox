@@ -11,7 +11,7 @@
 #   bash    - Start bash shell for debugging
 #
 # Environment variables:
-#   GITHUB_AUTH_TOKEN - Required for cloning private repos and npm packages
+#   GITHUB_AUTH_TOKEN - Optional for cloning (public repos work without it) and npm packages
 #   BUSIBOX_FRONTEND_GITHUB_REF - Git ref for busibox-frontend (default: main)
 #   ENABLED_APPS - Comma-separated app names (default: portal,admin)
 #   DATABASE_URL - PostgreSQL connection string (required for portal)
@@ -69,7 +69,7 @@ setup_npm_auth() {
         echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc
         log_success "npm authentication configured"
     else
-        log_error "GITHUB_AUTH_TOKEN not set - npm install may fail for @jazzmind packages"
+        log_info "GITHUB_AUTH_TOKEN not set - using public access (repos are public)"
     fi
 }
 
@@ -77,19 +77,18 @@ setup_npm_auth() {
 # Clone Monorepo
 # =============================================================================
 clone_monorepo() {
-    if [ -z "${GITHUB_AUTH_TOKEN:-}" ]; then
-        log_error "GITHUB_AUTH_TOKEN is required for cloning"
-        return 1
-    fi
-
     log_info "Cloning busibox-frontend (ref: ${BUSIBOX_FRONTEND_GITHUB_REF})..."
 
     local temp_dir="/tmp/busibox-frontend-clone"
     rm -rf "${temp_dir}"
 
+    local clone_url="https://github.com/jazzmind/busibox-frontend.git"
+    if [ -n "${GITHUB_AUTH_TOKEN:-}" ]; then
+        clone_url="https://${GITHUB_AUTH_TOKEN}@github.com/jazzmind/busibox-frontend.git"
+    fi
+
     if ! git clone --depth 1 --branch "${BUSIBOX_FRONTEND_GITHUB_REF}" \
-        "https://${GITHUB_AUTH_TOKEN}@github.com/jazzmind/busibox-frontend.git" \
-        "${temp_dir}" 2>&1; then
+        "${clone_url}" "${temp_dir}" 2>&1; then
         log_error "Failed to clone busibox-frontend"
         return 1
     fi
@@ -106,11 +105,6 @@ clone_monorepo() {
 # Update Monorepo (git pull)
 # =============================================================================
 update_monorepo() {
-    if [ -z "${GITHUB_AUTH_TOKEN:-}" ]; then
-        log_error "GITHUB_AUTH_TOKEN is required for updating"
-        return 1
-    fi
-
     local target_ref="${BUSIBOX_FRONTEND_GITHUB_REF:-main}"
 
     cd "${MONOREPO_DIR}"
@@ -121,8 +115,12 @@ update_monorepo() {
 
     log_info "Updating busibox-frontend to ${target_ref} (current: ${before_commit:0:8})..."
 
-    # Configure git auth for pull
-    git remote set-url origin "https://${GITHUB_AUTH_TOKEN}@github.com/jazzmind/busibox-frontend.git" 2>/dev/null || true
+    # Configure git remote URL (use authenticated URL if token available)
+    if [ -n "${GITHUB_AUTH_TOKEN:-}" ]; then
+        git remote set-url origin "https://${GITHUB_AUTH_TOKEN}@github.com/jazzmind/busibox-frontend.git" 2>/dev/null || true
+    else
+        git remote set-url origin "https://github.com/jazzmind/busibox-frontend.git" 2>/dev/null || true
+    fi
 
     # Fetch and reset to the target ref
     # We use fetch+reset instead of pull because the volume may have local changes
