@@ -1500,7 +1500,9 @@ fn spawn_install_worker(app: &mut App) {
             let secrets_script = format!(
                 r#"set -euo pipefail
 VAULT_FILE="{vault_rel}"
+# Capture then unset to avoid duplicate vault-ids (env var + CLI flag)
 VPF="$ANSIBLE_VAULT_PASSWORD_FILE"
+unset ANSIBLE_VAULT_PASSWORD_FILE
 
 if [ ! -f "$VAULT_FILE" ]; then
     echo "ERROR: Vault file not found: $VAULT_FILE"
@@ -1644,6 +1646,7 @@ echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain
                 r#"set -euo pipefail
 VAULT_FILE="{vault_rel}"
 VPF="$ANSIBLE_VAULT_PASSWORD_FILE"
+unset ANSIBLE_VAULT_PASSWORD_FILE
 if [ -f "$VAULT_FILE" ]; then
     FIRST_LINE=$(head -1 "$VAULT_FILE")
     if [[ "$FIRST_LINE" == *'$ANSIBLE_VAULT'* ]]; then
@@ -2370,7 +2373,9 @@ fi
                         let secrets_script = format!(
                             r#"set -euo pipefail
 VAULT_FILE="{vault_rel}"
+# Capture then unset to avoid duplicate vault-ids (env var + CLI flag)
 VPF="$ANSIBLE_VAULT_PASSWORD_FILE"
+unset ANSIBLE_VAULT_PASSWORD_FILE
 
 if [ ! -f "$VAULT_FILE" ]; then
     echo "ERROR: Vault file not found: $VAULT_FILE"
@@ -2512,6 +2517,7 @@ echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain
                             r#"set -euo pipefail
 VAULT_FILE="{vault_rel}"
 VPF="$ANSIBLE_VAULT_PASSWORD_FILE"
+unset ANSIBLE_VAULT_PASSWORD_FILE
 if [ -f "$VAULT_FILE" ]; then
     FIRST_LINE=$(head -1 "$VAULT_FILE")
     if [[ "$FIRST_LINE" == *'$ANSIBLE_VAULT'* ]]; then
