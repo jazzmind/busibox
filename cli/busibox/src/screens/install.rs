@@ -3293,12 +3293,16 @@ fi
                 .as_deref()
                 .filter(|r| !r.is_empty() && *r != "latest")
                 .unwrap_or("main");
+            let home = dirs::home_dir()
+                .unwrap_or_default()
+                .display()
+                .to_string();
             let mut ref_exports = format!(
                 "BUSIBOX_FRONTEND_GITHUB_REF={ref_val} \
                  SITE_DOMAIN={site_domain} \
-                 MODEL_HOST_CACHE=$HOME/.cache \
-                 HF_HOST_CACHE=$HOME/.cache/huggingface \
-                 FASTEMBED_HOST_CACHE=$HOME/.cache/fastembed "
+                 MODEL_HOST_CACHE={home}/.cache \
+                 HF_HOST_CACHE={home}/.cache/huggingface \
+                 FASTEMBED_HOST_CACHE={home}/.cache/fastembed "
             );
             if let Some(ref backend) = profile_llm_backend {
                 ref_exports.push_str(&format!("LLM_BACKEND={backend} "));
