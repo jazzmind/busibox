@@ -69,7 +69,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./config/init-databases.sql:/docker-entrypoint-initdb.d/01-init-databases.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d litellm"]
       interval: 5s
       timeout: 5s
       retries: 5
