@@ -68,6 +68,7 @@ trap _handle_interrupt INT TERM
 # Source libraries (note: state.sh uses BUSIBOX_ENV for state file path)
 # We'll manage our own state file path after ENVIRONMENT is determined
 source "${SCRIPT_DIR}/../lib/ui.sh"
+source "${SCRIPT_DIR}/../lib/prereqs.sh"
 source "${SCRIPT_DIR}/../lib/profiles.sh"
 source "${SCRIPT_DIR}/../lib/state.sh"
 source "${SCRIPT_DIR}/../lib/vault.sh"    # Must be before github.sh for vault functions
@@ -4163,11 +4164,8 @@ check_prerequisites() {
         fi
         
         # Ansible
-        if ! command -v ansible-playbook &>/dev/null; then
-            error "Ansible is not installed"
+        if ! ensure_ansible; then
             ((errors++))
-        else
-            success "Ansible available"
         fi
     elif [[ "$PLATFORM" == "k8s" ]]; then
         # kubectl
@@ -4209,11 +4207,11 @@ check_prerequisites() {
     
     # Common checks
     
-    # Ansible (required for both platforms now)
-    if ! command -v ansible-playbook &>/dev/null; then
-        warn "Ansible not installed - some features may not work"
-    else
-        success "Ansible available"
+    # Ansible (required for docker and proxmox deployments)
+    if [[ "$PLATFORM" != "k8s" ]]; then
+        if ! ensure_ansible; then
+            ((errors++))
+        fi
     fi
     
     # RAM check (skip on Proxmox as containers have separate resources)
