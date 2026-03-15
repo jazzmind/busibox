@@ -129,15 +129,6 @@
     state: absent
   delegate_to: "{{ app_to_deploy.container_ip }}"
 
-- name: Create .npmrc for GitHub Packages authentication
-  copy:
-    content: |
-      @jazzmind:registry=https://npm.pkg.github.com
-      //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
-    dest: "{{ app_to_deploy.deploy_path }}/.npmrc"
-    mode: '0600'
-  delegate_to: "{{ app_to_deploy.container_ip }}"
-
 - name: Clean npm cache and node_modules
   shell: |
     cd {{ app_to_deploy.deploy_path }}

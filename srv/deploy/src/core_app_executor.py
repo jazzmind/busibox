@@ -455,22 +455,9 @@ async def deploy_core_app(
             logs.append(f"⚠️ No GitHub token - attempting public clone")
             repo_url = f"https://github.com/{repo}.git"
         
-        npmrc_commands = ""
-        if github_token:
-            token_preview = f"{github_token[:4]}...{github_token[-4:]}" if len(github_token) > 8 else "***"
-            logs.append(f"📝 Setting up .npmrc with token: {token_preview}")
-            npmrc_commands = f"""
-            echo "=== NPMRC SETUP START ==="
-            cat > /root/.npmrc << 'NPMRC_EOF'
-//npm.pkg.github.com/:_authToken={github_token}
-@jazzmind:registry=https://npm.pkg.github.com
-NPMRC_EOF
-            echo "npmrc created at /root/.npmrc"
-            echo "=== NPMRC SETUP END ==="
-            """
-        else:
-            npmrc_commands = """
-            echo "=== WARNING: No GitHub token provided - private packages will fail! ==="
+        # @jazzmind/busibox-app is public on npmjs.org - no npm auth needed
+        npmrc_commands = """
+            echo "=== Using public npmjs.org registry for @jazzmind packages ==="
             """
         
         env_exports = ""
@@ -541,9 +528,6 @@ NPMRC_EOF
             else
                 echo "DEBUG: pnpm already available at $(which pnpm) version $(pnpm --version)"
             fi
-            
-            # Set GITHUB_AUTH_TOKEN for .npmrc interpolation
-            export GITHUB_AUTH_TOKEN='{github_token}'
             
             # Clean stale node_modules to prevent duplicate React instances
             echo "=== CLEANING STALE DEPS ==="

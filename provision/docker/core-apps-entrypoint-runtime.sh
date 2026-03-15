@@ -63,14 +63,8 @@ log_success() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] SUCCESS: $*"; }
 # NPM/pnpm Authentication Setup
 # =============================================================================
 setup_npm_auth() {
-    if [ -n "${GITHUB_AUTH_TOKEN:-}" ]; then
-        log_info "Setting up npm authentication for @jazzmind packages..."
-        echo "//npm.pkg.github.com/:_authToken=${GITHUB_AUTH_TOKEN}" > /root/.npmrc
-        echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc
-        log_success "npm authentication configured"
-    else
-        log_info "GITHUB_AUTH_TOKEN not set - using public access (repos are public)"
-    fi
+    # @jazzmind/busibox-app is public on npmjs.org - no auth needed for install
+    log_info "Using public npmjs.org registry for @jazzmind packages (no auth needed)"
 }
 
 # =============================================================================

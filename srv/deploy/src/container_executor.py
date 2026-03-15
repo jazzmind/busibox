@@ -342,33 +342,24 @@ async def recreate_user_apps_with_volumes(dev_app_ids: Set[str], logs: List[str]
     # Run new container with all volume mounts
     logs.append(f"🚀 Starting {USER_APPS_CONTAINER} with app volumes...")
     
-    # Get GitHub token for npm authentication (needed for @jazzmind/busibox-app)
-    github_token = os.environ.get("GITHUB_AUTH_TOKEN", "")
-    
     # Build compose project name for labels
     compose_project = os.environ.get("COMPOSE_PROJECT_NAME", f"{CONTAINER_PREFIX}-busibox")
     
     # Build environment args
     env_args = ['-e', 'NODE_ENV=development']
-    if github_token:
-        env_args.extend(['-e', f'GITHUB_AUTH_TOKEN={github_token}'])
     
     # Entrypoint script that:
-    # 1. Sets up npm auth for GitHub Packages
-    # 2. Installs required tools (git, curl, procps, supervisor)
-    # 3. Creates supervisor directories
-    # 4. Patches the Debian-default supervisord.conf to add nodaemon=true
-    # 5. Starts supervisord as PID 1
+    # 1. Installs required tools (git, curl, procps, supervisor)
+    # 2. Creates supervisor directories
+    # 3. Patches the Debian-default supervisord.conf to add nodaemon=true
+    # 4. Starts supervisord as PID 1
     #
-    # NOTE: The Debian `supervisor` package installs a working config at
+    # NOTE: @jazzmind/busibox-app is public on npmjs.org - no npm auth needed.
+    # The Debian `supervisor` package installs a working config at
     # /etc/supervisor/supervisord.conf with [include] for conf.d/*.conf.
     # We only need to add `nodaemon=true` so supervisord stays in foreground
     # as PID 1 (required for Docker containers).
     entrypoint_script = (
-        'if [ -n "$GITHUB_AUTH_TOKEN" ]; then '
-        'echo "//npm.pkg.github.com/:_authToken=$GITHUB_AUTH_TOKEN" > /root/.npmrc && '
-        'echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc; '
-        'fi && '
         'apt-get update && apt-get install -y --no-install-recommends git curl procps supervisor && '
         'mkdir -p /var/log/user-apps /var/log/supervisor /etc/supervisor/conf.d && '
         # Patch Debian default config: add nodaemon=true and redirect log to stdout
@@ -928,7 +919,7 @@ async def install_dependencies(app_path: str, logs: List[str], github_token: Opt
     Args:
         app_path: Path to the app directory
         logs: List to append log messages
-        github_token: Optional GitHub token for npm authentication with GitHub Package Registry
+        github_token: Optional GitHub token (no longer needed for @jazzmind packages - public on npmjs.org)
     """
     logs.append(f"📦 Installing dependencies...")
     
@@ -940,69 +931,11 @@ async def install_dependencies(app_path: str, logs: List[str], github_token: Opt
         logs.append("⚠️ No package.json found, skipping npm install")
         return True
     
-    # Resolve token with fallbacks so npm auth works in dev/proxy deploy paths too.
-    resolved_token = (
-        github_token
-        or os.environ.get("GITHUB_AUTH_TOKEN", "")
-        or os.environ.get("GITHUB_TOKEN", "")
-        or os.environ.get("GH_TOKEN", "")
-    )
-
-    # Set up npm authentication for GitHub Package Registry if token provided
-    # This is needed for private packages like @jazzmind/busibox-app
-    if resolved_token:
-        logs.append("🔐 Setting up npm authentication for GitHub Package Registry...")
-        # Create .npmrc with GitHub token for authentication
-        npmrc_setup = f"""
-echo "//npm.pkg.github.com/:_authToken={resolved_token}" > /root/.npmrc && \
-echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc
-"""
-        stdout, stderr, code = await execute_in_container(npmrc_setup)
-        if code != 0:
-            logs.append(f"⚠️ Failed to set up npm auth: {stderr or stdout}")
-            # Continue anyway - might not need private packages
-        else:
-            logs.append("✅ npm auth configured")
-    else:
-        # Fall back to environment variable if no token passed
-        env_token = (
-            os.environ.get("GITHUB_AUTH_TOKEN", "")
-            or os.environ.get("GITHUB_TOKEN", "")
-            or os.environ.get("GH_TOKEN", "")
-        )
-        if env_token:
-            logs.append("🔐 Using GITHUB_AUTH_TOKEN from environment for npm auth...")
-            npmrc_setup = f"""
-echo "//npm.pkg.github.com/:_authToken={env_token}" > /root/.npmrc && \
-echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc
-"""
-            stdout, stderr, code = await execute_in_container(npmrc_setup)
-            if code != 0:
-                logs.append(f"⚠️ Failed to set up npm auth: {stderr or stdout}")
-            else:
-                logs.append("✅ npm auth configured from environment")
-        else:
-            logs.append("⚠️ No GitHub token available for npm auth - private packages may fail")
-    
     # Check for package-lock.json to decide between npm ci and npm install
     check_lock_cmd = f"test -f {app_path}/package-lock.json"
     _, _, lock_exists = await execute_in_container(check_lock_cmd)
     
-    # Determine which token to use for npm auth (project .npmrc uses ${GITHUB_AUTH_TOKEN} env var)
-    effective_token = (
-        resolved_token
-        or os.environ.get("GITHUB_AUTH_TOKEN", "")
-        or os.environ.get("GITHUB_TOKEN", "")
-        or os.environ.get("GH_TOKEN", "")
-    )
-    logs.append(f"🔑 npm token available: {'yes' if bool(effective_token) else 'no'}")
-    
-    # Build the npm command with GITHUB_AUTH_TOKEN env var
-    # This is needed because project-level .npmrc files reference ${GITHUB_AUTH_TOKEN}
-    token_env = (
-        f'GITHUB_AUTH_TOKEN="{effective_token}" GITHUB_TOKEN="{effective_token}" GH_TOKEN="{effective_token}" '
-        if effective_token else ''
-    )
+    token_env = ''
     
     if lock_exists == 0:
         # Has package-lock.json, use npm ci for reproducible builds

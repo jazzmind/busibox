@@ -36,15 +36,7 @@ RUN npm install -g pnpm turbo
 RUN mkdir -p /srv/busibox-frontend \
     /var/log
 
-# Set up npm authentication for private GitHub packages
-ARG GITHUB_AUTH_TOKEN
-RUN if [ -n "$GITHUB_AUTH_TOKEN" ]; then \
-        echo "Setting up npm authentication for @jazzmind packages..." && \
-        echo "//npm.pkg.github.com/:_authToken=${GITHUB_AUTH_TOKEN}" > /root/.npmrc && \
-        echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc; \
-    else \
-        echo "WARNING: GITHUB_AUTH_TOKEN not set - npm install may fail for @jazzmind packages"; \
-    fi
+# @jazzmind/busibox-app is public on npmjs.org - no auth needed for install
 
 # Copy monorepo entrypoint script and process manager
 COPY core-apps-entrypoint-monorepo.sh /usr/local/bin/core-apps-entrypoint.sh

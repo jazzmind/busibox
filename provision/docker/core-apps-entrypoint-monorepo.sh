@@ -5,10 +5,8 @@ MODE="${1:-dev}"
 ROOT_DIR="/srv/busibox-frontend"
 
 setup_npm_auth() {
-  if [ -n "${GITHUB_AUTH_TOKEN:-}" ]; then
-    echo "//npm.pkg.github.com/:_authToken=${GITHUB_AUTH_TOKEN}" > /root/.npmrc
-    echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc
-  fi
+  # @jazzmind/busibox-app is public on npmjs.org - no auth needed for install
+  true
 }
 
 install_workspace_deps() {
