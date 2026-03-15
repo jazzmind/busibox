@@ -537,12 +537,7 @@ docker-up:
 	$(eval LITELLM_MASTER_KEY := $(or $(LITELLM_API_KEY),$(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_master_key 2>/dev/null || echo ""')))
 	$(eval LITELLM_SALT_KEY := $(or $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_salt_key 2>/dev/null || echo ""'),$(LITELLM_MASTER_KEY)))
 	@if [ -z "$(GITHUB_AUTH_TOKEN)" ]; then \
-		echo "[ERROR] No GitHub token found"; \
-		echo ""; \
-		echo "Set GITHUB_AUTH_TOKEN with: export GITHUB_AUTH_TOKEN=ghp_your_token"; \
-		echo "Create a token at: https://github.com/settings/tokens/new"; \
-		echo "Required scopes: repo, read:packages"; \
-		exit 1; \
+		echo "[WARN] No GitHub token found (repos are public, continuing without it)"; \
 	fi
 ifneq ($(DEV_APPS_DIR),)
 	@echo "Dev Apps Directory: $(DEV_APPS_DIR)"
@@ -677,12 +672,7 @@ docker-build: ssl-check
 	$(eval LITELLM_MASTER_KEY := $(or $(LITELLM_API_KEY),$(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_master_key 2>/dev/null || echo ""')))
 	$(eval LITELLM_SALT_KEY := $(or $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_salt_key 2>/dev/null || echo ""'),$(LITELLM_MASTER_KEY)))
 	@if [ -z "$(GITHUB_AUTH_TOKEN)" ]; then \
-		echo "[ERROR] No GitHub token found"; \
-		echo ""; \
-		echo "Set GITHUB_AUTH_TOKEN with: export GITHUB_AUTH_TOKEN=ghp_your_token"; \
-		echo "Create a token at: https://github.com/settings/tokens/new"; \
-		echo "Required scopes: repo, read:packages"; \
-		exit 1; \
+		echo "[WARN] No GitHub token found (repos are public, continuing without it)"; \
 	fi
 	@echo "Building with version: $(GIT_COMMIT) (ENV=$(ENV), overlay=$(notdir $(COMPOSE_OVERLAY)))"
 ifdef SERVICE
