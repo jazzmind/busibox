@@ -171,12 +171,15 @@ def _audience_for_purpose(purpose: str, scopes: List[str]) -> str:
     (TokenGrant is keyed on scopes), while still ensuring tokens are audience-bound.
 
     Audience mapping:
-      data.*   → data-api
-      search.* → search-api
-      rag.*    → search-api
-      authz.*  → authz-api
-      task.*   → agent-api  (tasks live on agent-api)
-      *        → agent-api  (fallback)
+      data.*    → data-api
+      search.*  → search-api
+      rag.*     → search-api
+      authz.*   → authz-api
+      config.*  → config-api
+      bridge.*  → config-api   (bridge settings stored via config-api)
+      deploy.*  → deploy-api
+      task.*    → agent-api    (tasks live on agent-api)
+      *         → agent-api    (fallback)
     """
     p = (purpose or "").lower()
     if "authz" in p:
@@ -185,6 +188,10 @@ def _audience_for_purpose(purpose: str, scopes: List[str]) -> str:
         return "data-api"
     if "search" in p or "rag" in p:
         return "search-api"
+    if "config" in p or "bridge" in p:
+        return "config-api"
+    if "deploy" in p:
+        return "deploy-api"
     # fallback: infer by scope prefix
     for s in scopes:
         if s.startswith("authz."):
@@ -193,6 +200,10 @@ def _audience_for_purpose(purpose: str, scopes: List[str]) -> str:
             return "data-api"
         if s.startswith("search."):
             return "search-api"
+        if s.startswith("config.") or s.startswith("bridge."):
+            return "config-api"
+        if s.startswith("deploy."):
+            return "deploy-api"
     return "agent-api"
 
 
