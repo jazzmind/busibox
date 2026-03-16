@@ -90,7 +90,7 @@ for db in "${DATABASES[@]}"; do
         echo -n "  ${db}: "
         
         # Try to connect and run a simple query
-        if ssh root@${PG_IP} "PGPASSWORD='REDACTED_PASSWORD' psql -U ${PG_USER} -h localhost -d ${db} -c 'SELECT 1;' > /dev/null 2>&1"; then
+        if ssh root@${PG_IP} "PGPASSWORD='\${PG_PASSWORD}' psql -U ${PG_USER} -h localhost -d ${db} -c 'SELECT 1;' > /dev/null 2>&1"; then
             echo "✓ Can connect"
         else
             echo "✗ Cannot connect (check password/privileges)"
