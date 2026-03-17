@@ -1,10 +1,12 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Apply to busibox namespace
+# Production overlay for Rackspace Spot
+# Storage: ssd-large (50Gi) + sata-large (75Gi) = ~$4.50/mo
+# For staging (minimum storage), use rackspace-spot-staging overlay instead
+
 namespace: busibox
 
-# Labels for all resources
 labels:
   - pairs:
       environment: rackspace-spot
@@ -13,13 +15,8 @@ labels:
 resources:
   - ../../base
 
-# Images pulled from in-cluster registry (localhost:30500)
-# No image overrides needed - base manifests already point to localhost:30500
-
-# Patches for Rackspace Spot specific adjustments
 patches:
-  # Adjust resource limits for the single-node setup (60GB RAM, 8 CPU)
-  # Milvus needs less since it's a smaller deployment
+  # Milvus - production sizing
   - target:
       kind: Deployment
       name: milvus
@@ -31,7 +28,7 @@ patches:
         path: /spec/template/spec/containers/0/resources/requests/memory
         value: 2Gi
 
-  # PostgreSQL - moderate sizing
+  # PostgreSQL - production sizing
   - target:
       kind: Deployment
       name: postgres

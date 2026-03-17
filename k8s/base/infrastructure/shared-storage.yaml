@@ -3,13 +3,15 @@
 # =========================
 # Two shared PVCs for the entire cluster. Services use subPath to isolate
 # their data within the shared volume. This minimizes the number of Cinder
-# volumes and keeps costs low on Rackspace Spot Gen-2 (us-east-iad).
+# volumes and keeps costs low on Rackspace Spot.
 #
-# Available storage classes:
-#   ssd:  SSD-backed block storage
-#   sata: SATA-backed block storage (lower cost)
+# Rackspace Spot Gen-1 storage class size ranges:
+#   ssd:        5-20 GB   ($0.06/GB-mo)
+#   ssd-large:  >= 50 GB  ($0.06/GB-mo)  -- gap: 20-50 GB not supported
+#   sata:       5-20 GB   ($0.02/GB-mo)
+#   sata-large: >= 75 GB  ($0.02/GB-mo)  -- gap: 20-75 GB not supported
 #
-# Total: 50GB SSD + 100GB SATA
+# Total: 50GB SSD + 75GB SATA = ~$4.50/mo
 
 # Database SSD - postgres, milvus, neo4j, etcd
 # SSD for database workloads requiring higher IOPS
@@ -22,7 +24,7 @@ metadata:
     storage-role: database
 spec:
   accessModes: ["ReadWriteOnce"]
-  storageClassName: ssd
+  storageClassName: ssd-large
   resources:
     requests:
       storage: 50Gi
@@ -38,7 +40,7 @@ metadata:
     storage-role: objects
 spec:
   accessModes: ["ReadWriteOnce"]
-  storageClassName: sata
+  storageClassName: sata-large
   resources:
     requests:
-      storage: 100Gi
+      storage: 75Gi

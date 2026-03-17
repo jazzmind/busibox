@@ -212,8 +212,8 @@ wait_for_rollout() {
 
     local start_time=$SECONDS
     local all_ready=false
-    # Track which resources we've already printed as ready
-    declare -A already_ready
+    # Track which resources we've already printed as ready (space-delimited string, bash 3 compat)
+    local _ready_list=" "
 
     while [[ $(( SECONDS - start_time )) -lt $timeout ]]; do
         local pending=()
@@ -221,11 +221,11 @@ wait_for_rollout() {
         for resource in "${resources[@]}"; do
             local name="${resource##*/}"
             # Skip if already reported ready
-            [[ -n "${already_ready[$name]:-}" ]] && continue
+            case "$_ready_list" in *" ${name} "*) continue ;; esac
             # Quick check: is rollout complete?
             if kctl rollout status "$resource" -n "${NAMESPACE}" --timeout=2s &>/dev/null; then
                 echo "  ✓ ${name}"
-                already_ready[$name]=1
+                _ready_list="${_ready_list}${name} "
             else
                 pending+=("$resource")
             fi
