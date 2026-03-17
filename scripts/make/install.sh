@@ -1445,7 +1445,7 @@ generate_secrets() {
     # Salt key is separate from master key so master key rotation doesn't
     # invalidate encrypted model/credential data in LiteLLM's DB.
     export LITELLM_SALT_KEY="salt-$(openssl rand -hex 24)"
-    export MINIO_ACCESS_KEY="minioadmin"
+    export MINIO_ACCESS_KEY="busibox-minio-admin"
     export MINIO_SECRET_KEY=$(openssl rand -base64 24 | tr -d '/+=')
     
     # Email/SMTP defaults (can be overridden)
@@ -1510,27 +1510,27 @@ DOCKER_DEV_MODE=${DOCKER_DEV_MODE:-local-dev}
 # Database Credentials
 # =============================================================================
 POSTGRES_USER=${POSTGRES_USER:-busibox_user}
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-devpassword}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
 
 # =============================================================================
 # MinIO Credentials
 # =============================================================================
-MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-minioadmin}
-MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-minioadmin}
-MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
-MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+MINIO_ROOT_USER=${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set}
+MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set}
+MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set}
+MINIO_SECRET_KEY=${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set}
 
 # =============================================================================
 # Authentication
 # =============================================================================
-AUTHZ_MASTER_KEY=${AUTHZ_MASTER_KEY:-dev-master-key-change-me}
-SSO_JWT_SECRET=${SSO_JWT_SECRET:-dev-jwt-secret-change-me}
+AUTHZ_MASTER_KEY=${AUTHZ_MASTER_KEY:?AUTHZ_MASTER_KEY must be set}
+SSO_JWT_SECRET=${SSO_JWT_SECRET:?SSO_JWT_SECRET must be set}
 
 # =============================================================================
 # LiteLLM
 # =============================================================================
-LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-dev-litellm-key}
-LITELLM_API_KEY=${LITELLM_API_KEY:-sk-dev-litellm-key}
+LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set}
+LITELLM_API_KEY=${LITELLM_API_KEY:?LITELLM_API_KEY must be set}
 LITELLM_SALT_KEY=${LITELLM_SALT_KEY:-}
 EOF
 
@@ -1953,7 +1953,8 @@ bootstrap_docker_ansible() {
     # Helper function to run ansible with proper output handling
     run_ansible() {
         local tags="$1"
-        local log_file="${REPO_ROOT}/.ansible-${container_prefix}-${tags}.log"
+        mkdir -p "${REPO_ROOT}/.busibox/logs"
+        local log_file="${REPO_ROOT}/.busibox/logs/ansible-${container_prefix}-${tags}.log"
         
         # Build skip-tags list based on phases before FIRST_UNHEALTHY_PHASE
         # This prevents Ansible from running tasks in healthy phases during reinstall
@@ -2465,7 +2466,8 @@ bootstrap_proxmox_ansible() {
     # Uses the same approach as Docker bootstrap - always show full output with tee
     run_ansible_proxmox() {
         local tags="$1"
-        local log_file="${REPO_ROOT}/.ansible-${inventory_name}-${tags}.log"
+        mkdir -p "${REPO_ROOT}/.busibox/logs"
+        local log_file="${REPO_ROOT}/.busibox/logs/ansible-${inventory_name}-${tags}.log"
         local exit_code=0
         
         echo ""

@@ -36,7 +36,8 @@ spec:
     spec:
       containers:
         - name: embedding-api
-          image: localhost:30500/embedding-api:latest
+          image: ghcr.io/jazzmind/busibox/embedding-api:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8005
           env:

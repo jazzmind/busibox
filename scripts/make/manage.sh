@@ -59,13 +59,23 @@ done
 # Backend Detection (profile-aware, with argument overrides)
 # ============================================================================
 
-# Active profile info
-_active_profile=$(profile_get_active)
+# Active profile info.
+# BUSIBOX_ENV / BUSIBOX_BACKEND env vars take precedence over profiles.json
+# to prevent multi-instance CLI races.
+if [[ -n "${BUSIBOX_ENV:-}" && -n "${BUSIBOX_BACKEND:-}" ]]; then
+    _active_profile=""
+else
+    _active_profile=$(profile_get_active)
+fi
 
 get_current_env() {
     # Prefer explicit argument from launcher
     if [[ -n "$_ARG_ENV" ]]; then
         echo "$_ARG_ENV"
+        return
+    fi
+    if [[ -n "${BUSIBOX_ENV:-}" ]]; then
+        echo "$BUSIBOX_ENV"
         return
     fi
     if [[ -n "$_active_profile" ]]; then
@@ -75,7 +85,7 @@ get_current_env() {
     local env
     env=$(get_state "ENVIRONMENT")
     if [[ -z "$env" ]]; then
-        env="${BUSIBOX_ENV:-development}"
+        env="development"
     fi
     echo "$env"
 }
@@ -85,6 +95,8 @@ get_backend_type() {
     # Prefer explicit argument from launcher
     if [[ -n "$_ARG_BACKEND" ]]; then
         backend="$_ARG_BACKEND"
+    elif [[ -n "${BUSIBOX_BACKEND:-}" ]]; then
+        backend="$BUSIBOX_BACKEND"
     elif [[ -n "$_active_profile" ]]; then
         backend=$(profile_get "$_active_profile" "backend")
     else

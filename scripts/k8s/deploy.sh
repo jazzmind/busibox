@@ -56,7 +56,7 @@ fi
 
 OVERLAY="${OVERLAY:-rackspace-spot}"
 NAMESPACE="busibox"
-REGISTRY="localhost:30500"
+REGISTRY="${REGISTRY:-ghcr.io/jazzmind/busibox}"
 REGISTRY_INTERNAL="registry.busibox.svc.cluster.local:5000"
 
 # Determine kubeconfig: profile > KUBECONFIG env > fallback
@@ -93,6 +93,7 @@ DO_STATUS=false
 DO_DELETE=false
 DO_SECRETS=false
 DO_CLEAN_STORAGE=false
+DO_TRIGGER_BUILD=false
 SERVICE_FILTER=""  # Empty = all services, otherwise specific image name
 
 # ============================================================================
@@ -106,9 +107,11 @@ while [[ $# -gt 0 ]]; do
         --kubeconfig) KUBECONFIG_FILE="$2"; shift 2 ;;
         --sync) DO_SYNC=true; shift ;;
         --build) DO_BUILD=true; shift ;;
+        --trigger-build) DO_TRIGGER_BUILD=true; shift ;;
         --apply) DO_APPLY=true; shift ;;
         --service) SERVICE_FILTER="$2"; shift 2 ;;
-        --all) DO_SYNC=true; DO_BUILD=true; DO_APPLY=true; DO_SECRETS=true; shift ;;
+        --all) DO_TRIGGER_BUILD=true; DO_APPLY=true; DO_SECRETS=true; shift ;;
+        --legacy-build) DO_SYNC=true; DO_BUILD=true; shift ;;
         --clean-storage) DO_CLEAN_STORAGE=true; shift ;;
         --status) DO_STATUS=true; shift ;;
         --delete) DO_DELETE=true; shift ;;
@@ -120,12 +123,14 @@ while [[ $# -gt 0 ]]; do
             echo "  --overlay NAME     Kustomize overlay (default: rackspace-spot)"
             echo "  --tag TAG          Image tag (default: git short SHA)"
             echo "  --kubeconfig PATH  Kubeconfig file path"
-            echo "  --sync             Sync source code to in-cluster build server"
-            echo "  --build            Build images on in-cluster build server"
-            echo "  --apply            Apply Kubernetes manifests"
-            echo "  --service NAME     Build only a specific service (e.g., authz-api)"
+            echo "  --trigger-build    Trigger GitHub Actions image build and wait for completion"
+            echo "  --apply            Apply Kubernetes manifests and rollout restart"
+            echo "  --service NAME     Build/rollout only a specific service (e.g., authz-api)"
             echo "  --secrets          Generate and apply secrets from vault"
-            echo "  --all              Sync, build, generate secrets, and apply"
+            echo "  --all              Trigger build, generate secrets, apply, and rollout"
+            echo "  --legacy-build     Sync code + build on in-cluster build server (old method)"
+            echo "  --sync             Sync source code to in-cluster build server (legacy)"
+            echo "  --build            Build images on in-cluster build server (legacy)"
             echo "  --clean-storage    Delete deployments + PVCs (for resizing/migrating volumes)"
             echo "  --status           Show deployment status"
             echo "  --delete           Delete all busibox resources"
@@ -137,7 +142,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # If no action specified, show help
-if ! $DO_SYNC && ! $DO_BUILD && ! $DO_APPLY && ! $DO_STATUS && ! $DO_DELETE && ! $DO_SECRETS && ! $DO_CLEAN_STORAGE; then
+if ! $DO_SYNC && ! $DO_BUILD && ! $DO_APPLY && ! $DO_STATUS && ! $DO_DELETE && ! $DO_SECRETS && ! $DO_CLEAN_STORAGE && ! $DO_TRIGGER_BUILD; then
     echo "No action specified. Use --help for usage."
     exit 1
 fi
@@ -312,9 +317,10 @@ wait_for_build_server() {
 
 build_server_exec() {
     # Execute a command on the build server pod
+    # Uses a 15-minute timeout to prevent hanging on stale connections
     local pod_name
     pod_name=$(get_build_server_pod)
-    kctl exec "${pod_name}" -n "${NAMESPACE}" -- "$@"
+    kctl exec --request-timeout=900s "${pod_name}" -n "${NAMESPACE}" -- "$@"
 }
 
 # ============================================================================
@@ -368,7 +374,15 @@ sync_to_build_server() {
         # Use tar pipe to copy files efficiently
         # This is faster than kubectl cp for large directories as it avoids
         # per-file overhead and handles deletions properly
-        tar -C "${REPO_ROOT}" -cf - "${dir}" | \
+        tar -C "${REPO_ROOT}" -cf - \
+            --exclude='test_venv' \
+            --exclude='.venv' \
+            --exclude='__pycache__' \
+            --exclude='node_modules' \
+            --exclude='.pytest_cache' \
+            --exclude='*.egg-info' \
+            --exclude='.mypy_cache' \
+            "${dir}" | \
             kctl exec -i "${pod_name}" -n "${NAMESPACE}" -- \
             tar -C /workspace -xf -
     done
@@ -454,12 +468,14 @@ generate_secrets() {
     local secrets_file="${REPO_ROOT}/k8s/secrets/secrets.yaml"
 
     # Try to get secrets from vault
-    local postgres_password="devpassword"
-    local minio_access_key="minioadmin"
-    local minio_secret_key="minioadmin"
-    local authz_master_key="local-master-key-change-in-production"
+    local postgres_password=""
+    local minio_access_key=""
+    local minio_secret_key=""
+    local authz_master_key=""
     local litellm_api_key=""
     local litellm_master_key=""
+    local neo4j_password=""
+    local config_encryption_key=""
     local admin_emails=""
     local openai_api_key=""
     local anthropic_api_key=""
@@ -508,11 +524,27 @@ generate_secrets() {
             anthropic_api_key=$(get_vault_secret "secrets.anthropic_api_key" 2>/dev/null || echo "$anthropic_api_key")
             bedrock_api_key=$(get_vault_secret "secrets.bedrock.api_key" 2>/dev/null || echo "$bedrock_api_key")
             aws_region_name=$(get_vault_secret "secrets.bedrock.region" 2>/dev/null || echo "$aws_region_name")
+            neo4j_password=$(get_vault_secret "secrets.neo4j.password" 2>/dev/null || echo "$neo4j_password")
+            config_encryption_key=$(get_vault_secret "secrets.encryption_key" 2>/dev/null || echo "$config_encryption_key")
+            [[ -z "$config_encryption_key" ]] && config_encryption_key=$(get_vault_secret "secrets.config_api.encryption_key" 2>/dev/null || echo "$config_encryption_key")
             [[ -z "$github_token" ]] && github_token=$(get_vault_secret "secrets.github.personal_access_token" 2>/dev/null || echo "")
             info "Secrets loaded from vault"
         else
-            warn "Could not access vault - using defaults"
+            error "Could not access vault - cannot generate K8s secrets without vault access"
+            exit 1
         fi
+    fi
+
+    # Fail if critical secrets are still empty
+    local _missing=()
+    [[ -z "$postgres_password" ]] && _missing+=("POSTGRES_PASSWORD")
+    [[ -z "$minio_access_key" ]] && _missing+=("MINIO_ACCESS_KEY")
+    [[ -z "$minio_secret_key" ]] && _missing+=("MINIO_SECRET_KEY")
+    [[ -z "$authz_master_key" ]] && _missing+=("AUTHZ_MASTER_KEY")
+    if [[ ${#_missing[@]} -gt 0 ]]; then
+        error "Missing critical secrets: ${_missing[*]}"
+        error "Ensure vault is configured and accessible before generating K8s secrets"
+        exit 1
     fi
 
     cat > "$secrets_file" <<EOF
@@ -531,6 +563,8 @@ stringData:
   AUTHZ_MASTER_KEY: "${authz_master_key}"
   LITELLM_API_KEY: "${litellm_api_key}"
   LITELLM_MASTER_KEY: "${litellm_master_key}"
+  NEO4J_PASSWORD: "${neo4j_password}"
+  CONFIG_ENCRYPTION_KEY: "${config_encryption_key}"
   ADMIN_EMAILS: "${admin_emails}"
   OPENAI_API_KEY: "${openai_api_key}"
   ANTHROPIC_API_KEY: "${anthropic_api_key}"
@@ -602,7 +636,6 @@ apply_manifests() {
 
     wait_for_rollout "Milvus" 180 \
         "deployment/etcd" \
-        "deployment/milvus-minio" \
         "deployment/milvus"
 
     wait_for_rollout "API Services" 300 \
@@ -614,6 +647,50 @@ apply_manifests() {
     success "Deployment applied successfully!"
     echo ""
     show_status
+}
+
+# ============================================================================
+# Trigger GitHub Actions image build (GHCR)
+# ============================================================================
+
+trigger_build_ghcr() {
+    if ! command -v gh &>/dev/null; then
+        error "GitHub CLI (gh) is required for --trigger-build. Install: https://cli.github.com/"
+        exit 1
+    fi
+
+    local workflow="build-images.yml"
+    local ref
+    ref=$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+
+    if [[ -n "$SERVICE_FILTER" ]]; then
+        info "Triggering GitHub Actions build for ${SERVICE_FILTER} on branch ${ref}..."
+        gh workflow run "$workflow" --repo jazzmind/busibox --ref "$ref" \
+            -f service="$SERVICE_FILTER"
+    else
+        info "Triggering GitHub Actions build for all services on branch ${ref}..."
+        gh workflow run "$workflow" --repo jazzmind/busibox --ref "$ref"
+    fi
+
+    info "Waiting for workflow run to start..."
+    sleep 5
+
+    local run_id
+    run_id=$(gh run list --repo jazzmind/busibox --workflow "$workflow" \
+        --branch "$ref" --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null)
+
+    if [[ -z "$run_id" || "$run_id" == "null" ]]; then
+        warn "Could not find workflow run. Check GitHub Actions manually."
+        return 0
+    fi
+
+    info "Watching workflow run ${run_id}..."
+    gh run watch "$run_id" --repo jazzmind/busibox --exit-status || {
+        error "GitHub Actions build failed. Check: https://github.com/jazzmind/busibox/actions/runs/${run_id}"
+        exit 1
+    }
+
+    success "Images built and pushed to GHCR"
 }
 
 # ============================================================================
@@ -695,7 +772,7 @@ clean_storage() {
     kctl delete statefulsets --all -n "${NAMESPACE}" --ignore-not-found 2>/dev/null || true
 
     info "Deleting Deployments that use persistent storage..."
-    for dep in postgres etcd milvus-minio milvus neo4j minio; do
+    for dep in postgres etcd milvus neo4j minio; do
         kctl delete deployment "$dep" -n "${NAMESPACE}" --ignore-not-found 2>/dev/null || true
     done
 
@@ -789,22 +866,28 @@ if ! kctl cluster-info &>/dev/null; then
 fi
 info "Cluster connection verified"
 
-# Execute requested actions (order matters: clean -> sync -> build -> push -> secrets -> apply)
+# Execute requested actions
 $DO_CLEAN_STORAGE && clean_storage
+
+# Trigger GHCR build via GitHub Actions
+$DO_TRIGGER_BUILD && trigger_build_ghcr
+
+# Legacy in-cluster build (--legacy-build or explicit --sync/--build)
 $DO_SYNC && sync_to_build_server
 if $DO_BUILD; then
-    # Sync is required before build if not explicitly done
     if ! $DO_SYNC; then
         warn "Building without --sync. Ensure code is already synced."
     fi
     build_images_remote
     push_images_remote
 fi
+
 $DO_SECRETS && generate_secrets
+
 if $DO_APPLY; then
     apply_manifests
-    # Rollout restart services if we built new images
-    if $DO_BUILD; then
+    # Rollout restart services to pull latest images
+    if $DO_TRIGGER_BUILD || $DO_BUILD; then
         if [[ -n "$SERVICE_FILTER" ]]; then
             rollout_service "$SERVICE_FILTER"
         else
@@ -816,6 +899,7 @@ if $DO_APPLY; then
         fi
     fi
 fi
+
 $DO_STATUS && show_status
 $DO_DELETE && delete_all
 

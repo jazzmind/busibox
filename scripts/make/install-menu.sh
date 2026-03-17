@@ -31,8 +31,13 @@ source "${SCRIPT_DIR}/../lib/backends/common.sh"
 # Initialize profiles
 profile_init
 
-# Active profile info
-_active_profile=$(profile_get_active)
+# Active profile info.
+# BUSIBOX_ENV / BUSIBOX_BACKEND env vars take precedence for multi-instance safety.
+if [[ -n "${BUSIBOX_ENV:-}" && -n "${BUSIBOX_BACKEND:-}" ]]; then
+    _active_profile=""
+else
+    _active_profile=$(profile_get_active)
+fi
 
 # Flags
 DIRECT_MODE=false

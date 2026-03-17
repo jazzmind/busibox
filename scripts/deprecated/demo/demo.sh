@@ -87,7 +87,7 @@ wait_for_healthy local-postgres 60
 show_stage 28 "Starting Milvus vector database" \
     "Enterprise vector search. Find documents by meaning, not keywords."
 
-docker compose -f docker-compose.yml up -d etcd milvus-minio milvus
+docker compose -f docker-compose.yml up -d etcd milvus
 wait_for_healthy local-milvus 120
 
 show_stage 38 "Starting Redis & MinIO" \

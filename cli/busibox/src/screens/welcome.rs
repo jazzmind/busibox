@@ -1,4 +1,4 @@
-use crate::app::{App, DeploymentState, ModelCacheCheckState, ModelCacheEntry, Screen};
+use crate::app::{App, DeploymentState, K8sClusterStatus, K8sClusterUpdate, ModelCacheCheckState, ModelCacheEntry, Screen};
 use crate::modules::health::{self, HealthStatus, HealthUpdate};
 use crate::modules::models::ModelRecommendation;
 use crate::theme;
@@ -73,10 +73,15 @@ pub fn render(f: &mut Frame, app: &App) {
             };
             Span::styled(msg.as_str(), style)
         } else {
-            Span::styled(
-                " ↑/↓ Navigate  Enter Select  t Tunnel  s Sync  r Refresh  m Models  p Profiles  q Quit",
-                theme::muted(),
-            )
+            let is_k8s = app.active_profile()
+                .map(|(_, p)| p.backend == "k8s")
+                .unwrap_or(false);
+            let hint = if is_k8s {
+                " ↑/↓ Navigate  Enter Select  r Refresh  p Profiles  q Quit"
+            } else {
+                " ↑/↓ Navigate  Enter Select  t Tunnel  s Sync  r Refresh  m Models  p Profiles  q Quit"
+            };
+            Span::styled(hint, theme::muted())
         };
         let status = Paragraph::new(Line::from(status_text));
         f.render_widget(status, chunks[3]);
@@ -84,6 +89,169 @@ pub fn render(f: &mut Frame, app: &App) {
 }
 
 fn render_system_info(f: &mut Frame, app: &App, area: Rect) {
+    let is_k8s = app.active_profile()
+        .map(|(_, p)| p.backend == "k8s")
+        .unwrap_or(false);
+
+    let info_lines = if is_k8s {
+        render_k8s_system_info(app)
+    } else {
+        render_docker_proxmox_system_info(app)
+    };
+
+    let info_height = area.height.saturating_sub(2) as usize;
+    let info_lines_len = info_lines.len();
+    let scroll_y = if info_lines_len > info_height {
+        (info_lines_len - info_height) as u16
+    } else {
+        0
+    };
+
+    let title = if is_k8s { " Cluster " } else { " System " };
+    let info_block = Paragraph::new(info_lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(theme::dim())
+                .title(title)
+                .title_style(theme::heading()),
+        )
+        .scroll((scroll_y, 0));
+    f.render_widget(info_block, area);
+
+    if scroll_y > 0 {
+        let mut scrollbar_state =
+            ScrollbarState::new(info_lines_len).position(scroll_y as usize);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("↑"))
+            .end_symbol(Some("↓"));
+        f.render_stateful_widget(
+            scrollbar,
+            area.inner(Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut scrollbar_state,
+        );
+    }
+}
+
+fn render_k8s_system_info(app: &App) -> Vec<Line<'_>> {
+    let mut lines = Vec::new();
+
+    // Cluster connection status
+    lines.push(Line::from(Span::styled("Connection", theme::heading())));
+    lines.push(Line::from(""));
+
+    let (icon, status_text, status_style) = match &app.k8s_cluster_status {
+        K8sClusterStatus::Unknown => ("○", "Not checked", theme::dim()),
+        K8sClusterStatus::Checking => ("⠋", "Connecting...", theme::info()),
+        K8sClusterStatus::Connected => ("●", "Connected", theme::success()),
+        K8sClusterStatus::Disconnected => ("●", "Disconnected", theme::error()),
+        K8sClusterStatus::Error(_) => ("●", "Error", theme::error()),
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {icon} "), status_style),
+        Span::styled("Status:  ", theme::muted()),
+        Span::styled(status_text, status_style),
+    ]));
+
+    if let K8sClusterStatus::Error(ref e) = app.k8s_cluster_status {
+        let short = if e.len() > 35 { &e[..35] } else { e };
+        lines.push(Line::from(vec![
+            Span::styled("           ", theme::muted()),
+            Span::styled(short, theme::error()),
+        ]));
+    }
+
+    // Cluster details from profile
+    if let Some((_, profile)) = app.active_profile() {
+        let overlay = profile.k8s_overlay.as_deref().unwrap_or("rackspace-spot");
+        let kubeconfig = profile.kubeconfig.as_deref().unwrap_or("default");
+        let kc_display = kubeconfig.rsplit('/').next().unwrap_or(kubeconfig);
+
+        lines.push(Line::from(vec![
+            Span::styled("  Overlay: ", theme::muted()),
+            Span::styled(overlay, theme::info()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Config:  ", theme::muted()),
+            Span::styled(kc_display, theme::normal()),
+        ]));
+    }
+
+    // Node information from cluster check
+    if let Some(ref info) = app.k8s_cluster_info {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("Nodes", theme::heading())));
+        if info.node_info.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!("  {} node(s)", info.node_count),
+                theme::normal(),
+            )));
+        } else {
+            for node in &info.node_info {
+                let (icon, style) = if node.status == "Ready" {
+                    ("●", theme::success())
+                } else {
+                    ("●", theme::warning())
+                };
+                let name_display = if node.name.len() > 20 {
+                    format!("{}…", &node.name[..19])
+                } else {
+                    node.name.clone()
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {icon} "), style),
+                    Span::styled(name_display, theme::normal()),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("      ", theme::muted()),
+                    Span::styled(&node.status, style),
+                    Span::styled("  ", theme::muted()),
+                    Span::styled(&node.version, theme::dim()),
+                ]));
+            }
+        }
+
+        if !info.server_url.is_empty() {
+            lines.push(Line::from(""));
+            let url_display = if info.server_url.len() > 30 {
+                format!("{}…", &info.server_url[..29])
+            } else {
+                info.server_url.clone()
+            };
+            lines.push(Line::from(vec![
+                Span::styled("  Server: ", theme::muted()),
+                Span::styled(url_display, theme::dim()),
+            ]));
+        }
+    }
+
+    // Profile info
+    if let Some((id, profile)) = app.active_profile() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("Profile", theme::heading())));
+        lines.push(Line::from(vec![
+            Span::styled("  Name:  ", theme::muted()),
+            Span::styled(id, theme::info()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Env:   ", theme::muted()),
+            Span::styled(&profile.environment, theme::normal()),
+        ]));
+        if profile.spot_token.as_ref().map(|t| !t.is_empty()).unwrap_or(false) {
+            lines.push(Line::from(vec![
+                Span::styled("  Spot:  ", theme::muted()),
+                Span::styled("configured", theme::success()),
+            ]));
+        }
+    }
+
+    lines
+}
+
+fn render_docker_proxmox_system_info(app: &App) -> Vec<Line<'_>> {
     let mut info_lines = vec![
         Line::from(Span::styled("System Info", theme::heading())),
         Line::from(""),
@@ -221,40 +389,7 @@ fn render_system_info(f: &mut Frame, app: &App, area: Rect) {
         )));
     }
 
-    let info_height = area.height.saturating_sub(2) as usize;
-    let info_lines_len = info_lines.len();
-    let scroll_y = if info_lines_len > info_height {
-        (info_lines_len - info_height) as u16
-    } else {
-        0
-    };
-
-    let info_block = Paragraph::new(info_lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(theme::dim())
-                .title(" System ")
-                .title_style(theme::heading()),
-        )
-        .scroll((scroll_y, 0));
-    f.render_widget(info_block, area);
-
-    if scroll_y > 0 {
-        let mut scrollbar_state =
-            ScrollbarState::new(info_lines_len).position(scroll_y as usize);
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(Some("↑"))
-            .end_symbol(Some("↓"));
-        f.render_stateful_widget(
-            scrollbar,
-            area.inner(Margin {
-                vertical: 1,
-                horizontal: 0,
-            }),
-            &mut scrollbar_state,
-        );
-    }
+    info_lines
 }
 
 fn render_status_and_actions(f: &mut Frame, app: &App, area: Rect) {
@@ -269,6 +404,15 @@ fn render_status_and_actions(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_status_panel(f: &mut Frame, app: &App, area: Rect) {
+    let is_k8s = app.active_profile()
+        .map(|(_, p)| p.backend == "k8s")
+        .unwrap_or(false);
+
+    if is_k8s {
+        render_k8s_status_panel(f, app, area);
+        return;
+    }
+
     let tick = app.health_tick;
     let spinner_char = SPINNER[tick % SPINNER.len()];
 
@@ -456,6 +600,96 @@ fn render_status_panel(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled(" (cpu)", theme::dim()),
             ]));
         }
+    }
+
+    let panel = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme::dim())
+            .title(" Status ")
+            .title_style(theme::heading()),
+    );
+    f.render_widget(panel, area);
+}
+
+fn render_k8s_status_panel(f: &mut Frame, app: &App, area: Rect) {
+    let mut lines: Vec<Line> = Vec::new();
+    let tick = app.health_tick;
+    let spinner_char = SPINNER[tick % SPINNER.len()];
+
+    match &app.k8s_cluster_status {
+        K8sClusterStatus::Unknown => {
+            lines.push(Line::from(Span::styled(
+                "  Press 'r' to check cluster status",
+                theme::muted(),
+            )));
+        }
+        K8sClusterStatus::Checking => {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {spinner_char} "), theme::info()),
+                Span::styled("Checking cluster...", theme::muted()),
+            ]));
+        }
+        K8sClusterStatus::Connected => {
+            lines.push(Line::from(vec![
+                Span::styled("  ● ", theme::success()),
+                Span::styled("Cluster reachable", theme::success()),
+            ]));
+
+            if let Some(ref info) = app.k8s_cluster_info {
+                if let Some(ref summary) = info.pod_summary {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled("Pod Status", theme::heading())));
+                    for line in summary.lines() {
+                        lines.push(Line::from(Span::styled(
+                            format!("  {line}"),
+                            theme::normal(),
+                        )));
+                    }
+                }
+            }
+        }
+        K8sClusterStatus::Disconnected => {
+            lines.push(Line::from(vec![
+                Span::styled("  ● ", theme::error()),
+                Span::styled("Cluster unreachable", theme::error()),
+            ]));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  Check kubeconfig and network.",
+                theme::muted(),
+            )));
+            lines.push(Line::from(Span::styled(
+                "  Press 'r' to retry.",
+                theme::muted(),
+            )));
+        }
+        K8sClusterStatus::Error(ref e) => {
+            lines.push(Line::from(vec![
+                Span::styled("  ● ", theme::error()),
+                Span::styled("Connection error", theme::error()),
+            ]));
+            lines.push(Line::from(""));
+            let display = if e.len() > 50 {
+                format!("  {}…", &e[..49])
+            } else {
+                format!("  {e}")
+            };
+            lines.push(Line::from(Span::styled(display, theme::dim())));
+            lines.push(Line::from(Span::styled(
+                "  Press 'r' to retry.",
+                theme::muted(),
+            )));
+        }
+    }
+
+    // HTTPS tunnel status for K8s
+    if app.ssh_tunnel_active {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  🔗 ", theme::success()),
+            Span::styled("HTTPS tunnel active", theme::success()),
+        ]));
     }
 
     let panel = Paragraph::new(lines).block(
@@ -745,6 +979,12 @@ pub fn trigger_health_checks(app: &mut App) {
         }
     };
 
+    // K8s profiles use kubectl-based cluster checks instead of Docker health checks
+    if profile.backend == "k8s" {
+        trigger_k8s_cluster_check(app);
+        return;
+    }
+
     let prefix = env_to_prefix(&profile.environment);
 
     let is_remote = profile.remote;
@@ -789,6 +1029,192 @@ pub fn trigger_health_checks(app: &mut App) {
     let vllm_network_base = profile.vllm_network_base().to_string();
     let rx = health::start_health_checks(is_remote, is_mlx, &host, &prefix, ssh_details, is_proxmox, &network_base, &vllm_network_base);
     app.health_rx = Some(rx);
+}
+
+/// Trigger K8s cluster status check using kubectl.
+pub fn trigger_k8s_cluster_check(app: &mut App) {
+    use crate::app::{K8sClusterInfo, K8sClusterUpdate, K8sNodeInfo};
+
+    let profile = match app.active_profile() {
+        Some((_, p)) => p.clone(),
+        None => return,
+    };
+
+    app.k8s_cluster_status = K8sClusterStatus::Checking;
+    app.deployment_state = DeploymentState::Checking;
+
+    let (tx, rx) = std::sync::mpsc::channel::<K8sClusterUpdate>();
+    app.k8s_cluster_rx = Some(rx);
+
+    let kubeconfig = profile.kubeconfig.clone();
+    let repo_root = app.repo_root.clone();
+
+    std::thread::spawn(move || {
+        let kc_path = kubeconfig.unwrap_or_else(|| {
+            repo_root
+                .join("k8s/kubeconfig-rackspace-spot.yaml")
+                .display()
+                .to_string()
+        });
+
+        let kctl = |args: &str| -> Result<String, String> {
+            let output = std::process::Command::new("kubectl")
+                .args(args.split_whitespace())
+                .env("KUBECONFIG", &kc_path)
+                .output()
+                .map_err(|e| format!("kubectl not found: {e}"))?;
+            if output.status.success() {
+                Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            } else {
+                Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+            }
+        };
+
+        // Test connectivity
+        match kctl("cluster-info") {
+            Ok(info) => {
+                let _ = tx.send(K8sClusterUpdate::Status(K8sClusterStatus::Connected));
+
+                // Extract server URL from cluster-info
+                let server_url = info
+                    .lines()
+                    .find(|l| l.contains("control plane") || l.contains("master"))
+                    .and_then(|l| l.split("at ").nth(1))
+                    .map(|s| {
+                        // Strip ANSI color codes
+                        let re_ansi = |s: &str| -> String {
+                            let mut out = String::new();
+                            let mut in_escape = false;
+                            for c in s.chars() {
+                                if c == '\x1b' {
+                                    in_escape = true;
+                                } else if in_escape {
+                                    if c.is_ascii_alphabetic() {
+                                        in_escape = false;
+                                    }
+                                } else {
+                                    out.push(c);
+                                }
+                            }
+                            out
+                        };
+                        re_ansi(s).trim().to_string()
+                    })
+                    .unwrap_or_default();
+
+                // Get nodes
+                let mut nodes = Vec::new();
+                let mut node_count = 0;
+                if let Ok(node_output) = kctl("get nodes -o wide --no-headers") {
+                    for line in node_output.lines() {
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        if parts.len() >= 5 {
+                            node_count += 1;
+                            nodes.push(K8sNodeInfo {
+                                name: parts[0].to_string(),
+                                status: parts[1].to_string(),
+                                roles: parts[2].to_string(),
+                                version: parts[4].to_string(),
+                            });
+                        }
+                    }
+                }
+
+                // Get pod summary for busibox namespace
+                let pod_summary = kctl("get pods -n busibox --no-headers").ok().map(|out| {
+                    let lines: Vec<&str> = out.lines().collect();
+                    let total = lines.len();
+                    let running = lines.iter().filter(|l| l.contains("Running")).count();
+                    let pending = lines.iter().filter(|l| l.contains("Pending")).count();
+                    let failed = lines
+                        .iter()
+                        .filter(|l| {
+                            l.contains("Error")
+                                || l.contains("CrashLoopBackOff")
+                                || l.contains("Failed")
+                        })
+                        .count();
+
+                    let mut summary = format!("{running}/{total} running");
+                    if pending > 0 {
+                        summary.push_str(&format!(", {pending} pending"));
+                    }
+                    if failed > 0 {
+                        summary.push_str(&format!(", {failed} failing"));
+                    }
+                    summary
+                });
+
+                let cluster_info = K8sClusterInfo {
+                    server_url,
+                    cluster_name: String::new(),
+                    namespace: "busibox".to_string(),
+                    node_count,
+                    node_info: nodes,
+                    pod_summary,
+                };
+                let _ = tx.send(K8sClusterUpdate::Info(cluster_info));
+
+                // Set deployment state based on pod presence
+                let has_pods = kctl("get pods -n busibox --no-headers")
+                    .map(|o| !o.trim().is_empty())
+                    .unwrap_or(false);
+                if has_pods {
+                    let _ = tx.send(K8sClusterUpdate::Status(K8sClusterStatus::Connected));
+                }
+            }
+            Err(e) => {
+                if e.contains("connect") || e.contains("refused") || e.contains("timeout") {
+                    let _ = tx.send(K8sClusterUpdate::Status(K8sClusterStatus::Disconnected));
+                } else {
+                    let _ = tx.send(K8sClusterUpdate::Status(K8sClusterStatus::Error(e)));
+                }
+            }
+        }
+
+        let _ = tx.send(K8sClusterUpdate::Complete);
+    });
+}
+
+/// Process K8s cluster check updates from background thread.
+pub fn process_k8s_cluster_updates(app: &mut App) {
+    if let Some(rx) = app.k8s_cluster_rx.take() {
+        use std::sync::mpsc::TryRecvError;
+        let mut put_back = true;
+
+        loop {
+            match rx.try_recv() {
+                Ok(K8sClusterUpdate::Status(status)) => {
+                    match &status {
+                        K8sClusterStatus::Connected => {
+                            app.deployment_state = DeploymentState::Complete;
+                        }
+                        K8sClusterStatus::Disconnected | K8sClusterStatus::Error(_) => {
+                            app.deployment_state = DeploymentState::None;
+                        }
+                        _ => {}
+                    }
+                    app.k8s_cluster_status = status;
+                }
+                Ok(K8sClusterUpdate::Info(info)) => {
+                    app.k8s_cluster_info = Some(info);
+                }
+                Ok(K8sClusterUpdate::Complete) => {
+                    put_back = false;
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    put_back = false;
+                    break;
+                }
+            }
+        }
+
+        if put_back {
+            app.k8s_cluster_rx = Some(rx);
+        }
+    }
 }
 
 /// Process health check results from the receiver. Called from the main loop.

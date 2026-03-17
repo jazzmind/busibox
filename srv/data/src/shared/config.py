@@ -4,8 +4,11 @@ Shared configuration loader.
 Loads configuration from environment variables for both API and worker.
 """
 
+import logging
 import os
 from typing import Dict
+
+_logger = logging.getLogger(__name__)
 
 
 class Config:
@@ -44,8 +47,8 @@ class Config:
         # MinIO configuration
         self.minio_endpoint = os.getenv("MINIO_ENDPOINT", "minio:9000")
         # Support both MINIO_ACCESS_KEY and MINIO_USER for compatibility
-        self.minio_access_key = os.getenv("MINIO_ACCESS_KEY") or os.getenv("MINIO_USER", "minioadmin")
-        self.minio_secret_key = os.getenv("MINIO_SECRET_KEY") or os.getenv("MINIO_PASS", "minioadmin")
+        self.minio_access_key = os.getenv("MINIO_ACCESS_KEY") or os.getenv("MINIO_USER", "")
+        self.minio_secret_key = os.getenv("MINIO_SECRET_KEY") or os.getenv("MINIO_PASS", "")
         self.minio_secure = os.getenv("MINIO_SECURE", "false").lower() == "true"
         self.minio_bucket = os.getenv("MINIO_BUCKET", "documents")
         self.minio_external_base_url = os.getenv("MINIO_EXTERNAL_BASE_URL", "/files")
@@ -102,7 +105,26 @@ class Config:
         self.timeout_small = int(os.getenv("TIMEOUT_SMALL", "300"))  # 5 minutes
         self.timeout_medium = int(os.getenv("TIMEOUT_MEDIUM", "600"))  # 10 minutes
         self.timeout_large = int(os.getenv("TIMEOUT_LARGE", "1200"))  # 20 minutes
+
+        self._validate_secrets()
     
+    def _validate_secrets(self):
+        """Warn if critical secrets are missing or insecure."""
+        try:
+            from busibox_common.secrets import warn_insecure_secrets
+            warned = warn_insecure_secrets({
+                "POSTGRES_PASSWORD": self.postgres_password,
+                "MINIO_ACCESS_KEY": self.minio_access_key,
+                "MINIO_SECRET_KEY": self.minio_secret_key,
+            }, "data-api")
+            if warned:
+                _logger.warning(
+                    "Data service has %d secret(s) with insecure defaults: %s",
+                    len(warned), ", ".join(warned),
+                )
+        except ImportError:
+            pass
+
     def to_dict(self) -> Dict:
         """Convert config to dictionary (for compatibility with existing code)."""
         return {

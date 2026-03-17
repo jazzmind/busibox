@@ -35,8 +35,8 @@ def load_config() -> Dict[str, any]:
         
         # MinIO configuration
         "minio_endpoint": os.getenv("MINIO_ENDPOINT", "minio:9000"),
-        "minio_access_key": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
-        "minio_secret_key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
+        "minio_access_key": os.getenv("MINIO_ACCESS_KEY", ""),
+        "minio_secret_key": os.getenv("MINIO_SECRET_KEY", ""),
         "minio_secure": os.getenv("MINIO_SECURE", "false").lower() == "true",
         "minio_bucket": os.getenv("MINIO_BUCKET", "documents"),
         

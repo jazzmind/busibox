@@ -34,7 +34,8 @@ spec:
     spec:
       containers:
         - name: authz-api
-          image: localhost:30500/authz-api:latest
+          image: ghcr.io/jazzmind/busibox/authz-api:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8010
           env:

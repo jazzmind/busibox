@@ -739,7 +739,6 @@ async def check_service_health(
             'minio': ('minio', 9000, '/minio/health/live', 'http', 'http'),
             'milvus': ('milvus', 9091, '/healthz', 'http', 'http'),
             'etcd': ('etcd', 2379, '/health', 'http', 'http'),
-            'milvus-minio': ('milvus-minio', 9000, '/minio/health/live', 'http', 'http'),
             'neo4j': ('neo4j', 7474, '/', 'http', 'http'),
             'nginx': ('nginx', 443, '/health', 'https', 'http'),
             
@@ -1365,7 +1364,7 @@ async def start_service_sse(
                     yield f"data: {json.dumps({'type': 'info', 'message': 'Note: vLLM requires NVIDIA GPU. On Apple Silicon, use MLX instead (runs on host).'})}\n\n"
                 
                 # Services that have critical infrastructure dependencies that must be started
-                # (etcd, milvus-minio for milvus; minio for files; etc.)
+                # (etcd for milvus; minio for files and milvus; etc.)
                 services_with_infra_deps = {'milvus', 'minio', 'postgres'}
                 
                 # Some services require multiple containers to be started together
@@ -3042,12 +3041,12 @@ litellm_settings:
             
             # Get LiteLLM master key for authentication
             # LITELLM_MASTER_KEY is the preferred key (used in config.yaml)
-            litellm_api_key = os.getenv('LITELLM_MASTER_KEY', os.getenv('LITELLM_API_KEY', 'sk-local-dev-key'))
-            key_source = 'LITELLM_MASTER_KEY' if os.getenv('LITELLM_MASTER_KEY') else ('LITELLM_API_KEY' if os.getenv('LITELLM_API_KEY') else 'default')
-            yield sse_event('info', f'Using LiteLLM key from {key_source}: {litellm_api_key[:10]}...{litellm_api_key[-4:]}')
-            
-            if litellm_api_key == 'sk-local-dev-key' and DEPLOYMENT_BACKEND == 'proxmox':
-                yield sse_event('warning', 'Using default LiteLLM key - ensure LITELLM_MASTER_KEY is set in deploy-api environment')
+            litellm_api_key = os.getenv('LITELLM_MASTER_KEY') or os.getenv('LITELLM_API_KEY') or ''
+            key_source = 'LITELLM_MASTER_KEY' if os.getenv('LITELLM_MASTER_KEY') else ('LITELLM_API_KEY' if os.getenv('LITELLM_API_KEY') else 'MISSING')
+            if not litellm_api_key:
+                yield sse_event('error', 'LITELLM_MASTER_KEY / LITELLM_API_KEY not set - LiteLLM test will fail')
+            else:
+                yield sse_event('info', f'Using LiteLLM key from {key_source}: {litellm_api_key[:10]}...{litellm_api_key[-4:]}')
             
             litellm_headers = {
                 'Content-Type': 'application/json',

@@ -122,7 +122,7 @@ start_services() {
     echo "  - Search API:     http://localhost:8003/docs"
     echo "  - AuthZ API:      http://localhost:8010/docs"
     echo "  - LiteLLM:        http://localhost:4000/docs"
-    echo "  - MinIO Console:  http://localhost:9001 (minioadmin/minioadmin)"
+    echo "  - MinIO Console:  http://localhost:9001 (credentials from vault)"
     echo "  - PostgreSQL:     localhost:5432"
     echo "  - Milvus:         localhost:19530"
     echo "  - Redis:          localhost:6379"

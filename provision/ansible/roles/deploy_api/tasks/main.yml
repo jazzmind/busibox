@@ -10,6 +10,10 @@
   no_log: true
   tags: [deploy_api, deploy, apis]
 
+- name: Load shared secrets mapping
+  include_vars:
+    file: "{{ playbook_dir }}/roles/secrets/vars/shared_secrets.yml"
+
 - name: Install rsync for synchronize module
   apt:
     name: rsync

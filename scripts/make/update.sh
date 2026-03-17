@@ -750,7 +750,6 @@ verify_data_volumes() {
         "redis_data" 
         "minio_data"
         "milvus_data"
-        "milvus_minio_data"
         "etcd_data"
         "model_cache"
         "fastembed_cache"
@@ -915,7 +914,7 @@ start_data_services() {
     cd "$REPO_ROOT"
     
     # Start data services (including user-apps which has deployed external applications)
-    local data_services=("postgres" "redis" "minio" "minio-init" "etcd" "milvus-minio" "milvus" "user-apps")
+    local data_services=("postgres" "redis" "minio" "minio-init" "etcd" "milvus" "user-apps")
     
     for service in "${data_services[@]}"; do
         info "Starting ${service}..."

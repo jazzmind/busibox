@@ -2,6 +2,8 @@ use crate::modules::hardware::{HardwareProfile, MemoryTier};
 use color_eyre::{eyre::eyre, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +93,10 @@ pub struct Profile {
     /// Rackspace Spot API token for spot instance management
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spot_token: Option<String>,
+    /// Host path to local app source trees for development with hot-reload.
+    /// Only relevant for Docker backend. Mounted into deploy-api and user-apps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dev_apps_dir: Option<String>,
 }
 
 impl Profile {
@@ -174,14 +180,22 @@ pub fn load_profiles(repo_root: &Path) -> Result<ProfilesFile> {
     Ok(profiles)
 }
 
-/// Save profiles to disk.
-pub fn save_profiles(repo_root: &Path, profiles: &ProfilesFile) -> Result<()> {
-    let path = profiles_path(repo_root);
+/// Atomically write contents to a file by writing to a temp file first, then renaming.
+pub fn atomic_write(path: &Path, contents: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, contents)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// Save profiles to disk.
+pub fn save_profiles(repo_root: &Path, profiles: &ProfilesFile) -> Result<()> {
+    let path = profiles_path(repo_root);
     let json = serde_json::to_string_pretty(profiles)?;
-    std::fs::write(&path, format!("{json}\n"))?;
+    atomic_write(&path, &format!("{json}\n"))?;
     Ok(())
 }
 
@@ -297,6 +311,7 @@ pub fn write_profile_state(repo_root: &Path, profile_id: &str, profile: &Profile
                 && !l.starts_with("KUBECONFIG=")
                 && !l.starts_with("K8S_OVERLAY=")
                 && !l.starts_with("SPOT_TOKEN=")
+                && !l.starts_with("DEV_APPS_DIR=")
         })
         .map(|l| l.to_string())
         .collect();
@@ -350,9 +365,12 @@ pub fn write_profile_state(repo_root: &Path, profile_id: &str, profile: &Profile
     if let Some(ref token) = profile.spot_token {
         lines.push(format!("SPOT_TOKEN={token}"));
     }
+    if let Some(ref dir) = profile.dev_apps_dir {
+        lines.push(format!("DEV_APPS_DIR={dir}"));
+    }
 
     let content = lines.join("\n") + "\n";
-    std::fs::write(&state_file, content)?;
+    atomic_write(&state_file, &content)?;
     Ok(())
 }
 
@@ -486,4 +504,95 @@ pub fn migrate_profile_ids(repo_root: &Path, profiles: &mut ProfilesFile) -> boo
     }
 
     true
+}
+
+// ============================================================================
+// Profile Locking (multi-instance support)
+// ============================================================================
+
+/// Return the lock file path for a profile: .busibox/profiles/{id}/lock
+pub fn profile_lock_path(repo_root: &Path, profile_id: &str) -> PathBuf {
+    repo_root
+        .join(".busibox")
+        .join("profiles")
+        .join(profile_id)
+        .join("lock")
+}
+
+/// Try to acquire an exclusive, non-blocking lock on a profile.
+/// Returns `Ok(Some(File))` if the lock was acquired (caller must keep the File alive),
+/// or `Ok(None)` if another process holds the lock.
+#[cfg(unix)]
+pub fn try_lock_profile(repo_root: &Path, profile_id: &str) -> Result<Option<File>> {
+    use std::os::unix::io::AsRawFd;
+
+    let lock_path = profile_lock_path(repo_root, profile_id);
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let file = File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .read(true)
+        .open(&lock_path)?;
+
+    let fd = file.as_raw_fd();
+    let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+    if ret != 0 {
+        let err = std::io::Error::last_os_error();
+        if err.kind() == std::io::ErrorKind::WouldBlock {
+            return Ok(None);
+        }
+        return Err(eyre!("flock failed: {err}"));
+    }
+
+    // Write PID for informational purposes (overwrite previous content)
+    let mut f = file.try_clone()?;
+    f.set_len(0)?;
+    let _ = writeln!(f, "{}", std::process::id());
+
+    Ok(Some(file))
+}
+
+/// Check if a profile is locked by another process (non-destructive probe).
+/// Returns true if another process holds the lock.
+#[cfg(unix)]
+pub fn is_profile_locked(repo_root: &Path, profile_id: &str) -> bool {
+    use std::os::unix::io::AsRawFd;
+
+    let lock_path = profile_lock_path(repo_root, profile_id);
+    let file = match File::options()
+        .create(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+    {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+
+    let fd = file.as_raw_fd();
+    let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+    if ret != 0 {
+        // Could not acquire => someone else holds it
+        return true;
+    }
+    // We acquired it; release immediately so we don't hold it
+    unsafe { libc::flock(fd, libc::LOCK_UN) };
+    false
+}
+
+#[cfg(not(unix))]
+pub fn try_lock_profile(_repo_root: &Path, _profile_id: &str) -> Result<Option<File>> {
+    // On non-Unix platforms, locking is a no-op (always succeeds)
+    Ok(Some(File::options().create(true).write(true).open(
+        profile_lock_path(_repo_root, _profile_id),
+    )?))
+}
+
+#[cfg(not(unix))]
+pub fn is_profile_locked(_repo_root: &Path, _profile_id: &str) -> bool {
+    false
 }

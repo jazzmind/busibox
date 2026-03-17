@@ -22,7 +22,7 @@ POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
 POSTGRES_DB = os.getenv("POSTGRES_DB", "config")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "busibox_user")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "devpassword")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
 
 
 async def main():

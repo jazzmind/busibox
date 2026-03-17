@@ -15,7 +15,7 @@ authz_postgres_host: "{{ postgres_host }}"
 authz_postgres_port: "{{ postgres_port | default(5432) }}"
 authz_postgres_db: "authz"
 authz_postgres_user: "{{ postgres_user }}"
-authz_postgres_password: "{{ secrets.postgresql.password }}"
+authz_postgres_password: "{{ busibox_secrets.POSTGRES_PASSWORD }}"
 
 # Token settings
 authz_issuer: "busibox-authz"
@@ -28,7 +28,7 @@ authz_signing_alg: "RS256"
 authz_rsa_key_size: 2048
 
 # Encrypt private keys at rest (recommended)
-authz_key_encryption_passphrase: "{{ secrets.jwt_secret | default(secrets.sso.jwt_secret | default('change-me')) }}"
+authz_key_encryption_passphrase: "{{ busibox_secrets.SSO_JWT_SECRET }}"
 
 # Bootstrap OAuth client for busibox-portal
 authz_bootstrap_allowed_audiences: "data-api,search-api,agent-api,authz-api,deploy-api"

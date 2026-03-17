@@ -21,7 +21,11 @@ source "${REPO_ROOT}/scripts/lib/profiles.sh"
 source "${REPO_ROOT}/scripts/lib/state.sh"
 
 profile_init
-_active_profile="$(profile_get_active)"
+if [[ -n "${BUSIBOX_ENV:-}" && -n "${BUSIBOX_BACKEND:-}" ]]; then
+    _active_profile=""
+else
+    _active_profile="$(profile_get_active)"
+fi
 
 # All core frontend apps in the busibox-frontend monorepo
 FRONTEND_APPS=(
@@ -35,6 +39,10 @@ FRONTEND_APPS=(
 )
 
 get_current_env() {
+    if [[ -n "${BUSIBOX_ENV:-}" ]]; then
+        echo "$BUSIBOX_ENV"
+        return
+    fi
     if [[ -n "$_active_profile" ]]; then
         profile_get "$_active_profile" "environment"
         return
@@ -49,7 +57,9 @@ get_current_env() {
 
 get_backend_type() {
     local backend=""
-    if [[ -n "$_active_profile" ]]; then
+    if [[ -n "${BUSIBOX_BACKEND:-}" ]]; then
+        backend="$BUSIBOX_BACKEND"
+    elif [[ -n "$_active_profile" ]]; then
         backend=$(profile_get "$_active_profile" "backend")
     else
         local env="$1"

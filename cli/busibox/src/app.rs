@@ -218,9 +218,17 @@ pub struct App {
     #[allow(dead_code)]
     pub k8s_manage_input_tx: Option<std::sync::mpsc::Sender<String>>,
 
+    // K8s cluster status (for welcome screen)
+    pub k8s_cluster_status: K8sClusterStatus,
+    pub k8s_cluster_info: Option<K8sClusterInfo>,
+    pub k8s_cluster_rx: Option<mpsc::Receiver<K8sClusterUpdate>>,
+
     // Profile state
     pub profiles: Option<ProfilesFile>,
     pub profile_selected: usize,
+    /// Held file handle for the active profile's advisory lock.
+    /// Dropping this releases the lock so another instance can claim the profile.
+    pub profile_lock: Option<std::fs::File>,
 
     // Profile delete confirmation
     pub profile_delete_confirming: bool,
@@ -519,6 +527,43 @@ pub enum K8sManageUpdate {
     Complete { #[allow(dead_code)] success: bool },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum K8sClusterStatus {
+    Unknown,
+    Checking,
+    Connected,
+    Disconnected,
+    Error(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct K8sClusterInfo {
+    pub server_url: String,
+    #[allow(dead_code)]
+    pub cluster_name: String,
+    #[allow(dead_code)]
+    pub namespace: String,
+    pub node_count: usize,
+    pub node_info: Vec<K8sNodeInfo>,
+    pub pod_summary: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct K8sNodeInfo {
+    pub name: String,
+    pub status: String,
+    #[allow(dead_code)]
+    pub roles: String,
+    pub version: String,
+}
+
+#[derive(Debug)]
+pub enum K8sClusterUpdate {
+    Status(K8sClusterStatus),
+    Info(K8sClusterInfo),
+    Complete,
+}
+
 impl std::fmt::Display for InstallStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -668,8 +713,12 @@ impl App {
             k8s_manage_input_buffer: String::new(),
             k8s_manage_input_label: String::new(),
             k8s_manage_input_tx: None,
+            k8s_cluster_status: K8sClusterStatus::Unknown,
+            k8s_cluster_info: None,
+            k8s_cluster_rx: None,
             profiles: None,
             profile_selected: 0,
+            profile_lock: None,
             profile_delete_confirming: false,
             profile_edit_field: 0,
             profile_edit_buffer: String::new(),
@@ -864,10 +913,10 @@ impl App {
                 vec!["Install"]
             }
             DeploymentState::Partial(_) => {
-                vec!["Continue Install", "Manage Services", "Clean Install"]
+                vec!["Continue Install", "Manage Services", "Update", "Clean Install"]
             }
             DeploymentState::BootstrapComplete => {
-                vec!["Continue Install (Web)", "Admin Login", "Manage Services", "Clean Install"]
+                vec!["Continue Install (Web)", "Admin Login", "Manage Services", "Update", "Clean Install"]
             }
             DeploymentState::Complete => {
                 vec!["Admin Login", "Manage Services", "Benchmark Models", "Update", "Clean Install"]

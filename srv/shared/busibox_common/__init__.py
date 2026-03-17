@@ -105,7 +105,22 @@ except ImportError:
     init_pool = None
     reset_pool = None
 
+# Secret validation (no dependencies)
+from .secrets import (
+    KNOWN_INSECURE_DEFAULTS,
+    is_insecure_value,
+    validate_secret,
+    validate_required_secrets,
+    warn_insecure_secrets,
+)
+
 __all__ = [
+    # Secrets validation
+    "KNOWN_INSECURE_DEFAULTS",
+    "is_insecure_value",
+    "validate_secret",
+    "validate_required_secrets",
+    "warn_insecure_secrets",
     # Database
     "DatabaseInitializer",
     "SchemaManager",

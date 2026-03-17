@@ -61,7 +61,7 @@ services:
       - "config_version=${GIT_COMMIT:-unknown}"
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_DB: busibox
     ports:
       - "5432:5432"
@@ -111,8 +111,8 @@ services:
       - "config_version=${GIT_COMMIT:-unknown}"
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-${MINIO_ACCESS_KEY:-minioadmin}}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-${MINIO_SECRET_KEY:-minioadmin}}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
     ports:
       - "9000:9000"   # API
       - "9001:9001"   # Console
@@ -139,16 +139,17 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER:-${MINIO_ACCESS_KEY:-minioadmin}} ${MINIO_ROOT_PASSWORD:-${MINIO_SECRET_KEY:-minioadmin}};
+      mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set} ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set};
       mc mb myminio/documents --ignore-existing;
       mc mb myminio/exports --ignore-existing;
+      mc mb myminio/milvus --ignore-existing;
       mc anonymous set download myminio/exports;
       echo 'Buckets created successfully';
       "
     networks:
       - busibox-net
 
-  # Milvus - Vector Database (standalone mode with etcd + minio)
+  # Milvus - Vector Database (standalone mode with etcd, uses main MinIO)
   etcd:
     image: quay.io/coreos/etcd:v3.5.5
     container_name: ${CONTAINER_PREFIX:-dev}-milvus-etcd
@@ -170,27 +171,6 @@ services:
     networks:
       - busibox-net
 
-  milvus-minio:
-    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
-    container_name: ${CONTAINER_PREFIX:-dev}-milvus-minio
-    hostname: milvus-minio
-    environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
-    ports:
-      - "9002:9000"   # Separate from main MinIO
-    volumes:
-      - milvus_minio_data:/minio_data
-    command: minio server /minio_data --console-address ":9001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    restart: unless-stopped
-    networks:
-      - busibox-net
-
   milvus:
     image: milvusdb/milvus:v2.6.5
     container_name: ${CONTAINER_PREFIX:-dev}-milvus
@@ -202,7 +182,11 @@ services:
       - seccomp:unconfined
     environment:
       ETCD_ENDPOINTS: etcd:2379
-      MINIO_ADDRESS: milvus-minio:9000
+      MINIO_ADDRESS: minio:9000
+      MINIO_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
+      MINIO_BUCKET_NAME: milvus
+      MINIO_ROOT_PATH: data
     volumes:
       - milvus_data:/var/lib/milvus
     ports:
@@ -211,7 +195,7 @@ services:
     depends_on:
       etcd:
         condition: service_healthy
-      milvus-minio:
+      minio:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
@@ -233,7 +217,7 @@ services:
     labels:
       - "config_version=${GIT_COMMIT:-unknown}"
     environment:
-      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-devpassword}
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:?NEO4J_PASSWORD must be set}
       NEO4J_PLUGINS: '["apoc"]'
       NEO4J_server_memory_heap_initial__size: 256m
       NEO4J_server_memory_heap_max__size: 512m
@@ -260,6 +244,7 @@ services:
   # Milvus Schema Initialization
   # Creates the 'documents' collection with hybrid search support
   milvus-init:
+    image: ghcr.io/jazzmind/busibox/milvus-init:latest
     build:
       context: ./provision/docker
       dockerfile: milvus-init.Dockerfile
@@ -314,18 +299,18 @@ services:
       - "config_version=${GIT_COMMIT:-unknown}"
     environment:
       PYTHONPATH: /app
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set}
       # Salt key is the SOLE encryption key for LiteLLM DB data (model configs,
       # credentials, env vars). Must remain stable across restarts/deploys.
       # Falls back to master key for backward compat with pre-salt deployments.
-      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-${LITELLM_MASTER_KEY:-sk-local-dev-key}}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set}}
       # MLX auto-start hook context
       LLM_BACKEND: ${LLM_BACKEND:-}
       DEPLOY_API_URL: http://deploy-api:8011
       # Use the same key for deploy-api authenticated ensure calls.
-      LITELLM_API_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
+      LITELLM_API_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set}
       # PostgreSQL database for caching, usage tracking, and team management
-      DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/litellm
+      DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/litellm
       # Enable runtime model/config management via API (requires DATABASE_URL)
       STORE_MODEL_IN_DB: "True"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -369,6 +354,7 @@ services:
   #   - This host directory is bind-mounted into the container for instant startup
   #   - If not pre-cached, the model will be downloaded on first container start (~1.3GB)
   embedding-api:
+    image: ghcr.io/jazzmind/busibox/embedding-api:latest
     build:
       context: ./srv/embedding
       labels:
@@ -409,6 +395,7 @@ services:
 
   # AuthZ API - Authentication & Authorization Service
   authz-api:
+    image: ghcr.io/jazzmind/busibox/authz-api:latest
     build:
       context: ./srv
       dockerfile: authz/Dockerfile
@@ -427,7 +414,7 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_DB: authz
       POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       # Test Mode Configuration (routes X-Test-Mode: true requests to test database)
       AUTHZ_TEST_MODE_ENABLED: "true"
       TEST_DB_NAME: test_authz
@@ -438,7 +425,7 @@ services:
       AUTHZ_ACCESS_TOKEN_TTL: ${AUTHZ_ACCESS_TOKEN_TTL:-900}
       AUTHZ_SIGNING_ALG: RS256
       AUTHZ_RSA_KEY_SIZE: 2048
-      AUTHZ_MASTER_KEY: ${AUTHZ_MASTER_KEY:-local-master-key-change-in-production}
+      AUTHZ_MASTER_KEY: ${AUTHZ_MASTER_KEY:?AUTHZ_MASTER_KEY must be set}
       # Bootstrap client (busibox-portal)
       AUTHZ_BOOTSTRAP_ALLOWED_AUDIENCES: data-api,search-api,agent-api,authz-api,config-api
       AUTHZ_BOOTSTRAP_ALLOWED_SCOPES: read,write,search.read,data.write,data.read,agent.execute
@@ -470,6 +457,7 @@ services:
 
   # Data API - Document Processing Service
   data-api:
+    image: ghcr.io/jazzmind/busibox/data-api:latest
     build:
       context: ./srv
       dockerfile: data/Dockerfile
@@ -494,7 +482,7 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_DB: data
       POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       # Test Mode Configuration (routes X-Test-Mode: true requests to test database)
       DATA_TEST_MODE_ENABLED: "true"
       TEST_DB_NAME: test_data
@@ -506,8 +494,8 @@ services:
       REDIS_HOST: redis
       # MinIO
       MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-${MINIO_ACCESS_KEY:-minioadmin}}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-${MINIO_SECRET_KEY:-minioadmin}}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
       MINIO_SECURE: "false"
       MINIO_BUCKET: documents
       MINIO_EXTERNAL_BASE_URL: /files
@@ -524,10 +512,10 @@ services:
       BUSIBOX_PORTAL_DB_PORT: ${BUSIBOX_PORTAL_DB_PORT:-5432}
       BUSIBOX_PORTAL_DB_NAME: ${BUSIBOX_PORTAL_DB_NAME:-ai_portal}
       BUSIBOX_PORTAL_DB_USER: ${BUSIBOX_PORTAL_DB_USER:-busibox_user}
-      BUSIBOX_PORTAL_DB_PASSWORD: ${BUSIBOX_PORTAL_DB_PASSWORD:-${POSTGRES_PASSWORD:-devpassword}}
+      BUSIBOX_PORTAL_DB_PASSWORD: ${BUSIBOX_PORTAL_DB_PASSWORD:-${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}}
       # LiteLLM
       LITELLM_BASE_URL: http://litellm:4000
-      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:?LITELLM_API_KEY must be set}
       # AuthZ
       AUTHZ_BASE_URL: http://authz-api:8010
       AUTHZ_JWKS_URL: http://authz-api:8010/.well-known/jwks.json
@@ -545,7 +533,7 @@ services:
       # Neo4j (optional graph database)
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: ${NEO4J_USER:-neo4j}
-      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-devpassword}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD must be set}
     ports:
       - "8002:8002"
     depends_on:
@@ -576,6 +564,7 @@ services:
   # Data Worker - Background Job Processor
   # Consumes jobs from Redis stream and processes uploaded documents
   data-worker:
+    image: ghcr.io/jazzmind/busibox/data-api:latest
     build:
       context: ./srv
       dockerfile: data/Dockerfile
@@ -596,15 +585,15 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_DB: data
       POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       # Redis
       REDIS_HOST: redis
       REDIS_STREAM: jobs:data
       REDIS_CONSUMER_GROUP: workers
       # MinIO
       MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-${MINIO_ACCESS_KEY:-minioadmin}}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-${MINIO_SECRET_KEY:-minioadmin}}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
       MINIO_SECURE: "false"
       MINIO_BUCKET: documents
       MINIO_EXTERNAL_BASE_URL: /files
@@ -613,7 +602,7 @@ services:
       MILVUS_COLLECTION: documents
       # LiteLLM
       LITELLM_BASE_URL: http://litellm:4000
-      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:?LITELLM_API_KEY must be set}
       # Processing defaults (overridden per-job by Busibox Portal data settings)
       MARKER_ENABLED: ${MARKER_ENABLED:-false}
       MARKER_USE_GPU: ${MARKER_USE_GPU:-false}
@@ -633,7 +622,7 @@ services:
       # Neo4j (optional graph database)
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: ${NEO4J_USER:-neo4j}
-      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-devpassword}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD must be set}
       # Agent API (for library triggers - fires agent when document processing completes)
       AGENT_API_HOST: agent-api
       AGENT_API_PORT: "8000"
@@ -670,6 +659,7 @@ services:
 
   # Bridge API - Multi-channel Communication Service (Email, Signal)
   bridge-api:
+    image: ghcr.io/jazzmind/busibox/bridge-api:latest
     build:
       context: ./srv/bridge
       dockerfile: Dockerfile
@@ -750,6 +740,7 @@ services:
 
   # Search API - Semantic Search Service
   search-api:
+    image: ghcr.io/jazzmind/busibox/search-api:latest
     build:
       context: ./srv
       dockerfile: search/Dockerfile
@@ -772,7 +763,7 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_DB: data
       POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       # Test Mode Configuration (routes X-Test-Mode: true requests to test database)
       SEARCH_TEST_MODE_ENABLED: "true"
       TEST_DB_NAME: test_data
@@ -789,7 +780,7 @@ services:
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-256}
       # LiteLLM
       LITELLM_BASE_URL: http://litellm:4000
-      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:?LITELLM_API_KEY must be set}
       # AuthZ
       AUTHZ_JWKS_URL: http://authz-api:8010/.well-known/jwks.json
       AUTHZ_ISSUER: busibox-authz
@@ -803,7 +794,7 @@ services:
       # Neo4j (optional graph database for graph-enhanced search)
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: ${NEO4J_USER:-neo4j}
-      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-devpassword}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD must be set}
     ports:
       - "8003:8003"
     depends_on:
@@ -829,6 +820,7 @@ services:
 
   # Agent API - AI Agent Service
   agent-api:
+    image: ghcr.io/jazzmind/busibox/agent-api:latest
     build:
       context: ./srv
       dockerfile: agent/Dockerfile
@@ -854,7 +846,7 @@ services:
       DEBUG: "true"
       LOG_LEVEL: INFO
       # Database
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/agent
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/agent
       # Test Mode Configuration (routes X-Test-Mode: true requests to test database)
       TEST_MODE_ENABLED: "true"
       TEST_DATABASE_URL: postgresql+asyncpg://busibox_test_user:testpassword@postgres:5432/test_agent
@@ -872,13 +864,13 @@ services:
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-256}
       # LiteLLM
       LITELLM_BASE_URL: http://litellm:4000/v1
-      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:?LITELLM_API_KEY must be set}
       DEFAULT_MODEL: agent
       # Claude Agent SDK routes through LiteLLM Anthropic-compatible endpoint
       ANTHROPIC_BASE_URL: http://litellm:4000
-      ANTHROPIC_API_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
+      ANTHROPIC_API_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set}
       # LiteLLM database for spend tracking (admin stats)
-      LITELLM_DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/litellm
+      LITELLM_DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/litellm
       # Cloud provider API keys (for direct model listing from providers)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       # AuthZ
@@ -910,7 +902,7 @@ services:
       # Neo4j (optional graph database for graph tools)
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: ${NEO4J_USER:-neo4j}
-      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-devpassword}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD must be set}
     ports:
       - "8000:8000"
     depends_on:
@@ -939,6 +931,7 @@ services:
   # Docs API - Documentation Service
   # Lightweight service for serving markdown docs and OpenAPI specs
   docs-api:
+    image: ghcr.io/jazzmind/busibox/docs-api:latest
     build:
       context: ./srv/docs
       labels:
@@ -974,6 +967,7 @@ services:
   # Handles external app deployment, database provisioning, and nginx configuration
   # Runs alongside authz-api and validates tokens via authz
   deploy-api:
+    image: ghcr.io/jazzmind/busibox/deploy-api:latest
     build:
       context: ./srv
       dockerfile: deploy/Dockerfile
@@ -1015,13 +1009,13 @@ services:
       # Uses busibox_user which has CREATEDB permission (see init-databases.sql)
       POSTGRES_HOST: postgres
       POSTGRES_ADMIN_USER: ${POSTGRES_USER:-busibox_user}
-      POSTGRES_ADMIN_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_ADMIN_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       # POSTGRES_PASSWORD passed through so docker compose can use it for spawned services
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
       # MinIO credentials passed through so docker compose can use them for spawned services
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-${MINIO_ACCESS_KEY:-minioadmin}}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-${MINIO_SECRET_KEY:-minioadmin}}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
       # Container IPs (use Docker service names in local dev)
       APPS_CONTAINER_IP: ${APPS_CONTAINER_IP:-host.docker.internal}
       APPS_CONTAINER_IP_STAGING: ${APPS_CONTAINER_IP_STAGING:-host.docker.internal}
@@ -1057,11 +1051,11 @@ services:
       LLM_BACKEND: ${LLM_BACKEND:-${DETECTED_LLM_BACKEND:-}}
       # LLM Services (for LLM chain validation)
       LITELLM_URL: http://litellm:4000
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
-      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-${LITELLM_MASTER_KEY:-sk-local-dev-key}}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set}}
       # Pass through the same effective key used by LiteLLM so deploy-api
       # starts agent-api with the correct token on first install.
-      LITELLM_API_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
+      LITELLM_API_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set}
       AGENT_API_URL: http://agent-api:8000
       # MLX server runs on host (not in docker) on port 8080
       MLX_SERVER_URL: http://host.docker.internal:8080
@@ -1104,9 +1098,9 @@ services:
       POSTGRES_PORT: 5432
       POSTGRES_DB: config
       POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       AUTHZ_BASE_URL: http://authz-api:8010
-      CONFIG_ENCRYPTION_KEY: ${CONFIG_ENCRYPTION_KEY:-dev-encryption-key}
+      CONFIG_ENCRYPTION_KEY: ${CONFIG_ENCRYPTION_KEY:?CONFIG_ENCRYPTION_KEY must be set}
     ports:
       - "8012:8012"
     depends_on:
@@ -1373,7 +1367,6 @@ volumes:
   redis_data:
   minio_data:
   etcd_data:
-  milvus_minio_data:
   milvus_data:
   neo4j_data:
   neo4j_logs:

@@ -113,7 +113,7 @@ ssl_mode: selfsigned
 # ============================================================================
 postgres_user: busibox_user
 # Password from vault - install.sh syncs generated secrets to vault
-postgres_password: "{{ secrets.postgresql.password | default('devpassword') }}"
+postgres_password: "{{ secrets.postgresql.password }}"
 
 # Data API database (files/documents/chunks)
 files_db: data
@@ -127,8 +127,8 @@ enable_pytest_databases: true
 # MinIO Configuration
 # ============================================================================
 minio_bucket: documents
-minio_root_user: "{{ secrets.minio.root_user | default('minioadmin') }}"
-minio_root_password: "{{ secrets.minio.root_password | default('minioadmin') }}"
+minio_root_user: "{{ secrets.minio.root_user }}"
+minio_root_password: "{{ secrets.minio.root_password }}"
 
 # ============================================================================
 # LLM Configuration
@@ -189,7 +189,6 @@ docker_services:
     - redis
     - minio
     - etcd
-    - milvus-minio
     - milvus
   apis:
     - authz-api

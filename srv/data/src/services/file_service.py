@@ -98,8 +98,8 @@ class FileService:
         """Initialize file service with configuration."""
         self.config = config
         self.endpoint = config.get("minio_endpoint", "minio:9000")
-        self.access_key = config.get("minio_access_key", "minioadmin")
-        self.secret_key = config.get("minio_secret_key", "minioadmin")
+        self.access_key = config.get("minio_access_key") or ""
+        self.secret_key = config.get("minio_secret_key") or ""
         self.secure = config.get("minio_secure", False)
         self.bucket = config.get("minio_bucket", "documents")
         

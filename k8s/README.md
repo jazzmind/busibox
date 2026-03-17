@@ -180,7 +180,7 @@ k8s/
 - **PostgreSQL** - Shared database (authz, data, agent, litellm, ai_portal)
 - **Redis** - Job queue and caching
 - **MinIO** - S3-compatible object storage
-- **Milvus** - Vector database (with etcd + milvus-minio)
+- **Milvus** - Vector database (with etcd, uses shared MinIO)
 
 ### APIs (Deployments)
 - **AuthZ API** (8010) - Authentication & authorization
@@ -215,7 +215,7 @@ Uses Cinder CSI `ssd` storage class (default on Rackspace Spot):
 - PostgreSQL: 20Gi
 - Redis: 5Gi
 - MinIO: 20Gi
-- Milvus: 20Gi + 10Gi (milvus-minio) + 5Gi (etcd)
+- Milvus: 20Gi + 5Gi (etcd); uses shared MinIO bucket
 - Model cache: 10Gi (shared across APIs)
 - FastEmbed cache: 5Gi
 - Build server: 30Gi (Docker layer cache)

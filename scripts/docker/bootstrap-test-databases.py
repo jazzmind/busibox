@@ -221,7 +221,7 @@ async def add_test_domains_to_production():
             host=POSTGRES_HOST,
             port=POSTGRES_PORT,
             user="busibox_user",
-            password=os.getenv("POSTGRES_PASSWORD", "devpassword"),
+            password=os.getenv("POSTGRES_PASSWORD", ""),
             database="authz"
         )
     except Exception as e:

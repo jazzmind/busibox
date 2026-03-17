@@ -22,8 +22,8 @@ deploy_api_authz_url: "http://localhost:{{ authz_service_port | default(8010) }}
 # Falls back to Ansible host IP if DNS not available
 deploy_api_postgres_host: "{{ 'postgres' if (lookup('pipe', 'getent hosts postgres 2>/dev/null || true') | length > 0) else (hostvars[groups['pg'][0]]['ansible_host'] | default('postgres')) }}"
 deploy_api_postgres_port: 5432
-deploy_api_postgres_admin_user: "{{ secrets.postgresql.user | default('busibox_user') }}"
-deploy_api_postgres_admin_password: "{{ secrets.postgresql.password | default('') }}"
+deploy_api_postgres_admin_user: "{{ busibox_secrets.POSTGRES_USER | default('busibox_user') }}"
+deploy_api_postgres_admin_password: "{{ busibox_secrets.POSTGRES_PASSWORD }}"
 
 # Container hosts (prefer DNS hostnames from internal_dns role)
 # Note: Use core_apps group (not apps) - staging/production inventories use this group name
@@ -78,7 +78,7 @@ deploy_api_container_prefix: "{{ {'production': 'prod', 'staging': 'staging', 'd
 # Bootstrap token for Ansible provisioning
 # This allows initial app deployment without a real user JWT
 # Derived from jwt_secret for determinism (same value each run)
-deploy_api_bootstrap_token: "{{ secrets.deploy_api.bootstrap_token | default('bootstrap-' + (secrets.jwt_secret | default('default-jwt-secret') | hash('sha256'))[:56]) }}"
+deploy_api_bootstrap_token: "{{ secrets.deploy_api.bootstrap_token | default('bootstrap-' + (secrets.jwt_secret | hash('sha256'))[:56]) }}"
 
 # LLM Backend: "vllm", "mlx", or "cloud"
 # On Proxmox with GPUs, this is typically "vllm"
@@ -88,4 +88,4 @@ llm_backend: vllm
 
 # LiteLLM Master Key (for LLM chain validation)
 # Must match the master_key configured in LiteLLM service
-litellm_master_key: "{{ secrets.litellm_master_key | default('sk-litellm-master-key-change-me') }}"
+litellm_master_key: "{{ busibox_secrets.LITELLM_MASTER_KEY }}"

@@ -28,8 +28,6 @@ What stays in Ansible vault (infrastructure):
 - SSL certificates
 """
 
-import base64
-import json
 import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -440,262 +438,6 @@ async def bulk_set_configs(
     )
 
 
-# -------------------------------------------------------------------------
-# Config keys → Docker Compose env-var names (BRIDGE_* prefix used by compose)
-# The config table stores e.g. SMTP_HOST; compose reads BRIDGE_SMTP_HOST.
-# -------------------------------------------------------------------------
-_CONFIG_TO_COMPOSE_ENV: dict[str, str] = {
-    "SMTP_HOST":     "BRIDGE_SMTP_HOST",
-    "SMTP_PORT":     "BRIDGE_SMTP_PORT",
-    "SMTP_USER":     "BRIDGE_SMTP_USER",
-    "SMTP_PASSWORD": "BRIDGE_SMTP_PASSWORD",
-    "SMTP_SECURE":   "BRIDGE_SMTP_SECURE",
-    "EMAIL_FROM":    "BRIDGE_EMAIL_FROM",
-    "RESEND_API_KEY": "BRIDGE_RESEND_API_KEY",
-    "SIGNAL_ENABLED": "BRIDGE_SIGNAL_ENABLED",
-    "SIGNAL_PHONE_NUMBER": "BRIDGE_SIGNAL_PHONE_NUMBER",
-    "ALLOWED_PHONE_NUMBERS": "BRIDGE_ALLOWED_PHONE_NUMBERS",
-    "TELEGRAM_ENABLED": "BRIDGE_TELEGRAM_ENABLED",
-    "TELEGRAM_BOT_TOKEN": "BRIDGE_TELEGRAM_BOT_TOKEN",
-    "TELEGRAM_POLL_INTERVAL": "BRIDGE_TELEGRAM_POLL_INTERVAL",
-    "TELEGRAM_POLL_TIMEOUT": "BRIDGE_TELEGRAM_POLL_TIMEOUT",
-    "TELEGRAM_ALLOWED_CHAT_IDS": "BRIDGE_TELEGRAM_ALLOWED_CHAT_IDS",
-    "DISCORD_ENABLED": "BRIDGE_DISCORD_ENABLED",
-    "DISCORD_BOT_TOKEN": "BRIDGE_DISCORD_BOT_TOKEN",
-    "DISCORD_POLL_INTERVAL": "BRIDGE_DISCORD_POLL_INTERVAL",
-    "DISCORD_CHANNEL_IDS": "BRIDGE_DISCORD_CHANNEL_IDS",
-    "WHATSAPP_ENABLED": "BRIDGE_WHATSAPP_ENABLED",
-    "WHATSAPP_VERIFY_TOKEN": "BRIDGE_WHATSAPP_VERIFY_TOKEN",
-    "WHATSAPP_ACCESS_TOKEN": "BRIDGE_WHATSAPP_ACCESS_TOKEN",
-    "WHATSAPP_PHONE_NUMBER_ID": "BRIDGE_WHATSAPP_PHONE_NUMBER_ID",
-    "WHATSAPP_API_VERSION": "BRIDGE_WHATSAPP_API_VERSION",
-    "WHATSAPP_ALLOWED_PHONE_NUMBERS": "BRIDGE_WHATSAPP_ALLOWED_PHONE_NUMBERS",
-    "CHANNEL_USER_BINDINGS": "BRIDGE_CHANNEL_USER_BINDINGS",
-    "DEFAULT_AGENT_ID": "BRIDGE_DEFAULT_AGENT_ID",
-    "EMAIL_INBOUND_ENABLED": "BRIDGE_EMAIL_INBOUND_ENABLED",
-    "IMAP_HOST": "BRIDGE_IMAP_HOST",
-    "IMAP_PORT": "BRIDGE_IMAP_PORT",
-    "IMAP_USER": "BRIDGE_IMAP_USER",
-    "IMAP_PASSWORD": "BRIDGE_IMAP_PASSWORD",
-    "IMAP_USE_SSL": "BRIDGE_IMAP_USE_SSL",
-    "IMAP_FOLDER": "BRIDGE_IMAP_FOLDER",
-    "EMAIL_INBOUND_POLL_INTERVAL": "BRIDGE_EMAIL_INBOUND_POLL_INTERVAL",
-    "EMAIL_ALLOWED_SENDERS": "BRIDGE_EMAIL_ALLOWED_SENDERS",
-}
-
-# Config keys → bridge .env variable names (Proxmox: no BRIDGE_ prefix)
-_CONFIG_TO_BRIDGE_ENV: dict[str, str] = {
-    "SMTP_HOST":     "SMTP_HOST",
-    "SMTP_PORT":     "SMTP_PORT",
-    "SMTP_USER":     "SMTP_USER",
-    "SMTP_PASSWORD": "SMTP_PASSWORD",
-    "SMTP_SECURE":   "SMTP_SECURE",
-    "EMAIL_FROM":    "EMAIL_FROM",
-    "RESEND_API_KEY": "RESEND_API_KEY",
-    "SIGNAL_ENABLED": "SIGNAL_ENABLED",
-    "SIGNAL_PHONE_NUMBER": "SIGNAL_PHONE_NUMBER",
-    "ALLOWED_PHONE_NUMBERS": "ALLOWED_PHONE_NUMBERS",
-    "TELEGRAM_ENABLED": "TELEGRAM_ENABLED",
-    "TELEGRAM_BOT_TOKEN": "TELEGRAM_BOT_TOKEN",
-    "TELEGRAM_POLL_INTERVAL": "TELEGRAM_POLL_INTERVAL",
-    "TELEGRAM_POLL_TIMEOUT": "TELEGRAM_POLL_TIMEOUT",
-    "TELEGRAM_ALLOWED_CHAT_IDS": "TELEGRAM_ALLOWED_CHAT_IDS",
-    "DISCORD_ENABLED": "DISCORD_ENABLED",
-    "DISCORD_BOT_TOKEN": "DISCORD_BOT_TOKEN",
-    "DISCORD_POLL_INTERVAL": "DISCORD_POLL_INTERVAL",
-    "DISCORD_CHANNEL_IDS": "DISCORD_CHANNEL_IDS",
-    "WHATSAPP_ENABLED": "WHATSAPP_ENABLED",
-    "WHATSAPP_VERIFY_TOKEN": "WHATSAPP_VERIFY_TOKEN",
-    "WHATSAPP_ACCESS_TOKEN": "WHATSAPP_ACCESS_TOKEN",
-    "WHATSAPP_PHONE_NUMBER_ID": "WHATSAPP_PHONE_NUMBER_ID",
-    "WHATSAPP_API_VERSION": "WHATSAPP_API_VERSION",
-    "WHATSAPP_ALLOWED_PHONE_NUMBERS": "WHATSAPP_ALLOWED_PHONE_NUMBERS",
-    "CHANNEL_USER_BINDINGS": "CHANNEL_USER_BINDINGS",
-    "DEFAULT_AGENT_ID": "DEFAULT_AGENT_ID",
-    "EMAIL_INBOUND_ENABLED": "EMAIL_INBOUND_ENABLED",
-    "IMAP_HOST": "IMAP_HOST",
-    "IMAP_PORT": "IMAP_PORT",
-    "IMAP_USER": "IMAP_USER",
-    "IMAP_PASSWORD": "IMAP_PASSWORD",
-    "IMAP_USE_SSL": "IMAP_USE_SSL",
-    "IMAP_FOLDER": "IMAP_FOLDER",
-    "EMAIL_INBOUND_POLL_INTERVAL": "EMAIL_INBOUND_POLL_INTERVAL",
-    "EMAIL_ALLOWED_SENDERS": "EMAIL_ALLOWED_SENDERS",
-}
-
-
-async def _read_bridge_raw_config_from_db() -> dict[str, str]:
-    """Read bridge-related config rows and return as {config_key: value}."""
-    sql = "SELECT key, value FROM config WHERE category IN ('smtp', 'bridge')"
-    result = await query_config(sql)
-    raw: dict[str, str] = {}
-    if result:
-        for line in result.split('\n'):
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split('|', 1)
-            if len(parts) == 2:
-                raw[parts[0].strip()] = parts[1].strip()
-    return raw
-
-
-async def _read_bridge_config_from_db() -> dict[str, str]:
-    """Read bridge config rows and return as {COMPOSE_ENV: value}."""
-    raw = await _read_bridge_raw_config_from_db()
-    _COMPOSE_BOOLEAN_KEYS = {
-        "BRIDGE_SMTP_SECURE",
-        "BRIDGE_EMAIL_ENABLED",
-        "BRIDGE_SIGNAL_ENABLED",
-        "BRIDGE_TELEGRAM_ENABLED",
-        "BRIDGE_DISCORD_ENABLED",
-        "BRIDGE_WHATSAPP_ENABLED",
-        "BRIDGE_EMAIL_INBOUND_ENABLED",
-        "BRIDGE_IMAP_USE_SSL",
-    }
-    env: dict[str, str] = {}
-    for cfg_key, cfg_val in raw.items():
-        compose_key = _CONFIG_TO_COMPOSE_ENV.get(cfg_key)
-        if compose_key:
-            # Normalise booleans: empty string -> "false"
-            if compose_key in _COMPOSE_BOOLEAN_KEYS and cfg_val.strip() == "":
-                cfg_val = "false"
-            env[compose_key] = cfg_val
-    # Derive EMAIL_ENABLED from whether any provider is configured
-    has_smtp = bool(env.get("BRIDGE_SMTP_HOST"))
-    has_resend = bool(env.get("BRIDGE_RESEND_API_KEY"))
-    env["BRIDGE_EMAIL_ENABLED"] = "true" if (has_smtp or has_resend) else "false"
-    return env
-
-
-async def _apply_bridge_config_docker() -> dict:
-    """
-    Docker path: read config from DB, export as env vars, and recreate the
-    bridge-api container via ``docker compose up -d bridge-api`` so it picks
-    up the new environment.
-    """
-    import asyncio, os
-
-    env_overrides = await _read_bridge_config_from_db()
-    logger.info(f"[APPLY] Bridge env overrides: { {k: ('****' if 'PASSWORD' in k or 'KEY' in k else v) for k, v in env_overrides.items()} }")
-
-    # Build the shell environment — start with current env (which already has
-    # COMPOSE_PROJECT_NAME, BUSIBOX_HOST_PATH, POSTGRES_PASSWORD, etc.) and
-    # layer the smtp overrides on top.
-    compose_env = {**os.environ, **env_overrides}
-
-    # Compose files and project name come from the deploy-api container env
-    compose_files = os.environ.get("COMPOSE_FILES", "-f docker-compose.yml")
-    repo_root = os.environ.get("BUSIBOX_HOST_PATH") or os.environ.get("BUSIBOX_REPO_ROOT", "/busibox")
-
-    cmd = f"docker compose {compose_files} up -d bridge-api"
-    logger.info(f"[APPLY] Running: {cmd}  (cwd={repo_root})")
-
-    proc = await asyncio.create_subprocess_shell(
-        cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=repo_root,
-        env=compose_env,
-    )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-
-    if proc.returncode != 0:
-        err = stderr.decode().strip() if stderr else "unknown error"
-        logger.error(f"[APPLY] docker compose up failed: {err}")
-        raise HTTPException(status_code=500, detail=f"Failed to restart bridge-api: {err}")
-
-    out = stdout.decode().strip() if stdout else ""
-    logger.info(f"[APPLY] bridge-api recreated: {out}")
-    return {"success": True, "message": "bridge-api restarted with updated bridge config.", "output": out}
-
-
-async def _apply_bridge_config_proxmox() -> dict:
-    """
-    Proxmox path: read config from DB, SSH to the bridge container,
-    patch the email-related env vars in the bridge .env file, and restart
-    the bridge systemd service.
-
-    This avoids a full Ansible re-run which is slow and requires vault
-    secrets to already contain the new values.
-    """
-    from .database import execute_ssh_command
-
-    raw = await _read_bridge_raw_config_from_db()
-    logger.info(f"[APPLY-PROXMOX] Bridge raw config keys: {list(raw.keys())}")
-
-    # Build the env var updates for the bridge .env file
-    # Boolean-type env vars that Pydantic expects as "true"/"false"
-    _BOOLEAN_KEYS = {
-        "SMTP_SECURE",
-        "EMAIL_ENABLED",
-        "SIGNAL_ENABLED",
-        "TELEGRAM_ENABLED",
-        "DISCORD_ENABLED",
-        "WHATSAPP_ENABLED",
-        "EMAIL_INBOUND_ENABLED",
-        "IMAP_USE_SSL",
-    }
-
-    env_updates: dict[str, str] = {}
-    for cfg_key, cfg_val in raw.items():
-        bridge_key = _CONFIG_TO_BRIDGE_ENV.get(cfg_key)
-        if bridge_key:
-            # Normalise booleans: empty string -> "false"
-            if bridge_key in _BOOLEAN_KEYS and cfg_val.strip() == "":
-                cfg_val = "false"
-            env_updates[bridge_key] = cfg_val
-
-    # Derive EMAIL_ENABLED
-    has_smtp = bool(env_updates.get("SMTP_HOST"))
-    has_resend = bool(env_updates.get("RESEND_API_KEY"))
-    env_updates["EMAIL_ENABLED"] = "true" if (has_smtp or has_resend) else "false"
-
-    logger.info(f"[APPLY-PROXMOX] Updating bridge .env: { {k: ('****' if 'PASSWORD' in k or 'KEY' in k else v) for k, v in env_updates.items()} }")
-
-    # The bridge .env file is at /srv/bridge/.env on the bridge container
-    # SSH to 'bridge' hostname (resolved via /etc/hosts from internal_dns role)
-    bridge_host = "bridge"
-    env_file = "/srv/bridge/.env"
-
-    # Use a Python script on the remote host to safely patch the .env file.
-    # This avoids sed/shell escaping issues with special chars in passwords.
-    updates_b64 = base64.b64encode(json.dumps(env_updates).encode()).decode()
-    combined = (
-        f"python3 -c '"
-        f"import json, base64, os; "
-        f"updates = json.loads(base64.b64decode(\"{updates_b64}\").decode()); "
-        f"env_file = \"{env_file}\"; "
-        f"lines = open(env_file).readlines() if os.path.exists(env_file) else []; "
-        f"found = set(); "
-        f"new_lines = []; "
-        f"["
-        f"(found.add(l.split(\"=\", 1)[0]), new_lines.append(l.split(\"=\", 1)[0] + \"=\" + updates[l.split(\"=\", 1)[0]] + \"\\n\")) "
-        f"if \"=\" in l and l.split(\"=\", 1)[0] in updates "
-        f"else new_lines.append(l) "
-        f"for l in lines"
-        f"]; "
-        f"[new_lines.append(k + \"=\" + v + \"\\n\") for k, v in updates.items() if k not in found]; "
-        f"open(env_file, \"w\").writelines(new_lines)"
-        f"' && systemctl restart bridge"
-    )
-
-    stdout, stderr, code = await execute_ssh_command(bridge_host, combined)
-
-    if code != 0:
-        err = stderr.strip() if stderr else "unknown error"
-        logger.error(f"[APPLY-PROXMOX] Failed to apply bridge config: {err}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to apply bridge config via SSH: {err}"
-        )
-
-    logger.info(f"[APPLY-PROXMOX] Bridge config applied and service restarted")
-    return {
-        "success": True,
-        "message": "Bridge config updated and service restarted.",
-        "keys_updated": list(env_updates.keys()),
-    }
 
 
 @router.post("/apply/{service}")
@@ -706,22 +448,16 @@ async def apply_config(
     """
     Apply configuration changes to a service.
 
-    In **Docker** environments: reads config values from the ``config`` table,
-    exports them as compose env vars, and recreates the container via
-    ``docker compose up -d``.
-
-    In **Proxmox** environments: SSHes to the service container, patches the
-    relevant env vars in the service's ``.env`` file, and restarts the systemd
-    service.
+    Bridge reads its config from config-api at runtime (with a 60s cache),
+    so no restart is needed. This endpoint exists for backward compatibility
+    and simply acknowledges the request.
 
     Currently supported services:
     - bridge: Multi-channel communication (email, Signal)
 
     Requires admin authentication.
     """
-    from .core_app_executor import is_docker_environment
-
-    logger.info(f"Applying config for service={service}, user={token_payload.get('user_id')}")
+    logger.info(f"Config apply requested for service={service}, user={token_payload.get('user_id')}")
 
     supported = {"bridge"}
     if service not in supported:
@@ -730,12 +466,10 @@ async def apply_config(
             detail=f"Service '{service}' is not supported. Supported: {', '.join(sorted(supported))}"
         )
 
-    # ----- Docker path -----
-    if is_docker_environment():
-        return await _apply_bridge_config_docker()
-
-    # ----- Proxmox path: patch .env and restart -----
-    return await _apply_bridge_config_proxmox()
+    return {
+        "success": True,
+        "message": f"{service} reads config from config-api at runtime. No restart needed.",
+    }
 
 
 @router.get("/export/all")

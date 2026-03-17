@@ -27,6 +27,49 @@
     _env_file_arg: "{{ '--env-file ' ~ docker_env_file if _env_file_stat.stat.exists else '' }}"
     _services_arg: "{{ docker_services_to_start | default([]) | join(' ') }}"
 
+- name: Pull pre-built images from registry (if requested)
+  ansible.builtin.shell: |
+    cd {{ docker_compose_dir }}
+    docker compose {{ docker_compose_file_args }} {{ _env_file_arg }} \
+      pull {{ _services_arg }} 2>&1
+  args:
+    chdir: "{{ docker_compose_dir }}"
+  environment: &docker_secrets_env
+    DOCKER_CONFIG: "{{ _docker_config_override }}"
+    DOCKER_HOST: "{{ lookup('env', 'DOCKER_HOST') | default('', true) }}"
+    COMPOSE_PROJECT_NAME: "{{ compose_project_name }}"
+    CONTAINER_PREFIX: "{{ container_prefix | default('dev') }}"
+    BUSIBOX_HOST_PATH: "{{ docker_compose_dir }}"
+    BUSIBOX_REPO_ROOT: "{{ docker_compose_dir }}"
+    # Secrets from centralized busibox_secrets mapping (shared_secrets.yml)
+    POSTGRES_PASSWORD: "{{ busibox_secrets.POSTGRES_PASSWORD }}"
+    MINIO_ROOT_USER: "{{ busibox_secrets.MINIO_ROOT_USER }}"
+    MINIO_ROOT_PASSWORD: "{{ busibox_secrets.MINIO_ROOT_PASSWORD }}"
+    MINIO_ACCESS_KEY: "{{ busibox_secrets.MINIO_ROOT_USER }}"
+    MINIO_SECRET_KEY: "{{ busibox_secrets.MINIO_ROOT_PASSWORD }}"
+    SSO_JWT_SECRET: "{{ busibox_secrets.SSO_JWT_SECRET }}"
+    AUTHZ_MASTER_KEY: "{{ busibox_secrets.AUTHZ_MASTER_KEY }}"
+    LITELLM_API_KEY: "{{ busibox_secrets.LITELLM_MASTER_KEY }}"
+    LITELLM_MASTER_KEY: "{{ busibox_secrets.LITELLM_MASTER_KEY }}"
+    LITELLM_SALT_KEY: "{{ busibox_secrets.LITELLM_SALT_KEY }}"
+    NEO4J_PASSWORD: "{{ busibox_secrets.NEO4J_PASSWORD }}"
+    CONFIG_ENCRYPTION_KEY: "{{ busibox_secrets.CONFIG_ENCRYPTION_KEY }}"
+    GITHUB_AUTH_TOKEN: "{{ busibox_secrets.GITHUB_AUTH_TOKEN }}"
+    ADMIN_EMAIL: "{{ busibox_secrets.ADMIN_EMAILS }}"
+    ALLOWED_EMAIL_DOMAINS: "{{ busibox_secrets.ALLOWED_EMAIL_DOMAINS }}"
+    # Docker-specific config (not secrets)
+    BUSIBOX_PORTAL_GITHUB_REF: "{{ lookup('env', 'BUSIBOX_PORTAL_GITHUB_REF') | default('main', true) }}"
+    BUSIBOX_ADMIN_GITHUB_REF: "{{ lookup('env', 'BUSIBOX_ADMIN_GITHUB_REF') | default('main', true) }}"
+    MODEL_HOST_CACHE: "{{ lookup('env', 'MODEL_HOST_CACHE') | default('model_cache', true) }}"
+    HF_HOST_CACHE: "{{ lookup('env', 'HF_HOST_CACHE') | default('model_cache', true) }}"
+    FASTEMBED_HOST_CACHE: "{{ lookup('env', 'FASTEMBED_HOST_CACHE') | default('fastembed_cache', true) }}"
+    LLM_BACKEND: "{{ lookup('env', 'LLM_BACKEND') | default('', true) }}"
+    HOST_AGENT_TOKEN: "{{ lookup('env', 'HOST_AGENT_TOKEN') | default('', true) }}"
+  when: docker_pull_images | default(false)
+  register: pull_result
+  changed_when: "'Pulled' in pull_result.stdout or 'Downloaded' in pull_result.stdout"
+  no_log: false
+
 - name: Build services (if requested)
   ansible.builtin.shell: |
     cd {{ docker_compose_dir }}
@@ -34,41 +77,8 @@
       build {{ '--no-cache' if docker_build_no_cache else '' }} {{ _services_arg }}
   args:
     chdir: "{{ docker_compose_dir }}"
-  environment: &docker_secrets_env
-    DOCKER_CONFIG: "{{ _docker_config_override }}"
-    DOCKER_HOST: "{{ lookup('env', 'DOCKER_HOST') | default('', true) }}"
-    # Container naming
-    CONTAINER_PREFIX: "{{ container_prefix | default('dev') }}"
-    # Ensure deploy-api and compose sub-processes use the actual host repo path.
-    BUSIBOX_HOST_PATH: "{{ docker_compose_dir }}"
-    BUSIBOX_REPO_ROOT: "{{ docker_compose_dir }}"
-    # Secrets injected from encrypted Ansible vault at runtime
-    # Fall back to postgres_password (from inventory) to stay consistent with
-    # docker-compose.yml's ${POSTGRES_PASSWORD:-devpassword} default and the
-    # ALTER USER in the postgres role.  An empty value here would let
-    # docker-compose interpolation use 'devpassword' while Ansible's ALTER USER
-    # might set a different vault-sourced password, causing auth failures.
-    POSTGRES_PASSWORD: "{{ secrets.postgresql.password | default(postgres_password | default('devpassword')) }}"
-    MINIO_ACCESS_KEY: "{{ secrets.minio.root_user | default('minioadmin') }}"
-    MINIO_SECRET_KEY: "{{ secrets.minio.root_password | default('') }}"
-    SSO_JWT_SECRET: "{{ secrets.jwt_secret | default('') }}"
-    AUTHZ_MASTER_KEY: "{{ secrets.authz_master_key | default('') }}"
-    LITELLM_API_KEY: "{{ secrets.litellm_master_key if (secrets.litellm_master_key | default('') | length > 0) else (secrets.litellm_api_key | default('')) }}"
-    LITELLM_MASTER_KEY: "{{ secrets.litellm_master_key if (secrets.litellm_master_key | default('') | length > 0) else (secrets.litellm_api_key | default('')) }}"
-    LITELLM_SALT_KEY: "{{ secrets.litellm_salt_key | default(secrets.litellm_master_key | default(secrets.litellm_api_key | default(''))) }}"
-    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token if (secrets.github.personal_access_token | default('') | length > 0) and not (secrets.github.personal_access_token | default('') is match('CHANGE_ME.*')) else (github_token | default(lookup('env', 'GITHUB_AUTH_TOKEN')) | default('')) }}"
-    ADMIN_EMAIL: "{{ secrets.admin_emails | default(secrets.admin_email, true) | default('', true) }}"
-    ALLOWED_EMAIL_DOMAINS: "{{ secrets.allowed_email_domains | default('*') }}"
-    BUSIBOX_PORTAL_GITHUB_REF: "{{ lookup('env', 'BUSIBOX_PORTAL_GITHUB_REF') | default('main', true) }}"
-    BUSIBOX_ADMIN_GITHUB_REF: "{{ lookup('env', 'BUSIBOX_ADMIN_GITHUB_REF') | default('main', true) }}"
-    MODEL_HOST_CACHE: "{{ lookup('env', 'MODEL_HOST_CACHE') | default('model_cache', true) }}"
-    HF_HOST_CACHE: "{{ lookup('env', 'HF_HOST_CACHE') | default('model_cache', true) }}"
-    FASTEMBED_HOST_CACHE: "{{ lookup('env', 'FASTEMBED_HOST_CACHE') | default('fastembed_cache', true) }}"
-    # LLM Backend (mlx/vllm/cloud) - needed for deploy-api platform detection inside Docker
-    LLM_BACKEND: "{{ lookup('env', 'LLM_BACKEND') | default('', true) }}"
-    # Host Agent token (for MLX control on Apple Silicon via host-agent)
-    HOST_AGENT_TOKEN: "{{ lookup('env', 'HOST_AGENT_TOKEN') | default('', true) }}"
-  when: docker_build_first | default(false)
+  environment: *docker_secrets_env
+  when: (docker_build_first | default(false)) and not (docker_pull_images | default(false))
   register: build_result
   changed_when: "'Building' in build_result.stdout or 'built' in build_result.stdout"
   no_log: false

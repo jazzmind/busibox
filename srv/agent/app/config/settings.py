@@ -79,10 +79,9 @@ class Settings(BaseSettings):
     )
 
     # Database configuration
-    # Default credentials match docker-compose.yml (busibox_user:devpassword)
     database_url: str = Field(
-        "postgresql+asyncpg://busibox_user:devpassword@localhost:5432/agent",
-        description="SQLAlchemy connection URL",
+        ...,
+        description="SQLAlchemy connection URL (required - no default)",
     )
     
     # LiteLLM database for spend tracking queries (read-only access)

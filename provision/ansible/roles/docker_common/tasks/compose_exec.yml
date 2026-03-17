@@ -28,19 +28,24 @@
   environment:
     DOCKER_CONFIG: "{{ _docker_config_override }}"
     DOCKER_HOST: "{{ lookup('env', 'DOCKER_HOST') | default('', true) }}"
-    # Container naming
+    COMPOSE_PROJECT_NAME: "{{ compose_project_name }}"
     CONTAINER_PREFIX: "{{ container_prefix | default('dev') }}"
-    # Secrets injected from encrypted Ansible vault at runtime
-    POSTGRES_PASSWORD: "{{ secrets.postgresql.password | default('') }}"
-    MINIO_ACCESS_KEY: "{{ secrets.minio.root_user | default('minioadmin') }}"
-    MINIO_SECRET_KEY: "{{ secrets.minio.root_password | default('') }}"
-    SSO_JWT_SECRET: "{{ secrets.jwt_secret | default('') }}"
-    AUTHZ_MASTER_KEY: "{{ secrets.authz_master_key | default('') }}"
-    LITELLM_API_KEY: "{{ secrets.litellm_master_key if (secrets.litellm_master_key | default('') | length > 0) else (secrets.litellm_api_key | default('')) }}"
-    LITELLM_MASTER_KEY: "{{ secrets.litellm_master_key if (secrets.litellm_master_key | default('') | length > 0) else (secrets.litellm_api_key | default('')) }}"
-    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default(github_token) | default('') }}"
-    ADMIN_EMAIL: "{{ secrets.admin_emails | default(secrets.admin_email, true) | default('', true) }}"
-    ALLOWED_EMAIL_DOMAINS: "{{ secrets.allowed_email_domains | default('*') }}"
+    # Secrets from centralized busibox_secrets mapping
+    POSTGRES_PASSWORD: "{{ busibox_secrets.POSTGRES_PASSWORD }}"
+    MINIO_ROOT_USER: "{{ busibox_secrets.MINIO_ROOT_USER }}"
+    MINIO_ROOT_PASSWORD: "{{ busibox_secrets.MINIO_ROOT_PASSWORD }}"
+    MINIO_ACCESS_KEY: "{{ busibox_secrets.MINIO_ROOT_USER }}"
+    MINIO_SECRET_KEY: "{{ busibox_secrets.MINIO_ROOT_PASSWORD }}"
+    SSO_JWT_SECRET: "{{ busibox_secrets.SSO_JWT_SECRET }}"
+    AUTHZ_MASTER_KEY: "{{ busibox_secrets.AUTHZ_MASTER_KEY }}"
+    LITELLM_API_KEY: "{{ busibox_secrets.LITELLM_MASTER_KEY }}"
+    LITELLM_MASTER_KEY: "{{ busibox_secrets.LITELLM_MASTER_KEY }}"
+    LITELLM_SALT_KEY: "{{ busibox_secrets.LITELLM_SALT_KEY }}"
+    NEO4J_PASSWORD: "{{ busibox_secrets.NEO4J_PASSWORD }}"
+    CONFIG_ENCRYPTION_KEY: "{{ busibox_secrets.CONFIG_ENCRYPTION_KEY }}"
+    GITHUB_AUTH_TOKEN: "{{ busibox_secrets.GITHUB_AUTH_TOKEN }}"
+    ADMIN_EMAIL: "{{ busibox_secrets.ADMIN_EMAILS }}"
+    ALLOWED_EMAIL_DOMAINS: "{{ busibox_secrets.ALLOWED_EMAIL_DOMAINS }}"
   register: _exec_result
   changed_when: false
   failed_when: docker_exec_fail_on_error | default(true) and _exec_result.rc != 0

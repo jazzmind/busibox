@@ -34,7 +34,8 @@ spec:
     spec:
       containers:
         - name: data-api
-          image: localhost:30500/data-api:latest
+          image: ghcr.io/jazzmind/busibox/data-api:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8002
           env:
@@ -147,7 +148,8 @@ spec:
     spec:
       containers:
         - name: data-worker
-          image: localhost:30500/data-api:latest
+          image: ghcr.io/jazzmind/busibox/data-api:latest
+          imagePullPolicy: Always
           command: ["python", "src/worker.py"]
           env:
             - name: POSTGRES_HOST

@@ -47,6 +47,30 @@ fn main() -> Result<()> {
         Err(_) => {}
     }
 
+    // Try to lock the active profile. If another instance holds it,
+    // redirect to profile select so the user can pick a different one.
+    let mut active_locked = false;
+    if let Some((id, _)) = app.active_profile() {
+        let id = id.to_string();
+        match modules::profile::try_lock_profile(&repo_root, &id) {
+            Ok(Some(lock_file)) => {
+                app.profile_lock = Some(lock_file);
+                active_locked = true;
+            }
+            Ok(None) => {
+                app.set_message(
+                    &format!("Profile '{id}' is in use by another instance"),
+                    app::MessageKind::Warning,
+                );
+                app.screen = Screen::ProfileSelect;
+            }
+            Err(e) => {
+                eprintln!("Warning: could not acquire profile lock: {e}");
+                active_locked = true;
+            }
+        }
+    }
+
     // Detect local hardware (non-blocking quick scan)
     match modules::hardware::HardwareProfile::detect_local() {
         Ok(hw) => app.local_hardware = Some(hw),
@@ -54,7 +78,7 @@ fn main() -> Result<()> {
     }
 
     // Restore remote hardware from saved profile so tier/cache logic works
-    if app.has_profiles() {
+    if app.has_profiles() && active_locked {
         if let Some((_, profile)) = app.active_profile() {
             if profile.remote {
                 app.remote_hardware = profile.hardware.clone();
@@ -62,17 +86,24 @@ fn main() -> Result<()> {
         }
     }
 
-    // Check model cache status for the active profile
-    if app.has_profiles() {
-        screens::welcome::check_model_cache(&mut app);
-        screens::welcome::load_active_tier_models(&mut app);
+    // Check model cache / health status for the active profile
+    if app.has_profiles() && active_locked {
+        let is_k8s = app.active_profile()
+            .map(|(_, p)| p.backend == "k8s")
+            .unwrap_or(false);
+        if !is_k8s {
+            screens::welcome::check_model_cache(&mut app);
+            screens::welcome::load_active_tier_models(&mut app);
+        }
         screens::welcome::trigger_health_checks(&mut app);
     }
 
     // If the active profile has an encrypted vault key, prompt for unlock on startup
-    if let Some((id, _)) = app.active_profile() {
-        if modules::vault::has_vault_key(&id) {
-            app.pending_vault_setup = true;
+    if active_locked {
+        if let Some((id, _)) = app.active_profile() {
+            if modules::vault::has_vault_key(&id) {
+                app.pending_vault_setup = true;
+            }
         }
     }
 
@@ -110,6 +141,9 @@ fn main() -> Result<()> {
 
         // Drain deployed model status updates
         screens::welcome::process_deployed_model_updates(&mut app);
+
+        // Drain K8s cluster status updates
+        screens::welcome::process_k8s_cluster_updates(&mut app);
 
         // Drain K8s manage updates
         screens::k8s_manage::process_k8s_updates(&mut app);
@@ -538,6 +572,47 @@ fn render(app: &App, f: &mut ratatui::Frame) {
         Screen::K8sSetup => screens::k8s_setup::render(f, app),
         Screen::K8sManage => screens::k8s_manage::render(f, app),
     }
+
+    // Profile header bar overlay (except Welcome and ProfileSelect)
+    if !matches!(&app.screen, Screen::Welcome | Screen::ProfileSelect) {
+        render_profile_header(f, app, area);
+    }
+}
+
+fn render_profile_header(f: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect) {
+    let Some((_, profile)) = app.active_profile() else {
+        return;
+    };
+    let mut text = format!(
+        "📍 {} | {} | {}",
+        profile.label,
+        profile.environment,
+        profile.backend
+    );
+    if profile.remote {
+        if let Some(ref host) = profile.remote_host {
+            text.push_str(&format!(" | {}", host));
+        } else if let Some(host) = profile.effective_host() {
+            text.push_str(&format!(" | {}", host));
+        }
+    }
+    let header_area = ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: area.width,
+        height: 1,
+    };
+    let paragraph = ratatui::widgets::Paragraph::new(text)
+        .style(
+            ratatui::style::Style::default()
+                .fg(ratatui::style::Color::White)
+                .bg(theme::BRAND_DIM),
+        )
+        .block(
+            ratatui::widgets::Block::default()
+                .style(ratatui::style::Style::default().bg(theme::BRAND_DIM)),
+        );
+    f.render_widget(paragraph, header_area);
 }
 
 fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
@@ -759,8 +834,68 @@ fn perform_sync_then_admin_login(app: &mut App) {
                     return;
                 }
             }
+
+            // Redeploy deploy-api on remote so web install has latest code + secrets
+            {
+                let make_args = "install SERVICE=deploy";
+                let vault_pw = app.vault_password.clone();
+                let ssh = app.ssh_connection.as_ref().unwrap();
+                let result = if let Some(ref vp) = vault_pw {
+                    remote::exec_make_quiet_with_vault_streaming(ssh, remote_path, make_args, vp, |_| {})
+                } else {
+                    remote::exec_make_quiet_streaming(ssh, remote_path, make_args, |_| {})
+                };
+                match result {
+                    Ok(0) => {
+                        app.set_message("✓ Deploy API updated", MessageKind::Success);
+                    }
+                    Ok(code) => {
+                        app.set_message(
+                            &format!("⚠ Deploy API update exited with code {code}"),
+                            MessageKind::Warning,
+                        );
+                    }
+                    Err(e) => {
+                        app.set_message(
+                            &format!("⚠ Deploy API update failed: {e}"),
+                            MessageKind::Warning,
+                        );
+                    }
+                }
+            }
         } else {
             app.setup_target = SetupTarget::Local;
+
+            // Redeploy deploy-api locally so web install has latest code + secrets
+            {
+                let make_args = "install SERVICE=deploy";
+                let vault_pw = app.vault_password.clone();
+                let repo_root = app.repo_root.clone();
+                let result = if let Some(ref vp) = vault_pw {
+                    remote::run_local_make_quiet_with_vault_streaming(
+                        &repo_root, make_args, vp, |_| {},
+                    )
+                } else {
+                    remote::run_local_make_quiet_streaming(&repo_root, make_args, |_| {})
+                };
+                match result {
+                    Ok(0) => {
+                        app.set_message("✓ Deploy API updated", MessageKind::Success);
+                    }
+                    Ok(code) => {
+                        app.set_message(
+                            &format!("⚠ Deploy API update exited with code {code}"),
+                            MessageKind::Warning,
+                        );
+                    }
+                    Err(e) => {
+                        app.set_message(
+                            &format!("⚠ Deploy API update failed: {e}"),
+                            MessageKind::Warning,
+                        );
+                    }
+                }
+            }
         }
     }
 

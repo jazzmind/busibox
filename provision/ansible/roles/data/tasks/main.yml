@@ -7,6 +7,10 @@
     file: "{{ playbook_dir }}/roles/secrets/vars/vault.{{ deployment_environment | default('dev') }}.yml"
   no_log: true
 
+- name: Load shared secrets mapping
+  include_vars:
+    file: "{{ playbook_dir }}/roles/secrets/vars/shared_secrets.yml"
+
 # ============================================================================
 # System Dependencies
 # ============================================================================

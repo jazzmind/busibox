@@ -67,8 +67,8 @@ def get_data_db_url() -> str:
 def get_minio_client() -> Minio:
     """Create MinIO client."""
     endpoint = os.environ.get("MINIO_ENDPOINT", "10.96.200.205:9000")
-    access_key = os.environ.get("MINIO_ACCESS_KEY", "minioadmin")
-    secret_key = os.environ.get("MINIO_SECRET_KEY", "minioadmin")
+    access_key = os.environ.get("MINIO_ACCESS_KEY", "")
+    secret_key = os.environ.get("MINIO_SECRET_KEY", "")
     
     return Minio(
         endpoint,

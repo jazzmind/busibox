@@ -85,18 +85,20 @@ pub fn decrypt_vault_password(enc: &EncryptedVault, master_password: &str) -> Re
     String::from_utf8(plaintext).map_err(|e| eyre!("Vault password is not valid UTF-8: {e}"))
 }
 
-/// Save an encrypted vault to a JSON file.
+/// Save an encrypted vault to a JSON file using atomic write (temp + rename).
 pub fn save_encrypted_vault(path: &Path, enc: &EncryptedVault) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(enc)?;
-    std::fs::write(path, format!("{json}\n"))?;
+    let tmp = path.with_extension("enc.tmp");
+    std::fs::write(&tmp, format!("{json}\n"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
     }
+    std::fs::rename(&tmp, path)?;
     Ok(())
 }
 

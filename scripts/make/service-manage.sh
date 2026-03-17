@@ -37,12 +37,17 @@ source "${REPO_ROOT}/scripts/lib/backends/common.sh"
 # Initialize profiles
 profile_init
 
-# Active profile info
-_active_profile=$(profile_get_active)
-
-# Set BUSIBOX_ENV from active profile so state.sh and backends pick it up
-if [[ -n "$_active_profile" ]]; then
-    export BUSIBOX_ENV=$(profile_get "$_active_profile" "environment")
+# Active profile info.
+# When BUSIBOX_ENV / BUSIBOX_BACKEND are passed explicitly (e.g. by the CLI),
+# they take precedence over the profiles.json active profile to prevent
+# multi-instance races.
+if [[ -n "${BUSIBOX_ENV:-}" && -n "${BUSIBOX_BACKEND:-}" ]]; then
+    _active_profile=""
+else
+    _active_profile=$(profile_get_active)
+    if [[ -n "$_active_profile" ]]; then
+        export BUSIBOX_ENV=$(profile_get "$_active_profile" "environment")
+    fi
 fi
 
 # ============================================================================
@@ -51,15 +56,13 @@ fi
 
 # Get the current environment (profile-aware)
 get_current_env() {
-    # Prefer active profile
-    if [[ -n "$_active_profile" ]]; then
-        profile_get "$_active_profile" "environment"
+    if [[ -n "${BUSIBOX_ENV:-}" ]]; then
+        echo "$BUSIBOX_ENV"
         return
     fi
 
-    # Fallback to BUSIBOX_ENV
-    if [[ -n "${BUSIBOX_ENV:-}" ]]; then
-        echo "$BUSIBOX_ENV"
+    if [[ -n "$_active_profile" ]]; then
+        profile_get "$_active_profile" "environment"
         return
     fi
 
@@ -79,8 +82,11 @@ get_backend_type() {
     local env="$1"
     local backend=""
 
-    # Prefer active profile
-    if [[ -n "$_active_profile" ]]; then
+    if [[ -n "${BUSIBOX_BACKEND:-}" ]]; then
+        backend="$BUSIBOX_BACKEND"
+    fi
+
+    if [[ -z "$backend" && -n "$_active_profile" ]]; then
         backend=$(profile_get "$_active_profile" "backend")
     fi
 

@@ -51,7 +51,7 @@ class MilvusSearchService:
         # Cache of existing partitions
         self._partition_cache: Optional[set] = None
     
-    def connect(self):
+    def connect(self, timeout: float = 10):
         """Connect to Milvus. Returns True if successful, False otherwise."""
         if self.connected:
             return True
@@ -61,6 +61,7 @@ class MilvusSearchService:
                 alias="default",
                 host=self.host,
                 port=self.port,
+                timeout=timeout,
             )
             self.collection = Collection(self.collection_name)
             self.collection.load()

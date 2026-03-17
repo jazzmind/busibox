@@ -29,6 +29,7 @@
   environment:
     DOCKER_CONFIG: "{{ _docker_config_override }}"
     DOCKER_HOST: "{{ lookup('env', 'DOCKER_HOST') | default('', true) }}"
+    COMPOSE_PROJECT_NAME: "{{ compose_project_name }}"
     CONTAINER_PREFIX: "{{ container_prefix | default('dev') }}"
     GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default(github_token) | default('') }}"
   register: logs_result

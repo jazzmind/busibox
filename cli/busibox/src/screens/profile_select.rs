@@ -27,9 +27,23 @@ pub fn render(f: &mut Frame, app: &App) {
             .profiles
             .iter()
             .enumerate()
-            .map(|(i, (id, profile))| {
+            .map(|(i, (id, profile_entry))| {
                 let is_active = id == &profiles.active;
-                let marker = if is_active { "▸" } else { " " };
+                let is_locked_by_other = !is_active
+                    || app.profile_lock.is_none();
+                let locked = if is_locked_by_other {
+                    profile::is_profile_locked(&app.repo_root, id)
+                } else {
+                    false
+                };
+
+                let marker = if is_active && !locked {
+                    "▸"
+                } else if locked {
+                    "🔒"
+                } else {
+                    " "
+                };
 
                 let style = if i == app.profile_selected {
                     theme::selected()
@@ -39,30 +53,32 @@ pub fn render(f: &mut Frame, app: &App) {
                     theme::normal()
                 };
 
-                let remote_info = if profile.remote {
+                let remote_info = if profile_entry.remote {
                     format!(
                         " → {}",
-                        profile.effective_host().unwrap_or("unknown")
+                        profile_entry.effective_host().unwrap_or("unknown")
                     )
                 } else {
                     " (local)".into()
                 };
 
-                let hw_info = profile
+                let hw_info = profile_entry
                     .hardware
                     .as_ref()
                     .map(|h| format!(" [{} {} {}GB]", h.os, h.arch, h.ram_gb))
                     .unwrap_or_default();
 
+                let lock_info = if locked { " (in use)" } else { "" };
+
                 ListItem::new(vec![
                     Line::from(Span::styled(
-                        format!("{marker} {id} — {}", profile.label),
+                        format!("{marker} {id} — {}{lock_info}", profile_entry.label),
                         style,
                     )),
                     Line::from(Span::styled(
                         format!(
                             "    {} / {}{}{}",
-                            profile.environment, profile.backend, remote_info, hw_info
+                            profile_entry.environment, profile_entry.backend, remote_info, hw_info
                         ),
                         theme::muted(),
                     )),
@@ -178,6 +194,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                                 };
                                 app.set_message(&msg, MessageKind::Success);
                                 if is_active {
+                                    app.profile_lock = None;
                                     app.kill_ssh_tunnel();
                                     app.health_results.clear();
                                     app.health_groups.clear();
@@ -228,35 +245,56 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                 if let Some(id) = profile_ids.get(app.profile_selected) {
                     let id = (*id).clone();
                     let switched_profile = id.clone();
-                    if let Some(profiles) = &mut app.profiles {
-                        profiles.active = id.clone();
-                        if let Err(e) =
-                            profile::save_profiles(&app.repo_root, profiles)
-                        {
+
+                    // Try to lock the new profile before switching
+                    match profile::try_lock_profile(&app.repo_root, &id) {
+                        Ok(Some(new_lock)) => {
+                            // Release the old lock by dropping the handle
+                            app.profile_lock = None;
+                            app.profile_lock = Some(new_lock);
+
+                            if let Some(profiles) = &mut app.profiles {
+                                profiles.active = id.clone();
+                                if let Err(e) =
+                                    profile::save_profiles(&app.repo_root, profiles)
+                                {
+                                    app.set_message(
+                                        &format!("Failed to save: {e}"),
+                                        MessageKind::Error,
+                                    );
+                                } else {
+                                    app.set_message(
+                                        &format!("Switched to profile: {id}"),
+                                        MessageKind::Success,
+                                    );
+                                    app.vault_password = None;
+                                    app.kill_ssh_tunnel();
+                                    if vault::has_vault_key(&switched_profile) {
+                                        app.pending_vault_setup = true;
+                                    }
+                                    app.health_results.clear();
+                                    app.health_groups.clear();
+                                    app.action_menu_selected = 0;
+                                    app.models_manage_loaded = false;
+                                    app.deployed_models = None;
+                                    app.screen = Screen::Welcome;
+                                    app.menu_selected = 0;
+                                    crate::screens::welcome::load_active_tier_models(app);
+                                    crate::screens::welcome::trigger_health_checks(app);
+                                }
+                            }
+                        }
+                        Ok(None) => {
                             app.set_message(
-                                &format!("Failed to save: {e}"),
+                                &format!("Profile '{id}' is in use by another instance"),
+                                MessageKind::Warning,
+                            );
+                        }
+                        Err(e) => {
+                            app.set_message(
+                                &format!("Failed to lock profile: {e}"),
                                 MessageKind::Error,
                             );
-                        } else {
-                            app.set_message(
-                                &format!("Switched to profile: {id}"),
-                                MessageKind::Success,
-                            );
-                            app.vault_password = None;
-                            app.kill_ssh_tunnel();
-                            if vault::has_vault_key(&switched_profile) {
-                                app.pending_vault_setup = true;
-                            }
-                            // Reset health state and trigger fresh checks
-                            app.health_results.clear();
-                            app.health_groups.clear();
-                            app.action_menu_selected = 0;
-                            app.models_manage_loaded = false;
-                            app.deployed_models = None;
-                            app.screen = Screen::Welcome;
-                            app.menu_selected = 0;
-                            crate::screens::welcome::load_active_tier_models(app);
-                            crate::screens::welcome::trigger_health_checks(app);
                         }
                     }
                 }

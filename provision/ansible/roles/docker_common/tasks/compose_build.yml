@@ -30,7 +30,54 @@
       Compose files: {{ docker_compose_file_args }}
       Services: {{ _services_arg }}
       Container prefix: {{ container_prefix | default('dev') }}
-      GitHub token set: {{ 'yes' if (secrets.github.personal_access_token | default(github_token) | default('')) else 'no' }}
+      GitHub token set: {{ 'yes' if (busibox_secrets.GITHUB_AUTH_TOKEN | default('') | length > 0) else 'no' }}
+
+- name: Pull pre-built images from registry
+  ansible.builtin.shell: |
+    cd {{ docker_compose_dir }}
+    docker compose {{ docker_compose_file_args }} {{ _env_file_arg }} \
+      pull {{ _services_arg }} 2>&1
+  args:
+    chdir: "{{ docker_compose_dir }}"
+  environment: &compose_build_env
+    DOCKER_CONFIG: "{{ _docker_config_override }}"
+    DOCKER_HOST: "{{ lookup('env', 'DOCKER_HOST') | default('', true) }}"
+    CONTAINER_PREFIX: "{{ container_prefix | default('dev') }}"
+    COMPOSE_PROJECT_NAME: "{{ compose_project_name }}"
+    # Secrets from centralized busibox_secrets mapping
+    POSTGRES_PASSWORD: "{{ busibox_secrets.POSTGRES_PASSWORD }}"
+    MINIO_ROOT_USER: "{{ busibox_secrets.MINIO_ROOT_USER }}"
+    MINIO_ROOT_PASSWORD: "{{ busibox_secrets.MINIO_ROOT_PASSWORD }}"
+    MINIO_ACCESS_KEY: "{{ busibox_secrets.MINIO_ROOT_USER }}"
+    MINIO_SECRET_KEY: "{{ busibox_secrets.MINIO_ROOT_PASSWORD }}"
+    SSO_JWT_SECRET: "{{ busibox_secrets.SSO_JWT_SECRET }}"
+    AUTHZ_MASTER_KEY: "{{ busibox_secrets.AUTHZ_MASTER_KEY }}"
+    LITELLM_API_KEY: "{{ busibox_secrets.LITELLM_MASTER_KEY }}"
+    LITELLM_MASTER_KEY: "{{ busibox_secrets.LITELLM_MASTER_KEY }}"
+    LITELLM_SALT_KEY: "{{ busibox_secrets.LITELLM_SALT_KEY }}"
+    NEO4J_PASSWORD: "{{ busibox_secrets.NEO4J_PASSWORD }}"
+    CONFIG_ENCRYPTION_KEY: "{{ busibox_secrets.CONFIG_ENCRYPTION_KEY }}"
+    GITHUB_AUTH_TOKEN: "{{ busibox_secrets.GITHUB_AUTH_TOKEN }}"
+    ADMIN_EMAIL: "{{ busibox_secrets.ADMIN_EMAILS }}"
+    ALLOWED_EMAIL_DOMAINS: "{{ busibox_secrets.ALLOWED_EMAIL_DOMAINS }}"
+    DOCKER_BUILDKIT: "1"
+  when: docker_pull_images | default(false)
+  register: pull_result
+  changed_when: "'Pulled' in pull_result.stdout or 'Downloaded' in pull_result.stdout"
+  ignore_errors: true
+
+- name: Show pull result
+  ansible.builtin.debug:
+    msg: |
+      Pull stdout (last 30 lines):
+      {{ pull_result.stdout_lines[-30:] | default(['No stdout']) | join('\n') }}
+      Return code: {{ pull_result.rc }}
+  when: pull_result is defined and not pull_result is skipped
+
+- name: Fail if pull failed
+  ansible.builtin.fail:
+    msg: "Docker compose pull failed with exit code {{ pull_result.rc }}"
+  when: pull_result is defined and not pull_result is skipped and pull_result.rc != 0
 
 - name: Build services with docker compose build
   ansible.builtin.shell: |
@@ -42,23 +89,8 @@
       {{ _services_arg }} 2>&1
   args:
     chdir: "{{ docker_compose_dir }}"
-  environment:
-    DOCKER_CONFIG: "{{ _docker_config_override }}"
-    DOCKER_HOST: "{{ lookup('env', 'DOCKER_HOST') | default('', true) }}"
-    # Container naming
-    CONTAINER_PREFIX: "{{ container_prefix | default('dev') }}"
-    # Secrets injected from vault
-    POSTGRES_PASSWORD: "{{ secrets.postgresql.password | default('') }}"
-    MINIO_ACCESS_KEY: "{{ secrets.minio.root_user | default('minioadmin') }}"
-    MINIO_SECRET_KEY: "{{ secrets.minio.root_password | default('') }}"
-    SSO_JWT_SECRET: "{{ secrets.jwt_secret | default('') }}"
-    AUTHZ_MASTER_KEY: "{{ secrets.authz_master_key | default('') }}"
-    LITELLM_API_KEY: "{{ secrets.litellm_master_key if (secrets.litellm_master_key | default('') | length > 0) else (secrets.litellm_api_key | default('')) }}"
-    LITELLM_MASTER_KEY: "{{ secrets.litellm_master_key if (secrets.litellm_master_key | default('') | length > 0) else (secrets.litellm_api_key | default('')) }}"
-    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token if (secrets.github.personal_access_token | default('') | length > 0) and not (secrets.github.personal_access_token | default('') is match('CHANGE_ME.*')) else (github_token | default(lookup('env', 'GITHUB_AUTH_TOKEN')) | default('')) }}"
-    ADMIN_EMAIL: "{{ secrets.admin_emails | default(secrets.admin_email, true) | default('', true) }}"
-    ALLOWED_EMAIL_DOMAINS: "{{ secrets.allowed_email_domains | default('*') }}"
-    DOCKER_BUILDKIT: "1"
+  environment: *compose_build_env
+  when: not (docker_pull_images | default(false))
   register: build_result
   changed_when: "'Building' in build_result.stdout or 'built' in build_result.stdout"
   ignore_errors: true
@@ -73,9 +105,9 @@
       {{ build_result.stderr_lines[-20:] | default(['No stderr']) | join('\n') }}
       
       Return code: {{ build_result.rc }}
-  when: build_result is defined
+  when: build_result is defined and not build_result is skipped
 
 - name: Fail if build failed
   ansible.builtin.fail:
     msg: "Docker compose build failed with exit code {{ build_result.rc }}"
-  when: build_result.rc != 0
+  when: build_result is defined and not build_result is skipped and build_result.rc != 0

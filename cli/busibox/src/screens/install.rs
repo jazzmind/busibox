@@ -29,6 +29,34 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// Write DEV_APPS_DIR (and DEV_APPS_DIR_HOST) into `.busibox-state-{prefix}`
+/// and `.env.{prefix}` so the Makefile and Docker Compose pick up the value.
+fn propagate_dev_apps_dir_to_state(
+    repo_root: &std::path::Path,
+    prefix: &str,
+    dir: Option<&str>,
+) {
+    use crate::modules::profile::atomic_write;
+
+    let state_file = repo_root.join(format!(".busibox-state-{prefix}"));
+    let env_file = repo_root.join(format!(".env.{prefix}"));
+
+    for path in [&state_file, &env_file] {
+        let existing = std::fs::read_to_string(path).unwrap_or_default();
+        let mut lines: Vec<String> = existing
+            .lines()
+            .filter(|l| !l.starts_with("DEV_APPS_DIR=") && !l.starts_with("DEV_APPS_DIR_HOST="))
+            .map(|l| l.to_string())
+            .collect();
+        if let Some(d) = dir {
+            lines.push(format!("DEV_APPS_DIR={d}"));
+            lines.push(format!("DEV_APPS_DIR_HOST={d}"));
+        }
+        let content = lines.join("\n") + "\n";
+        let _ = atomic_write(path, &content);
+    }
+}
+
 /// Check if a GitHub repo is accessible without auth; returns true if private/inaccessible.
 fn is_repo_private(owner_repo: &str) -> bool {
     let url = format!("https://api.github.com/repos/{owner_repo}");
@@ -146,6 +174,7 @@ fn get_bootstrap_stages(app: &App) -> Vec<(&'static str, &'static str, Vec<Strin
         "Portal & Admin",
         vec!["core-apps".into()],
     ));
+    stages.push(("Validation", "Verify env secrets", vec!["_validate_env".into()]));
 
     stages
 }
@@ -1118,6 +1147,10 @@ fn spawn_install_worker(app: &mut App) {
                 .filter(|t| !t.is_empty())
         });
 
+    let profile_dev_apps_dir: Option<String> = app
+        .active_profile()
+        .and_then(|(_, p)| p.dev_apps_dir.clone());
+
     // Check which repos are private and will need a token
     let private_repos: Vec<String> = vec![
         "jazzmind/busibox-frontend",
@@ -1195,6 +1228,15 @@ fn spawn_install_worker(app: &mut App) {
             )));
         }
 
+        // Propagate DEV_APPS_DIR to state/env files so Docker Compose picks it up
+        if !is_remote && profile_backend == "docker" {
+            propagate_dev_apps_dir_to_state(
+                &repo_root,
+                &vault_prefix,
+                profile_dev_apps_dir.as_deref(),
+            );
+        }
+
         // K8s backend: run make k8s-deploy and skip the entire Ansible/vault flow
         if profile_backend == "k8s" {
             let _ = tx.send(InstallUpdate::Log(
@@ -1223,7 +1265,8 @@ fn spawn_install_worker(app: &mut App) {
                 }
             }
 
-            let cmd = format!("cd {} && {env_prefix}make k8s-deploy", repo_root.display());
+            // Merge stderr into stdout to avoid pipe deadlocks with kubectl exec
+            let cmd = format!("cd {} && {env_prefix}make k8s-deploy 2>&1", repo_root.display());
 
             for svc in &stages {
                 let _ = tx.send(InstallUpdate::ServiceStatus {
@@ -1236,7 +1279,7 @@ fn spawn_install_worker(app: &mut App) {
                 .arg("-c")
                 .arg(&cmd)
                 .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
                 .spawn();
 
             match result {
@@ -1245,14 +1288,6 @@ fn spawn_install_worker(app: &mut App) {
 
                     if let Some(stdout) = child.stdout.take() {
                         let reader = std::io::BufReader::new(stdout);
-                        for line in reader.lines() {
-                            if let Ok(line) = line {
-                                let _ = tx.send(InstallUpdate::Log(format!("  {line}")));
-                            }
-                        }
-                    }
-                    if let Some(stderr) = child.stderr.take() {
-                        let reader = std::io::BufReader::new(stderr);
                         for line in reader.lines() {
                             if let Ok(line) = line {
                                 let _ = tx.send(InstallUpdate::Log(format!("  {line}")));
@@ -1640,16 +1675,19 @@ fi
 gen() {{ openssl rand -base64 "$1" | tr -d '/+=' | head -c "$1"; }}
 
 PG_PASS=$(gen 24)
+MINIO_USER=$(gen 16)
 MINIO_PASS=$(gen 24)
 JWT=$(gen 32)
 AUTHZ_KEY=$(gen 32)
 LITELLM_API=$(gen 16)
 LITELLM_MASTER=$(openssl rand -hex 16)
 LITELLM_SALT=$(gen 32)
+NEO4J_PASS=$(gen 24)
+CONFIG_ENC_KEY=$(openssl rand -hex 32)
 
 sed -i.bak \
   -e "s/CHANGE_ME_POSTGRES_PASSWORD/$PG_PASS/g" \
-  -e "s/CHANGE_ME_MINIO_ROOT_USER/minioadmin/g" \
+  -e "s/CHANGE_ME_MINIO_ROOT_USER/$MINIO_USER/g" \
   -e "s/CHANGE_ME_MINIO_ROOT_PASSWORD/$MINIO_PASS/g" \
   -e "s/CHANGE_ME_JWT_SECRET_32_BYTES/$JWT/g" \
   -e "s/CHANGE_ME_SESSION_SECRET_32_BYTES/$JWT/g" \
@@ -1657,6 +1695,8 @@ sed -i.bak \
   -e "s/CHANGE_ME_LITELLM_API_KEY/$LITELLM_API/g" \
   -e "s/CHANGE_ME_LITELLM_MASTER_KEY/$LITELLM_MASTER/g" \
   -e "s/CHANGE_ME_LITELLM_SALT_KEY/$LITELLM_SALT/g" \
+  -e "s/CHANGE_ME_NEO4J_PASSWORD/$NEO4J_PASS/g" \
+  -e "s/CHANGE_ME_CONFIG_ENCRYPTION_KEY/$CONFIG_ENC_KEY/g" \
   "$VAULT_FILE"
 rm -f "${{VAULT_FILE}}.bak"
 {admin_email_sed}
@@ -1675,7 +1715,7 @@ if [[ "$VERIFY_LINE" != *'$ANSIBLE_VAULT'* ]]; then
     exit 1
 fi
 
-echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain)"
+echo "✓ Generated 11 bootstrap secrets ($REMAINING optional placeholders remain)"
 "#,
                 vault_rel = vault_rel,
                 admin_email_sed = admin_email_sed,
@@ -2195,6 +2235,29 @@ fi
                         echo "WARNING: jq not available — health checks may not work correctly"
                     fi
 
+                    # Ensure yq is available (needed by vault secret management)
+                    if ! command -v yq &>/dev/null; then
+                        echo "Installing yq..."
+                        if command -v brew &>/dev/null; then
+                            brew install --quiet yq 2>&1
+                        elif [ "$(uname -s)" = "Linux" ]; then
+                            YQ_VERSION="v4.35.2"
+                            YQ_ARCH="amd64"
+                            [ "$(uname -m)" = "aarch64" ] && YQ_ARCH="arm64"
+                            YQ_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${YQ_ARCH}"
+                            if command -v curl &>/dev/null; then
+                                curl -sL "$YQ_URL" -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq 2>&1
+                            elif command -v wget &>/dev/null; then
+                                wget -q "$YQ_URL" -O /usr/local/bin/yq && chmod +x /usr/local/bin/yq 2>&1
+                            fi
+                        fi
+                    fi
+                    if command -v yq &>/dev/null; then
+                        echo "✓ yq: $(yq --version 2>&1 | head -1)"
+                    else
+                        echo "WARNING: yq not available — vault secret auto-generation may not work"
+                    fi
+
                     echo "✓ Prerequisites installed"
                 "#;
 
@@ -2515,16 +2578,19 @@ fi
 gen() {{ openssl rand -base64 "$1" | tr -d '/+=' | head -c "$1"; }}
 
 PG_PASS=$(gen 24)
+MINIO_USER=$(gen 16)
 MINIO_PASS=$(gen 24)
 JWT=$(gen 32)
 AUTHZ_KEY=$(gen 32)
 LITELLM_API=$(gen 16)
 LITELLM_MASTER=$(openssl rand -hex 16)
 LITELLM_SALT=$(gen 32)
+NEO4J_PASS=$(gen 24)
+CONFIG_ENC_KEY=$(openssl rand -hex 32)
 
 sed -i.bak \
   -e "s/CHANGE_ME_POSTGRES_PASSWORD/$PG_PASS/g" \
-  -e "s/CHANGE_ME_MINIO_ROOT_USER/minioadmin/g" \
+  -e "s/CHANGE_ME_MINIO_ROOT_USER/$MINIO_USER/g" \
   -e "s/CHANGE_ME_MINIO_ROOT_PASSWORD/$MINIO_PASS/g" \
   -e "s/CHANGE_ME_JWT_SECRET_32_BYTES/$JWT/g" \
   -e "s/CHANGE_ME_SESSION_SECRET_32_BYTES/$JWT/g" \
@@ -2532,6 +2598,8 @@ sed -i.bak \
   -e "s/CHANGE_ME_LITELLM_API_KEY/$LITELLM_API/g" \
   -e "s/CHANGE_ME_LITELLM_MASTER_KEY/$LITELLM_MASTER/g" \
   -e "s/CHANGE_ME_LITELLM_SALT_KEY/$LITELLM_SALT/g" \
+  -e "s/CHANGE_ME_NEO4J_PASSWORD/$NEO4J_PASS/g" \
+  -e "s/CHANGE_ME_CONFIG_ENCRYPTION_KEY/$CONFIG_ENC_KEY/g" \
   "$VAULT_FILE"
 rm -f "${{VAULT_FILE}}.bak"
 {admin_email_sed}
@@ -2550,7 +2618,7 @@ if [[ "$VERIFY_LINE" != *'$ANSIBLE_VAULT'* ]]; then
     exit 1
 fi
 
-echo "✓ Generated 9 bootstrap secrets ($REMAINING optional placeholders remain)"
+echo "✓ Generated 11 bootstrap secrets ($REMAINING optional placeholders remain)"
 "#,
                             vault_rel = vault_rel,
                             admin_email_sed = admin_email_sed,
@@ -3216,7 +3284,7 @@ fi
                     });
                 }
 
-                let make_args = "validate-env".to_string();
+                let make_args = format!("BUSIBOX_ENV={profile_environment} BUSIBOX_BACKEND={profile_backend} validate-env");
                 let tx_stream = tx.clone();
                 let on_line = |line: &str| {
                     let _ = tx_stream.send(InstallUpdate::Log(format!("  {line}")));
@@ -3428,7 +3496,9 @@ fi
                 .display()
                 .to_string();
             let mut ref_exports = format!(
-                "BUSIBOX_FRONTEND_GITHUB_REF={ref_val} \
+                "BUSIBOX_ENV={profile_environment} \
+                 BUSIBOX_BACKEND={profile_backend} \
+                 BUSIBOX_FRONTEND_GITHUB_REF={ref_val} \
                  SITE_DOMAIN={site_domain} \
                  MODEL_HOST_CACHE={home}/.cache \
                  HF_HOST_CACHE={home}/.cache/huggingface \

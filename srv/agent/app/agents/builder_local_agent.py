@@ -58,7 +58,7 @@ class BuilderLocalAgent(BaseStreamingAgent):
 
         model = os.getenv("BUILDER_LOCAL_MODEL", "openai/fast")
         openai_base = os.getenv("LITELLM_BASE_URL", "http://litellm:4000/v1")
-        openai_key = os.getenv("LITELLM_API_KEY", "sk-local-dev-key")
+        openai_key = os.getenv("LITELLM_API_KEY", "")
 
         await stream(thought(source=self.name, message="Running Aider with local model fallback..."))
 

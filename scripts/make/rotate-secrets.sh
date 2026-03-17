@@ -32,10 +32,16 @@ profile_init
 # Profile / Backend Detection
 # ============================================================================
 
-_active_profile=$(profile_get_active)
+if [[ -n "${BUSIBOX_ENV:-}" && -n "${BUSIBOX_BACKEND:-}" ]]; then
+    _active_profile=""
+else
+    _active_profile=$(profile_get_active)
+fi
 
 _get_env() {
-    if [[ -n "$_active_profile" ]]; then
+    if [[ -n "${BUSIBOX_ENV:-}" ]]; then
+        echo "$BUSIBOX_ENV"
+    elif [[ -n "$_active_profile" ]]; then
         profile_get "$_active_profile" "environment"
     else
         get_state "ENVIRONMENT" "development"
@@ -43,7 +49,9 @@ _get_env() {
 }
 
 _get_backend() {
-    if [[ -n "$_active_profile" ]]; then
+    if [[ -n "${BUSIBOX_BACKEND:-}" ]]; then
+        echo "$BUSIBOX_BACKEND" | tr '[:upper:]' '[:lower:]'
+    elif [[ -n "$_active_profile" ]]; then
         profile_get "$_active_profile" "backend"
     else
         local env

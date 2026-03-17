@@ -1,0 +1,93 @@
+name: Build and Push Docker Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Service to build (leave empty for all)"
+        required: false
+        default: ""
+        type: string
+  push:
+    branches:
+      - "release/**"
+    paths:
+      - "srv/**"
+      - "provision/docker/milvus-init.Dockerfile"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/jazzmind/busibox
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          ALL='[
+            {"name":"authz-api","dockerfile":"srv/authz/Dockerfile","context":"srv"},
+            {"name":"data-api","dockerfile":"srv/data/Dockerfile","context":"srv"},
+            {"name":"search-api","dockerfile":"srv/search/Dockerfile","context":"srv"},
+            {"name":"agent-api","dockerfile":"srv/agent/Dockerfile","context":"srv"},
+            {"name":"bridge-api","dockerfile":"srv/bridge/Dockerfile","context":"srv/bridge"},
+            {"name":"docs-api","dockerfile":"srv/docs/Dockerfile","context":"srv"},
+            {"name":"deploy-api","dockerfile":"srv/deploy/Dockerfile","context":"srv"},
+            {"name":"embedding-api","dockerfile":"srv/embedding/Dockerfile","context":"srv/embedding"},
+            {"name":"milvus-init","dockerfile":"provision/docker/milvus-init.Dockerfile","context":"."}
+          ]'
+          SERVICE="${{ github.event.inputs.service }}"
+          if [ -n "$SERVICE" ]; then
+            FILTERED=$(echo "$ALL" | jq -c --arg svc "$SERVICE" '[.[] | select(.name == $svc)]')
+            if [ "$FILTERED" = "[]" ]; then
+              echo "::error::Unknown service: $SERVICE"
+              exit 1
+            fi
+            echo "matrix={\"include\":$FILTERED}" >> "$GITHUB_OUTPUT"
+          else
+            echo "matrix={\"include\":$ALL}" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        run: |
+          SHA=$(echo "${{ github.sha }}" | cut -c1-8)
+          echo "sha_tag=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/${{ matrix.name }}:latest
+            ${{ env.IMAGE_PREFIX }}/${{ matrix.name }}:${{ steps.meta.outputs.sha_tag }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

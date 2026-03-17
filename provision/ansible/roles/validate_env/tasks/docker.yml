@@ -84,15 +84,35 @@
   failed_when: false
   no_log: true
 
+- name: Define known insecure defaults blocklist
+  ansible.builtin.set_fact:
+    _insecure_defaults:
+      - "devpassword"
+      - "minioadmin"
+      - "sk-local-dev-key"
+      - "local-master-key-change-in-production"
+      - "dev-encryption-key"
+      - "dev-sso-secret"
+      - "dev-master-key-change-me"
+      - "dev-jwt-secret-change-me"
+      - "dev-session-secret-change-me"
+      - "sk-dev-litellm-key"
+      - "default-service-secret-change-in-production"
+      - "default-jwt-secret"
+      - "sk-litellm-master-key-change-me"
+
 - name: Evaluate all checks
   ansible.builtin.set_fact:
     _all_results: >-
       {%- set results = [] -%}
       {%- for r in _env_results.results -%}
         {%- set check = r.item -%}
+        {%- set actual = r.stdout | trim -%}
         {%- if r.rc != 0 -%}
           {%- set _ = results.append({"container": check.container, "var": check.var, "status": "NOT_SET", "match": false}) -%}
-        {%- elif r.stdout | trim == check.expected -%}
+        {%- elif actual in _insecure_defaults or actual.startswith("CHANGE_ME") -%}
+          {%- set _ = results.append({"container": check.container, "var": check.var, "status": "INSECURE_DEFAULT", "match": false}) -%}
+        {%- elif actual == check.expected -%}
           {%- set _ = results.append({"container": check.container, "var": check.var, "status": "OK", "match": true}) -%}
         {%- else -%}
           {%- set _ = results.append({"container": check.container, "var": check.var, "status": "MISMATCH", "match": false}) -%}

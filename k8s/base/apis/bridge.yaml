@@ -34,7 +34,8 @@ spec:
     spec:
       containers:
         - name: bridge-api
-          image: localhost:30500/bridge-api:latest
+          image: ghcr.io/jazzmind/busibox/bridge-api:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8081
           env:

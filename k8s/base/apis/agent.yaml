@@ -34,7 +34,8 @@ spec:
     spec:
       containers:
         - name: agent-api
-          image: localhost:30500/agent-api:latest
+          image: ghcr.io/jazzmind/busibox/agent-api:latest
+          imagePullPolicy: Always
           command:
             - sh
             - -c

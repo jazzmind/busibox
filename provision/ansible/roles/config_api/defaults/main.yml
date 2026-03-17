@@ -22,8 +22,8 @@ config_api_authz_url: "http://localhost:{{ authz_service_port | default(8010) }}
 config_api_postgres_host: "{{ 'postgres' if (lookup('pipe', 'getent hosts postgres 2>/dev/null || true') | length > 0) else (hostvars[groups['pg'][0]]['ansible_host'] | default('postgres')) }}"
 config_api_postgres_port: 5432
 config_api_postgres_db: config
-config_api_postgres_user: "{{ secrets.postgresql.user | default('busibox_user') }}"
-config_api_postgres_password: "{{ secrets.postgresql.password | default('') }}"
+config_api_postgres_user: "{{ busibox_secrets.POSTGRES_USER | default('busibox_user') }}"
+config_api_postgres_password: "{{ busibox_secrets.POSTGRES_PASSWORD }}"
 
 # Encryption key for encrypted config values
-config_api_encryption_key: "{{ secrets.config_api.encryption_key | default('') }}"
+config_api_encryption_key: "{{ busibox_secrets.CONFIG_ENCRYPTION_KEY }}"

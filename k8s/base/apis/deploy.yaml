@@ -36,7 +36,8 @@ spec:
       serviceAccountName: deploy-api
       containers:
         - name: deploy-api
-          image: localhost:30500/deploy-api:latest
+          image: ghcr.io/jazzmind/busibox/deploy-api:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8011
           env:

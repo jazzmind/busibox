@@ -254,9 +254,29 @@ ensure_yq_installed() {
         return 1
         
     elif [[ "$os_type" == "Darwin" ]]; then
-        # macOS - suggest homebrew
+        # macOS - try homebrew first, then direct download
+        if command -v brew &>/dev/null; then
+            _vault_info "Installing yq via Homebrew..."
+            if brew install --quiet yq 2>/dev/null; then
+                _vault_success "yq installed successfully via Homebrew"
+                return 0
+            fi
+        fi
+        # Direct download fallback for macOS
+        local yq_version="v4.35.2"
+        local arch="amd64"
+        [[ "$(uname -m)" == "arm64" ]] && arch="arm64"
+        local yq_binary="yq_darwin_${arch}"
+        local install_dir="/usr/local/bin"
+        if command -v curl &>/dev/null; then
+            if curl -sL "https://github.com/mikefarah/yq/releases/download/${yq_version}/${yq_binary}" -o "${install_dir}/yq" 2>/dev/null; then
+                chmod +x "${install_dir}/yq"
+                _vault_success "yq installed successfully to ${install_dir}/yq"
+                return 0
+            fi
+        fi
         _vault_error "yq is required for writing vault secrets."
-        _vault_error "On macOS, install with: brew install yq"
+        _vault_error "Install with: brew install yq"
         return 1
     else
         _vault_error "yq is required for writing vault secrets."
@@ -562,25 +582,63 @@ has_vault_secret() {
        [[ "$value" == "~" ]]; then
         return 1
     fi
+
+    # Reject known insecure defaults that should never appear in a real vault
+    if [[ "$value" == "devpassword" ]] || \
+       [[ "$value" == "minioadmin" ]] || \
+       [[ "$value" == "sk-local-dev-key" ]] || \
+       [[ "$value" == *"change-in-production"* ]] || \
+       [[ "$value" == *"change-me"* ]] || \
+       [[ "$value" == "dev-encryption-key" ]] || \
+       [[ "$value" == "dev-sso-secret" ]] || \
+       [[ "$value" == "default-jwt-secret" ]]; then
+        return 1
+    fi
     
     return 0
 }
 
+# Generate a suitable random replacement for a vault secret key.
+# Uses the same lengths as the bootstrap script in install.rs.
+_generate_replacement_for_key() {
+    local key="$1"
+    case "$key" in
+        secrets.postgresql.password)   generate_secret 24 ;;
+        secrets.minio.root_user)       generate_secret 16 ;;
+        secrets.minio.root_password)   generate_secret 24 ;;
+        secrets.jwt_secret)            generate_secret 32 ;;
+        secrets.session_secret)        generate_secret 32 ;;
+        secrets.authz_master_key)      generate_secret 32 ;;
+        secrets.litellm_api_key)       generate_secret 16 ;;
+        secrets.litellm_master_key)    openssl rand -hex 16 ;;
+        secrets.litellm_salt_key)      generate_secret 32 ;;
+        secrets.encryption_key)        generate_secret 32 ;;
+        secrets.neo4j.password)        generate_secret 24 ;;
+        secrets.config_api.encryption_key) openssl rand -hex 32 ;;
+        *)                             generate_secret 32 ;;
+    esac
+}
+
 # Validate that required bootstrap secrets exist
-# These are secrets that MUST be in the vault before installation/update
+# These are secrets that MUST be in the vault before installation/update.
+# Placeholder or known-insecure values are automatically replaced with
+# securely generated ones so the deploy is never blocked by stale defaults.
 validate_vault_secrets() {
     local required_secrets=(
         "secrets.postgresql.password"
         "secrets.minio.root_user"
         "secrets.minio.root_password"
         "secrets.jwt_secret"
+        "secrets.authz_master_key"
+        "secrets.litellm_master_key"
+        "secrets.session_secret"
+        "secrets.encryption_key"
+        "secrets.neo4j.password"
     )
     
     local optional_secrets=(
-        "secrets.authz_master_key"
         "secrets.litellm_api_key"
-        "secrets.litellm_master_key"
-        "secrets.encryption_key"
+        "secrets.litellm_salt_key"
     )
     
     # Ensure vault access first
@@ -589,7 +647,7 @@ validate_vault_secrets() {
     fi
     
     local missing=()
-    local unconfigured=()
+    local to_fix=()
     
     echo ""
     _vault_info "Validating required vault secrets..."
@@ -598,12 +656,12 @@ validate_vault_secrets() {
         local value=$(get_vault_secret "$key")
         local short_key="${key##*.}"
         
-        if [[ -z "$value" ]]; then
-            missing+=("$key")
-            echo -e "  ${_V_RED}✗${_V_NC} $short_key - missing"
+        if [[ -z "$value" ]] || [[ "$value" == "null" ]]; then
+            to_fix+=("$key")
+            echo -e "  ${_V_YELLOW}○${_V_NC} $short_key - missing (will auto-generate)"
         elif ! has_vault_secret "$key"; then
-            unconfigured+=("$key")
-            echo -e "  ${_V_YELLOW}○${_V_NC} $short_key - placeholder value"
+            to_fix+=("$key")
+            echo -e "  ${_V_YELLOW}○${_V_NC} $short_key - insecure default (will auto-fix)"
         else
             echo -e "  ${_V_GREEN}✓${_V_NC} $short_key - configured"
         fi
@@ -616,7 +674,7 @@ validate_vault_secrets() {
         local value=$(get_vault_secret "$key")
         local short_key="${key##*.}"
         
-        if [[ -z "$value" ]] || ! has_vault_secret "$key"; then
+        if [[ -z "$value" ]] || [[ "$value" == "null" ]] || ! has_vault_secret "$key"; then
             echo -e "  ${_V_YELLOW}○${_V_NC} $short_key - not configured (optional)"
         else
             echo -e "  ${_V_GREEN}✓${_V_NC} $short_key - configured"
@@ -625,25 +683,28 @@ validate_vault_secrets() {
     
     echo ""
     
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        _vault_error "Missing required secrets:"
-        for key in "${missing[@]}"; do
-            echo "  - $key"
+    # Auto-fix missing / placeholder / insecure-default values
+    if [[ ${#to_fix[@]} -gt 0 ]]; then
+        _vault_info "Generating/replacing ${#to_fix[@]} secret(s)..."
+        
+        local update_args=()
+        for key in "${to_fix[@]}"; do
+            local new_value
+            new_value=$(_generate_replacement_for_key "$key")
+            update_args+=("${key}=${new_value}")
         done
+        
+        if update_vault_secrets "${update_args[@]}"; then
+            for key in "${to_fix[@]}"; do
+                local short_key="${key##*.}"
+                echo -e "  ${_V_GREEN}✓${_V_NC} $short_key - generated"
+            done
+        else
+            _vault_error "Failed to auto-fix vault secrets. Update manually:"
+            echo "  $VAULT_FILE"
+            return 1
+        fi
         echo ""
-        echo "Add these to your vault file: $VAULT_FILE"
-        return 1
-    fi
-    
-    if [[ ${#unconfigured[@]} -gt 0 ]]; then
-        _vault_error "Secrets with placeholder values:"
-        for key in "${unconfigured[@]}"; do
-            echo "  - $key"
-        done
-        echo ""
-        echo "Update these in your vault file: $VAULT_FILE"
-        echo "Then re-encrypt: ansible-vault encrypt $VAULT_FILE"
-        return 1
     fi
     
     _vault_success "All required vault secrets validated"
@@ -937,7 +998,7 @@ setup_vault_secrets() {
         new_secrets+=("secrets.postgresql.password=$(generate_secret 24)")
     fi
     if ! has_vault_secret "secrets.minio.root_user"; then
-        new_secrets+=("secrets.minio.root_user=minioadmin")
+        new_secrets+=("secrets.minio.root_user=busibox-minio-admin")
     fi
     if ! has_vault_secret "secrets.minio.root_password"; then
         new_secrets+=("secrets.minio.root_password=$(generate_secret 24)")

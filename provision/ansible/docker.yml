@@ -92,6 +92,11 @@
       when: not env_vault_file.stat.exists
       tags: always
 
+    - name: Load shared secrets mapping
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/roles/secrets/vars/shared_secrets.yml"
+      tags: always
+
     - name: Initialize Docker common
       ansible.builtin.include_role:
         name: docker_common

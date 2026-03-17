@@ -145,3 +145,21 @@ class Config:
 
 
 config = Config()
+
+# Validate critical secrets at import time
+try:
+    from busibox_common.secrets import validate_required_secrets, warn_insecure_secrets
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+
+    _critical_secrets = {
+        "POSTGRES_ADMIN_PASSWORD": config.postgres_admin_password,
+    }
+    _warned = warn_insecure_secrets(_critical_secrets, "deploy-api")
+    if _warned:
+        _logger.warning(
+            "Deploy API has %d secret(s) with insecure defaults: %s",
+            len(_warned), ", ".join(_warned),
+        )
+except ImportError:
+    pass

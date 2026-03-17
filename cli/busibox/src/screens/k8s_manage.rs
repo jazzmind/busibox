@@ -1,4 +1,4 @@
-use crate::app::{App, K8sManageUpdate, Screen};
+use crate::app::{App, K8sClusterStatus, K8sManageUpdate, Screen};
 use crate::theme;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Margin;
@@ -8,55 +8,65 @@ use std::sync::mpsc;
 
 struct Section {
     name: &'static str,
-    actions: &'static [(&'static str, &'static str)],
+    icon: &'static str,
+    actions: &'static [(&'static str, &'static str, &'static str)], // (label, target, description)
 }
 
 const SECTIONS: &[Section] = &[
     Section {
-        name: "Deployment",
+        name: "Deploy",
+        icon: "▶",
         actions: &[
-            ("Deploy All", "k8s-deploy"),
-            ("Sync Code", "k8s-sync"),
-            ("Build Images", "k8s-build"),
-            ("Apply Manifests", "k8s-apply"),
-            ("Update Secrets", "k8s-secrets"),
-            ("Status", "k8s-status"),
-            ("Logs", "k8s-logs"),
-            ("Delete", "k8s-delete"),
+            ("Deploy All", "k8s-deploy", "Build images (GHCR) + apply + secrets"),
+            ("Build Images", "build-images", "Trigger GitHub Actions image build"),
+            ("Apply Manifests", "k8s-apply", "Apply kustomize manifests"),
+            ("Update Secrets", "k8s-secrets", "Generate & apply from vault"),
         ],
     },
     Section {
-        name: "Connectivity",
+        name: "Monitor",
+        icon: "◉",
         actions: &[
-            ("Connect", "connect"),
-            ("Disconnect", "disconnect"),
-            ("Connection Status", "k8s-connect-status"),
+            ("Status", "k8s-status", "Show pods, services, PVCs"),
+            ("Logs", "k8s-logs", "Stream pod logs"),
+            ("Delete All", "k8s-delete", "Remove all K8s resources"),
         ],
     },
     Section {
-        name: "Spot Management",
+        name: "Access",
+        icon: "🔗",
         actions: &[
-            ("Check Prices", "spot-check"),
-            ("Swap Node Class", "spot-swap"),
-            ("Change Bid", "spot-price"),
+            ("Connect HTTPS", "connect", "Start local HTTPS tunnel"),
+            ("Disconnect", "disconnect", "Tear down tunnel"),
+            ("Tunnel Status", "k8s-connect-status", "Check tunnel state"),
+        ],
+    },
+    Section {
+        name: "Spot Instances",
+        icon: "⚡",
+        actions: &[
+            ("Market Prices", "spot-check", "Check current spot prices"),
+            ("Swap Node Class", "spot-swap", "Switch to different node"),
+            ("Change Bid", "spot-price", "Adjust bid price"),
         ],
     },
     Section {
         name: "GPU Burst",
+        icon: "⊞",
         actions: &[
-            ("GPU Up", "k8s-gpu-up"),
-            ("GPU Down", "k8s-gpu-down"),
-            ("GPU Status", "k8s-gpu-status"),
-            ("GPU Window", "k8s-gpu-window"),
+            ("GPU Up", "k8s-gpu-up", "Provision GPU + start vLLM"),
+            ("GPU Down", "k8s-gpu-down", "Stop vLLM + deprovision"),
+            ("GPU Status", "k8s-gpu-status", "Show GPU burst status"),
+            ("GPU Window", "k8s-gpu-window", "Timed burst session"),
         ],
     },
 ];
 
-fn flat_actions() -> Vec<(usize, usize, &'static str, &'static str)> {
+fn flat_actions() -> Vec<(usize, usize, &'static str, &'static str, &'static str)> {
     let mut result = Vec::new();
     for (si, section) in SECTIONS.iter().enumerate() {
-        for (ai, &(label, target)) in section.actions.iter().enumerate() {
-            result.push((si, ai, label, target));
+        for (ai, &(label, target, desc)) in section.actions.iter().enumerate() {
+            result.push((si, ai, label, target, desc));
         }
     }
     result
@@ -71,54 +81,35 @@ pub fn render(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Min(10),
-            Constraint::Length(3),
+            Constraint::Length(1), // title
+            Constraint::Length(1), // spacer
+            Constraint::Min(10),   // main content
+            Constraint::Length(3), // help bar
         ])
         .margin(2)
         .split(f.area());
 
-    let title = Paragraph::new("K8s Management")
-        .style(theme::title())
-        .alignment(Alignment::Center);
+    // Title - contextual with overlay name
+    let overlay = app.active_profile()
+        .and_then(|(_, p)| p.k8s_overlay.as_deref())
+        .unwrap_or("k8s");
+    let title = Paragraph::new(Line::from(vec![
+        Span::styled("K8s Management", theme::title()),
+        Span::styled(format!("  ({overlay})"), theme::dim()),
+    ]))
+    .alignment(Alignment::Center);
     f.render_widget(title, chunks[0]);
 
-    let actions = flat_actions();
-    let mut rows: Vec<ListItem> = Vec::new();
-    let mut current_section: Option<usize> = None;
+    // Main content: two columns - actions (left) + detail (right)
+    let main_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(chunks[2]);
 
-    for (idx, &(si, _ai, label, _target)) in actions.iter().enumerate() {
-        if current_section != Some(si) {
-            current_section = Some(si);
-            if si > 0 {
-                rows.push(ListItem::new(Line::from("")));
-            }
-            rows.push(ListItem::new(Line::from(Span::styled(
-                format!("  {}", SECTIONS[si].name),
-                theme::heading(),
-            ))));
-        }
+    render_actions_panel(f, app, main_chunks[0]);
+    render_detail_panel(f, app, main_chunks[1]);
 
-        let style = if idx == app.k8s_manage_selected {
-            theme::selected()
-        } else {
-            theme::normal()
-        };
-        rows.push(ListItem::new(Line::from(Span::styled(
-            format!("    {label}"),
-            style,
-        ))));
-    }
-
-    let list = List::new(rows).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(theme::dim())
-            .title(" Actions ")
-            .title_style(theme::heading()),
-    );
-    f.render_widget(list, chunks[1]);
-
+    // Help bar
     let help = if app.k8s_manage_input_mode {
         Paragraph::new(Line::from(vec![
             Span::styled(&app.k8s_manage_input_label, theme::highlight()),
@@ -144,11 +135,163 @@ pub fn render(f: &mut Frame, app: &App) {
             Span::styled("Run  ", theme::normal()),
             Span::styled("l ", theme::highlight()),
             Span::styled("Log  ", theme::normal()),
+            Span::styled("r ", theme::highlight()),
+            Span::styled("Refresh  ", theme::normal()),
             Span::styled("Esc ", theme::muted()),
             Span::styled("Back", theme::muted()),
         ]))
     };
-    f.render_widget(help, chunks[2]);
+    f.render_widget(help, chunks[3]);
+}
+
+fn render_actions_panel(f: &mut Frame, app: &App, area: Rect) {
+    let actions = flat_actions();
+    let mut rows: Vec<ListItem> = Vec::new();
+    let mut current_section: Option<usize> = None;
+
+    for (idx, &(si, _ai, label, _target, _desc)) in actions.iter().enumerate() {
+        if current_section != Some(si) {
+            current_section = Some(si);
+            if si > 0 {
+                rows.push(ListItem::new(Line::from("")));
+            }
+            rows.push(ListItem::new(Line::from(vec![
+                Span::styled(format!("  {} ", SECTIONS[si].icon), theme::info()),
+                Span::styled(SECTIONS[si].name, theme::heading()),
+            ])));
+        }
+
+        let style = if idx == app.k8s_manage_selected {
+            theme::selected()
+        } else {
+            theme::normal()
+        };
+        rows.push(ListItem::new(Line::from(Span::styled(
+            format!("      {label}"),
+            style,
+        ))));
+    }
+
+    let list = List::new(rows).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme::dim())
+            .title(" Actions ")
+            .title_style(theme::heading()),
+    );
+    f.render_widget(list, area);
+}
+
+fn render_detail_panel(f: &mut Frame, app: &App, area: Rect) {
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Show description of selected action
+    let actions = flat_actions();
+    if let Some(&(si, _ai, label, target, desc)) = actions.get(app.k8s_manage_selected) {
+        lines.push(Line::from(Span::styled(label, theme::heading())));
+        lines.push(Line::from(Span::styled(desc, theme::muted())));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  make ", theme::dim()),
+            Span::styled(target, theme::info()),
+        ]));
+
+        // Show input hint for actions that need it
+        match target {
+            "spot-swap" => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Will prompt for node class",
+                    theme::dim(),
+                )));
+            }
+            "spot-price" => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Will prompt for bid price",
+                    theme::dim(),
+                )));
+            }
+            "k8s-gpu-window" => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Will prompt for duration (min)",
+                    theme::dim(),
+                )));
+            }
+            "k8s-delete" => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  ⚠ Requires confirmation",
+                    theme::warning(),
+                )));
+            }
+            _ => {}
+        }
+
+        // Show section context
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  Section: {}", SECTIONS[si].name),
+            theme::dim(),
+        )));
+    }
+
+    // Cluster status summary at bottom
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("──────────────────", theme::dim())));
+
+    let (icon, status_text, style) = match &app.k8s_cluster_status {
+        K8sClusterStatus::Unknown => ("○", "Not checked", theme::dim()),
+        K8sClusterStatus::Checking => ("⠋", "Checking...", theme::info()),
+        K8sClusterStatus::Connected => ("●", "Connected", theme::success()),
+        K8sClusterStatus::Disconnected => ("●", "Disconnected", theme::error()),
+        K8sClusterStatus::Error(_) => ("●", "Error", theme::error()),
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {icon} "), style),
+        Span::styled("Cluster: ", theme::muted()),
+        Span::styled(status_text, style),
+    ]));
+
+    if let Some(ref info) = app.k8s_cluster_info {
+        if let Some(ref summary) = info.pod_summary {
+            lines.push(Line::from(vec![
+                Span::styled("    Pods: ", theme::muted()),
+                Span::styled(summary.as_str(), theme::normal()),
+            ]));
+        }
+        lines.push(Line::from(vec![
+            Span::styled("    Nodes: ", theme::muted()),
+            Span::styled(format!("{}", info.node_count), theme::normal()),
+        ]));
+    }
+
+    // Last action result
+    if app.k8s_manage_action_complete && !app.k8s_manage_log.is_empty() {
+        lines.push(Line::from(""));
+        let last_line = app.k8s_manage_log.last().unwrap();
+        let (icon, style) = if last_line.contains('✓') {
+            ("✓", theme::success())
+        } else if last_line.contains('✗') {
+            ("✗", theme::error())
+        } else {
+            ("·", theme::dim())
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {icon} Last: "), style),
+            Span::styled("press 'l' for log", theme::dim()),
+        ]));
+    }
+
+    let panel = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme::dim())
+            .title(" Details ")
+            .title_style(theme::heading()),
+    );
+    f.render_widget(panel, area);
 }
 
 fn render_log_viewer(f: &mut Frame, app: &App) {
@@ -267,11 +410,14 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                 app.k8s_manage_log_visible = true;
             }
         }
+        KeyCode::Char('r') => {
+            crate::screens::welcome::trigger_k8s_cluster_check(app);
+        }
         KeyCode::Enter => {
             if app.k8s_manage_action_running {
                 return;
             }
-            if let Some(&(_si, _ai, _label, target)) = actions.get(app.k8s_manage_selected) {
+            if let Some(&(_si, _ai, _label, target, _desc)) = actions.get(app.k8s_manage_selected) {
                 match target {
                     "spot-swap" => {
                         app.k8s_manage_input_mode = true;
@@ -314,7 +460,7 @@ fn handle_input_mode(app: &mut App, key: KeyEvent) {
             app.k8s_manage_input_mode = false;
 
             let actions = flat_actions();
-            if let Some(&(_si, _ai, _label, target)) = actions.get(app.k8s_manage_selected) {
+            if let Some(&(_si, _ai, _label, target, _desc)) = actions.get(app.k8s_manage_selected) {
                 match target {
                     "k8s-delete" => {
                         if input.trim().eq_ignore_ascii_case("yes") {
@@ -441,13 +587,14 @@ fn spawn_k8s_raw_action(app: &mut App, make_target: &str) {
             env_prefix.push_str(&format!("BUSIBOX_ENV={env} CONTAINER_PREFIX={prefix} "));
         }
 
-        let cmd = format!("{env_prefix}make -C {} {target}", repo_root.display());
+        // Merge stderr into stdout to avoid pipe deadlocks with kubectl exec
+        let cmd = format!("{env_prefix}make -C {} {target} 2>&1", repo_root.display());
 
         let result = std::process::Command::new("bash")
             .arg("-c")
             .arg(&cmd)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
             .spawn();
 
         match result {
@@ -456,15 +603,6 @@ fn spawn_k8s_raw_action(app: &mut App, make_target: &str) {
 
                 if let Some(stdout) = child.stdout.take() {
                     let reader = std::io::BufReader::new(stdout);
-                    for line in reader.lines() {
-                        if let Ok(line) = line {
-                            let _ = tx.send(K8sManageUpdate::Log(format!("  {line}")));
-                        }
-                    }
-                }
-
-                if let Some(stderr) = child.stderr.take() {
-                    let reader = std::io::BufReader::new(stderr);
                     for line in reader.lines() {
                         if let Ok(line) = line {
                             let _ = tx.send(K8sManageUpdate::Log(format!("  {line}")));

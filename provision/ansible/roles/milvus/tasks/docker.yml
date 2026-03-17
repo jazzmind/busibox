@@ -4,14 +4,13 @@
 # Deploys Milvus (with etcd and minio backend) via Docker Compose
 # Used when deploy_target == 'docker'
 
-- name: Start Milvus infrastructure (etcd, milvus-minio)
+- name: Start Milvus infrastructure (etcd)
   include_role:
     name: docker_common
     tasks_from: compose_up
   vars:
     docker_services_to_start:
       - etcd
-      - milvus-minio
     docker_wait_for_health: false
 
 - name: Wait for etcd to be ready

@@ -387,10 +387,17 @@ fn save_profile_and_continue(app: &mut App) {
         llm_backend_override: None,
         k8s_overlay: None,
         spot_token: None,
+        dev_apps_dir: None,
     };
 
     match profile::upsert_profile(&app.repo_root, &profile_id, profile, true) {
         Ok(()) => {
+            // Release old lock, acquire lock on the newly-active profile
+            app.profile_lock = None;
+            match profile::try_lock_profile(&app.repo_root, &profile_id) {
+                Ok(Some(lock)) => app.profile_lock = Some(lock),
+                Ok(None) | Err(_) => {}
+            }
             match profile::load_profiles(&app.repo_root) {
                 Ok(profiles) => app.profiles = Some(profiles),
                 Err(_) => {}

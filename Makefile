@@ -6,7 +6,7 @@
         docker-deploy docker-deploy-infra docker-deploy-apis docker-deploy-llm docker-deploy-frontend \
         deploy-user-app undeploy-user-app list-user-apps user-app-logs user-app-status \
         mlx-status mlx-start mlx-stop mlx-restart mlx-media-status mlx-media-start mlx-media-start-all mlx-media-stop mlx-media-restart mlx-transcribe mlx-image host-agent-status host-agent-start host-agent-stop host-agent-restart \
-        k8s-deploy k8s-sync k8s-build k8s-apply k8s-status k8s-delete k8s-secrets k8s-logs \
+        build-images k8s-deploy k8s-sync k8s-build k8s-apply k8s-status k8s-delete k8s-secrets k8s-logs \
         k8s-gpu-up k8s-gpu-down k8s-gpu-status k8s-gpu-window \
         spot-check spot-swap spot-price \
         connect disconnect k8s-connect-status \
@@ -296,9 +296,8 @@ help:
 	@echo "                   KUBERNETES (Rackspace Spot)"
 	@echo "═══════════════════════════════════════════════════════════════════════"
 	@echo ""
-	@echo "  make k8s-deploy                    # Full deploy (sync+build+push+apply)"
-	@echo "  make k8s-sync                      # Sync code to in-cluster build server"
-	@echo "  make k8s-build                     # Build images on build server"
+	@echo "  make build-images                  # Trigger GHA image build (all services)"
+	@echo "  make k8s-deploy                    # Full deploy (build+apply+secrets)"
 	@echo "  make k8s-apply                     # Apply manifests only"
 	@echo "  make k8s-secrets                   # Generate secrets from vault"
 	@echo "  make k8s-status                    # Show deployment status"
@@ -529,10 +528,10 @@ docker-up:
 		fi; \
 	fi
 	$(eval GITHUB_AUTH_TOKEN := $(or $(GITHUB_AUTH_TOKEN),$(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.github.personal_access_token 2>/dev/null || echo ""')))
-	$(eval POSTGRES_PASSWORD := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.postgresql.password 2>/dev/null || echo "devpassword"'))
-	$(eval MINIO_ACCESS_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_user 2>/dev/null || echo "minioadmin"'))
-	$(eval MINIO_SECRET_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_password 2>/dev/null || echo "minioadmin"'))
-	$(eval AUTHZ_MASTER_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.authz_master_key 2>/dev/null || echo "local-master-key-change-in-production"'))
+	$(eval POSTGRES_PASSWORD := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.postgresql.password 2>/dev/null || (echo "FATAL: Cannot read POSTGRES_PASSWORD from vault" >&2 && exit 1)'))
+	$(eval MINIO_ACCESS_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_user 2>/dev/null || (echo "FATAL: Cannot read MINIO_ROOT_USER from vault" >&2 && exit 1)'))
+	$(eval MINIO_SECRET_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_password 2>/dev/null || (echo "FATAL: Cannot read MINIO_ROOT_PASSWORD from vault" >&2 && exit 1)'))
+	$(eval AUTHZ_MASTER_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.authz_master_key 2>/dev/null || (echo "FATAL: Cannot read AUTHZ_MASTER_KEY from vault" >&2 && exit 1)'))
 	$(eval LITELLM_API_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_api_key 2>/dev/null || echo ""'))
 	$(eval LITELLM_MASTER_KEY := $(or $(LITELLM_API_KEY),$(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_master_key 2>/dev/null || echo ""')))
 	$(eval LITELLM_SALT_KEY := $(or $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_salt_key 2>/dev/null || echo ""'),$(LITELLM_MASTER_KEY)))
@@ -546,7 +545,7 @@ ifdef SERVICE
 	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(BUSIBOX_HOST_PATH)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d $(SERVICE)
 else
 	@echo "Phase 1/3: starting infrastructure prerequisites..."
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(BUSIBOX_HOST_PATH)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d postgres redis minio etcd milvus-minio milvus neo4j
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(BUSIBOX_HOST_PATH)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d postgres redis minio etcd milvus neo4j
 	@echo "Phase 2/3: running one-time init services..."
 	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(BUSIBOX_HOST_PATH)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" LITELLM_API_KEY="$(LITELLM_API_KEY)" LITELLM_MASTER_KEY="$(LITELLM_MASTER_KEY)" LITELLM_SALT_KEY="$(LITELLM_SALT_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d minio-init milvus-init
 	@echo "Phase 3/3: starting remaining services..."
@@ -576,10 +575,10 @@ docker-start:
 			docker rm -f "$(CONTAINER_PREFIX)-user-apps" >/dev/null 2>&1 || true; \
 		fi; \
 	fi
-	$(eval POSTGRES_PASSWORD := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.postgresql.password 2>/dev/null || echo "devpassword"'))
-	$(eval MINIO_ACCESS_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_user 2>/dev/null || echo "minioadmin"'))
-	$(eval MINIO_SECRET_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_password 2>/dev/null || echo "minioadmin"'))
-	$(eval AUTHZ_MASTER_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.authz_master_key 2>/dev/null || echo "local-master-key-change-in-production"'))
+	$(eval POSTGRES_PASSWORD := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.postgresql.password 2>/dev/null || (echo "FATAL: Cannot read POSTGRES_PASSWORD from vault" >&2 && exit 1)'))
+	$(eval MINIO_ACCESS_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_user 2>/dev/null || (echo "FATAL: Cannot read MINIO_ROOT_USER from vault" >&2 && exit 1)'))
+	$(eval MINIO_SECRET_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_password 2>/dev/null || (echo "FATAL: Cannot read MINIO_ROOT_PASSWORD from vault" >&2 && exit 1)'))
+	$(eval AUTHZ_MASTER_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.authz_master_key 2>/dev/null || (echo "FATAL: Cannot read AUTHZ_MASTER_KEY from vault" >&2 && exit 1)'))
 	$(eval LITELLM_API_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_api_key 2>/dev/null || echo ""'))
 	$(eval LITELLM_MASTER_KEY := $(or $(LITELLM_API_KEY),$(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_master_key 2>/dev/null || echo ""')))
 	$(eval LITELLM_SALT_KEY := $(or $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_salt_key 2>/dev/null || echo ""'),$(LITELLM_MASTER_KEY)))
@@ -611,10 +610,10 @@ docker-down-all:
 # Restart Docker services (simple restart, no recreation)
 docker-restart:
 	$(eval GITHUB_AUTH_TOKEN := $(or $(GITHUB_AUTH_TOKEN),$(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.github.personal_access_token 2>/dev/null || echo ""')))
-	$(eval POSTGRES_PASSWORD := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.postgresql.password 2>/dev/null || echo "devpassword"'))
-	$(eval MINIO_ACCESS_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_user 2>/dev/null || echo "minioadmin"'))
-	$(eval MINIO_SECRET_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_password 2>/dev/null || echo "minioadmin"'))
-	$(eval AUTHZ_MASTER_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.authz_master_key 2>/dev/null || echo "local-master-key-change-in-production"'))
+	$(eval POSTGRES_PASSWORD := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.postgresql.password 2>/dev/null || (echo "FATAL: Cannot read POSTGRES_PASSWORD from vault" >&2 && exit 1)'))
+	$(eval MINIO_ACCESS_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_user 2>/dev/null || (echo "FATAL: Cannot read MINIO_ROOT_USER from vault" >&2 && exit 1)'))
+	$(eval MINIO_SECRET_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_password 2>/dev/null || (echo "FATAL: Cannot read MINIO_ROOT_PASSWORD from vault" >&2 && exit 1)'))
+	$(eval AUTHZ_MASTER_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.authz_master_key 2>/dev/null || (echo "FATAL: Cannot read AUTHZ_MASTER_KEY from vault" >&2 && exit 1)'))
 	$(eval LITELLM_API_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_api_key 2>/dev/null || echo ""'))
 	$(eval LITELLM_MASTER_KEY := $(or $(LITELLM_API_KEY),$(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_master_key 2>/dev/null || echo ""')))
 	$(eval LITELLM_SALT_KEY := $(or $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_salt_key 2>/dev/null || echo ""'),$(LITELLM_MASTER_KEY)))
@@ -664,10 +663,10 @@ github-ensure:
 docker-build: ssl-check
 	$(eval GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown"))
 	$(eval GITHUB_AUTH_TOKEN := $(or $(GITHUB_AUTH_TOKEN),$(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.github.personal_access_token 2>/dev/null || echo ""')))
-	$(eval POSTGRES_PASSWORD := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.postgresql.password 2>/dev/null || echo "devpassword"'))
-	$(eval MINIO_ACCESS_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_user 2>/dev/null || echo "minioadmin"'))
-	$(eval MINIO_SECRET_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_password 2>/dev/null || echo "minioadmin"'))
-	$(eval AUTHZ_MASTER_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.authz_master_key 2>/dev/null || echo "local-master-key-change-in-production"'))
+	$(eval POSTGRES_PASSWORD := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.postgresql.password 2>/dev/null || (echo "FATAL: Cannot read POSTGRES_PASSWORD from vault" >&2 && exit 1)'))
+	$(eval MINIO_ACCESS_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_user 2>/dev/null || (echo "FATAL: Cannot read MINIO_ROOT_USER from vault" >&2 && exit 1)'))
+	$(eval MINIO_SECRET_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_password 2>/dev/null || (echo "FATAL: Cannot read MINIO_ROOT_PASSWORD from vault" >&2 && exit 1)'))
+	$(eval AUTHZ_MASTER_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.authz_master_key 2>/dev/null || (echo "FATAL: Cannot read AUTHZ_MASTER_KEY from vault" >&2 && exit 1)'))
 	$(eval LITELLM_API_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_api_key 2>/dev/null || echo ""'))
 	$(eval LITELLM_MASTER_KEY := $(or $(LITELLM_API_KEY),$(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_master_key 2>/dev/null || echo ""')))
 	$(eval LITELLM_SALT_KEY := $(or $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.litellm_salt_key 2>/dev/null || echo ""'),$(LITELLM_MASTER_KEY)))
@@ -861,11 +860,7 @@ endif
 # Validate that container env vars match vault secrets
 # Usage: make validate-env
 validate-env:
-ifeq ($(USE_MANAGER),1)
-	@$(MANAGER_RUN) bash -c 'cd provision/ansible && ansible-playbook -i inventory/docker docker.yml --tags validate_env --vault-password-file ../../scripts/lib/vault-pass-from-env.sh'
-else
-	@cd provision/ansible && ansible-playbook -i inventory/docker docker.yml --tags validate_env --vault-password-file ../../scripts/lib/vault-pass-from-env.sh
-endif
+	@bash scripts/make/validate-env.sh
 
 # Generate admin magic link and open browser
 # Usage: make login
@@ -1366,14 +1361,14 @@ docker-test: test-docker
 # KUBERNETES DEPLOYMENT (Rackspace Spot / Cloud)
 # ============================================================================
 # Deploy Busibox to a Kubernetes cluster using in-cluster build server.
-# Code is synced to a DinD build-server pod, built natively on x86, and
-# pushed to an in-cluster registry (localhost:30500).
+# Images are built externally via GitHub Actions and pushed to GHCR
+# (ghcr.io/jazzmind/busibox/*). Legacy in-cluster builds are available
+# via --legacy-build.
 #
 # Usage:
-#   make k8s-deploy                    # Full deploy (sync, build, push, apply)
-#   make k8s-sync                      # Sync code to in-cluster build server
-#   make k8s-build                     # Build images on build server + push
-#   make k8s-build SERVICE=authz-api   # Build one service
+#   make build-images                  # Trigger GHA image build (all services)
+#   make build-images SERVICE=authz-api  # Build one service
+#   make k8s-deploy                    # Trigger build + apply + secrets
 #   make k8s-apply                     # Apply manifests only
 #   make k8s-secrets                   # Generate and apply secrets from vault
 #   make k8s-status                    # Show deployment status
@@ -1381,14 +1376,23 @@ docker-test: test-docker
 #   make k8s-logs SERVICE=authz-api    # View pod logs
 #
 # Variables:
-#   K8S_OVERLAY  - Kustomize overlay (default: rackspace-spot)
-#   K8S_TAG      - Image tag (default: git short SHA)
-#   KUBECONFIG   - Path to kubeconfig (default: k8s/kubeconfig-rackspace-spot.yaml)
+#   K8S_OVERLAY    - Kustomize overlay (default: rackspace-spot)
+#   K8S_TAG        - Image tag (default: git short SHA)
+#   KUBECONFIG     - Path to kubeconfig (default: k8s/kubeconfig-rackspace-spot.yaml)
+#   IMAGE_SOURCE   - Set to "ghcr" on Docker deploys to pull pre-built images
 
 K8S_OVERLAY ?= rackspace-spot
 K8S_TAG ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "latest")
 
-# Full deployment: sync code, build on build-server, push to registry, apply manifests
+# Trigger GitHub Actions to build and push images to GHCR
+build-images:
+ifdef SERVICE
+	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --trigger-build --service $(SERVICE)
+else
+	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --trigger-build
+endif
+
+# Full deployment: trigger GHA build, generate secrets, apply manifests, rollout
 k8s-deploy:
 ifdef SERVICE
 	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --all --service $(SERVICE)
@@ -1396,7 +1400,7 @@ else
 	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --all
 endif
 
-# Sync source code to in-cluster build server
+# Legacy: sync + build on in-cluster build server
 k8s-sync:
 ifdef SERVICE
 	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --sync --service $(SERVICE)
@@ -1404,12 +1408,12 @@ else
 	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --sync
 endif
 
-# Build images on build-server + push to in-cluster registry
+# Legacy: build images on in-cluster build server
 k8s-build:
 ifdef SERVICE
-	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --build --service $(SERVICE)
+	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --legacy-build --build --service $(SERVICE)
 else
-	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --build
+	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --legacy-build --build
 endif
 
 # Apply Kubernetes manifests (images must already be in registry)

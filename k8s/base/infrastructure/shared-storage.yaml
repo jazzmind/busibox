@@ -27,7 +27,7 @@ spec:
     requests:
       storage: 50Gi
 ---
-# Object storage - minio, milvus-minio
+# Object storage - minio (also used by milvus via dedicated bucket)
 # SATA tier - lower cost, sufficient for blob/object workloads
 apiVersion: v1
 kind: PersistentVolumeClaim

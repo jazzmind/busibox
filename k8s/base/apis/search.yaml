@@ -34,7 +34,8 @@ spec:
     spec:
       containers:
         - name: search-api
-          image: localhost:30500/search-api:latest
+          image: ghcr.io/jazzmind/busibox/search-api:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8003
           env:

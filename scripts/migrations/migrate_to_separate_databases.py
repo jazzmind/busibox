@@ -66,7 +66,7 @@ POSTGRES_ADMIN_USER = os.getenv("POSTGRES_ADMIN_USER", "postgres")
 # Source database (shared)
 SOURCE_DB = "busibox"
 SOURCE_USER = os.getenv("SOURCE_USER", "busibox_user")
-SOURCE_PASSWORD = os.getenv("SOURCE_PASSWORD", "devpassword")
+SOURCE_PASSWORD = os.getenv("SOURCE_PASSWORD", "")
 
 # Target database configurations
 SERVICES = {

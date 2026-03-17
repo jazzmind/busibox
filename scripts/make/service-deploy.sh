@@ -30,12 +30,17 @@ source "${REPO_ROOT}/scripts/lib/vault.sh"
 # Initialize profiles
 profile_init
 
-# Active profile info
-_active_profile=$(profile_get_active)
-
-# Set BUSIBOX_ENV from active profile so state.sh and backends pick it up
-if [[ -n "$_active_profile" ]]; then
-    export BUSIBOX_ENV=$(profile_get "$_active_profile" "environment")
+# Active profile info.
+# When BUSIBOX_ENV / BUSIBOX_BACKEND are passed explicitly (e.g. by the CLI
+# install worker), they take precedence over the profiles.json active profile.
+# This prevents multi-instance CLI races where two processes overwrite "active".
+if [[ -n "${BUSIBOX_ENV:-}" && -n "${BUSIBOX_BACKEND:-}" ]]; then
+    _active_profile=""
+else
+    _active_profile=$(profile_get_active)
+    if [[ -n "$_active_profile" ]]; then
+        export BUSIBOX_ENV=$(profile_get "$_active_profile" "environment")
+    fi
 fi
 
 # ============================================================================
@@ -177,15 +182,15 @@ expand_services() {
 
 # Get the current environment (profile-aware)
 get_current_env() {
-    # Prefer active profile
-    if [[ -n "$_active_profile" ]]; then
-        profile_get "$_active_profile" "environment"
+    # Prefer explicit env var (set by CLI install worker for multi-instance safety)
+    if [[ -n "${BUSIBOX_ENV:-}" ]]; then
+        echo "$BUSIBOX_ENV"
         return
     fi
 
-    # Fallback to BUSIBOX_ENV
-    if [[ -n "${BUSIBOX_ENV:-}" ]]; then
-        echo "$BUSIBOX_ENV"
+    # Fallback to active profile
+    if [[ -n "$_active_profile" ]]; then
+        profile_get "$_active_profile" "environment"
         return
     fi
 
@@ -205,8 +210,13 @@ get_backend_type() {
     local env="$1"
     local backend=""
 
-    # Prefer active profile
-    if [[ -n "$_active_profile" ]]; then
+    # Prefer explicit env var (set by CLI install worker for multi-instance safety)
+    if [[ -n "${BUSIBOX_BACKEND:-}" ]]; then
+        backend="$BUSIBOX_BACKEND"
+    fi
+
+    # Fallback to active profile
+    if [[ -z "$backend" && -n "$_active_profile" ]]; then
         backend=$(profile_get "$_active_profile" "backend")
     fi
 
@@ -284,6 +294,9 @@ deploy_service() {
     local cmd="ansible-playbook -i ${inventory} ${playbook} --tags ${tag}"
     if [[ "$backend" == "docker" ]]; then
         cmd="${cmd} -e docker_force_recreate=true"
+        if [[ "${IMAGE_SOURCE:-}" == "ghcr" ]]; then
+            cmd="${cmd} -e docker_pull_images=true"
+        fi
     fi
     
     # Vault password: use vault-pass-from-env.sh when ANSIBLE_VAULT_PASSWORD is set.
@@ -453,9 +466,18 @@ main() {
     # Set vault environment before accessing vault
     set_vault_environment "$prefix" 2>/dev/null || true
     
-    # Ensure vault access
+    # Ensure vault access (fatal if it fails)
     if ! ensure_vault_access 2>/dev/null; then
-        warn "Could not access vault - some secrets may not be available"
+        error "Cannot access vault - deployment aborted. Secrets would not be injected."
+        error "Run 'make install' through the CLI to set up vault access first."
+        exit 1
+    fi
+    
+    # Validate vault secrets before deploying (reject placeholders/insecure defaults)
+    if ! validate_vault_secrets 2>/dev/null; then
+        error "Vault secrets validation failed - deployment aborted."
+        error "Update your vault file and re-encrypt before deploying."
+        exit 1
     fi
     
     # Expand and validate services

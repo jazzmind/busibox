@@ -30,7 +30,7 @@ router = APIRouter()
 JWT_SECRET = os.environ.get("JWT_SECRET") or \
              os.environ.get("SERVICE_JWT_SECRET") or \
              os.environ.get("SSO_JWT_SECRET") or \
-             "default-service-secret-change-in-production"
+             ""
 
 JWT_ISSUER = os.environ.get("JWT_ISSUER", "authz-service")
 JWT_AUDIENCE = os.environ.get("JWT_AUDIENCE", "busibox-services")

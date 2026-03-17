@@ -45,7 +45,7 @@ services:
       # Busibox Portal Environment (PORT 3000)
       # =========================================================================
       # Database
-      DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/ai_portal
+      DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/ai_portal
       # Auth - use https://localhost for SSL
       BETTER_AUTH_URL: https://localhost/portal
       # Email (optional - uses console logging in dev)
@@ -58,10 +58,10 @@ services:
       AUTHZ_BASE_URL: http://authz-api:8010
       # LiteLLM
       LITELLM_BASE_URL: http://litellm:4000/v1
-      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:?LITELLM_API_KEY must be set}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       # SSO
-      SSO_JWT_SECRET: ${SSO_JWT_SECRET:-dev-sso-secret}
+      SSO_JWT_SECRET: ${SSO_JWT_SECRET:?SSO_JWT_SECRET must be set}
       # Service URLs (for SSO redirect via nginx proxy)
       NEXT_PUBLIC_BUSIBOX_AGENTS_URL: https://localhost/agents
       NEXT_PUBLIC_APP_URL: https://localhost/portal

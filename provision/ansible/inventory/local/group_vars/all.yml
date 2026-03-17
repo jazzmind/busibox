@@ -43,13 +43,13 @@ postgres_port: 5432
 # Database Configuration
 # ============================================================================
 postgres_user: postgres
-postgres_password: devpassword
+postgres_password: "{{ secrets.postgresql.password }}"
 
 # ============================================================================
 # MinIO Configuration
 # ============================================================================
-minio_root_user: minioadmin
-minio_root_password: minioadmin
+minio_root_user: "{{ secrets.minio.root_user }}"
+minio_root_password: "{{ secrets.minio.root_password }}"
 minio_use_ssl: false
 
 # ============================================================================
@@ -105,7 +105,7 @@ applications:
 # LiteLLM Configuration
 # ============================================================================
 litellm_enable_database: false  # Simplified for local dev
-litellm_master_key: sk-local-dev-key
+litellm_master_key: "{{ secrets.litellm_master_key }}"
 
 # ============================================================================
 # Development Settings

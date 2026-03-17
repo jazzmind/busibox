@@ -30,10 +30,15 @@ source "${REPO_ROOT}/scripts/lib/backends/common.sh"
 # Initialize profiles (migrates from legacy if needed)
 profile_init
 
-# Legacy compat: set BUSIBOX_ENV from active profile
-_active_profile=$(profile_get_active)
-if [[ -n "$_active_profile" ]]; then
-    export BUSIBOX_ENV=$(profile_get "$_active_profile" "environment")
+# Legacy compat: set BUSIBOX_ENV from active profile.
+# BUSIBOX_ENV / BUSIBOX_BACKEND env vars take precedence for multi-instance safety.
+if [[ -n "${BUSIBOX_ENV:-}" && -n "${BUSIBOX_BACKEND:-}" ]]; then
+    _active_profile=""
+else
+    _active_profile=$(profile_get_active)
+    if [[ -n "$_active_profile" ]]; then
+        export BUSIBOX_ENV=$(profile_get "$_active_profile" "environment")
+    fi
 fi
 
 # ============================================================================

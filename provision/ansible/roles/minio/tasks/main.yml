@@ -57,8 +57,8 @@
   copy:
     dest: /srv/minio/.env
     content: |
-      MINIO_ROOT_USER={{ minio_root_user | default('minioadmin') }}
-      MINIO_ROOT_PASSWORD={{ minio_root_password | default('minioadminchange') }}
+      MINIO_ROOT_USER={{ minio_root_user }}
+      MINIO_ROOT_PASSWORD={{ minio_root_password }}
     mode: "0600"
   tags: [minio, minio_configure]
 
@@ -85,9 +85,9 @@
 
 - name: Configure MinIO client alias
   shell: |
-    mc alias set local http://localhost:9000 {{ minio_root_user | default('minioadmin') }} {{ minio_root_password | default('minioadminchange') }}
+    mc alias set local http://localhost:9000 {{ minio_root_user }} {{ minio_root_password }}
   environment:
-    MC_HOST_local: "http://{{ minio_root_user | default('minioadmin') }}:{{ minio_root_password | default('minioadminchange') }}@localhost:9000"
+    MC_HOST_local: "http://{{ minio_root_user }}:{{ minio_root_password }}@localhost:9000"
   tags: [minio, minio_configure]
 
 - name: Create documents bucket
@@ -95,7 +95,7 @@
     mc mb local/documents --ignore-existing
     mc anonymous set download local/documents  # Allow presigned URL downloads
   environment:
-    MC_HOST_local: "http://{{ minio_root_user | default('minioadmin') }}:{{ minio_root_password | default('minioadminchange') }}@localhost:9000"
+    MC_HOST_local: "http://{{ minio_root_user }}:{{ minio_root_password }}@localhost:9000"
   tags: [minio, minio_configure]
 
 - name: Check if agent API is accessible
@@ -151,7 +151,7 @@
     
     echo "=== Webhook configuration complete ==="
   environment:
-    MC_HOST_local: "http://{{ minio_root_user | default('minioadmin') }}:{{ minio_root_password | default('minioadminchange') }}@localhost:9000"
+    MC_HOST_local: "http://{{ minio_root_user }}:{{ minio_root_password }}@localhost:9000"
   when: 
     - agent_api_host is defined
     - agent_health_check.status is defined

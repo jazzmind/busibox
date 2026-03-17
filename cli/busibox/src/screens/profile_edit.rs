@@ -34,9 +34,10 @@ const FIELD_LABELS: &[&str] = &[
     "Kubeconfig",
     "K8s Overlay",
     "Spot Token",
+    "Dev Apps Dir",
 ];
 
-const FIELD_COUNT: usize = 23;
+const FIELD_COUNT: usize = 24;
 
 const FIELD_LABEL: usize = 0;
 const FIELD_ENVIRONMENT: usize = 1;
@@ -61,6 +62,7 @@ const FIELD_CLOUD_API_KEY: usize = 19;
 const FIELD_KUBECONFIG: usize = 20;
 const FIELD_K8S_OVERLAY: usize = 21;
 const FIELD_SPOT_TOKEN: usize = 22;
+const FIELD_DEV_APPS_DIR: usize = 23;
 
 fn visible_fields(profile: &profile::Profile) -> Vec<usize> {
     let mut fields: Vec<usize> = (0..FIELD_COUNT).collect();
@@ -76,6 +78,9 @@ fn visible_fields(profile: &profile::Profile) -> Vec<usize> {
     }
     if profile.backend != "k8s" {
         fields.retain(|&f| f != FIELD_KUBECONFIG && f != FIELD_K8S_OVERLAY && f != FIELD_SPOT_TOKEN);
+    }
+    if profile.backend != "docker" {
+        fields.retain(|&f| f != FIELD_DEV_APPS_DIR);
     }
     fields
 }
@@ -720,6 +725,7 @@ fn default_profile() -> profile::Profile {
         llm_backend_override: None,
         k8s_overlay: None,
         spot_token: None,
+        dev_apps_dir: None,
     }
 }
 
@@ -804,6 +810,7 @@ fn field_value(profile: &profile::Profile, field: usize) -> String {
                 }
             })
             .unwrap_or_default(),
+        FIELD_DEV_APPS_DIR => profile.dev_apps_dir.clone().unwrap_or_default(),
         _ => String::new(),
     }
 }
@@ -841,6 +848,7 @@ fn field_hint(field: usize, profile: &profile::Profile) -> String {
         FIELD_KUBECONFIG => "Path to kubeconfig file".into(),
         FIELD_K8S_OVERLAY => "Kustomize overlay name".into(),
         FIELD_SPOT_TOKEN => "Rackspace Spot API token for node management".into(),
+        FIELD_DEV_APPS_DIR => "Host path to local app source trees (e.g. /Users/you/Code)".into(),
         _ => String::new(),
     }
 }
@@ -1072,6 +1080,13 @@ fn apply_field(app: &mut App, field: usize, value: &str) {
                 };
             }
         }
+        FIELD_DEV_APPS_DIR => {
+            profile.dev_apps_dir = if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            };
+        }
         _ => {}
     }
 }
@@ -1168,7 +1183,7 @@ fn save_profile(app: &mut App) {
         return;
     }
 
-    // Snapshot the previous github_token before applying edits
+    // Snapshot values before applying edits to detect changes
     let old_github_token: Option<String> = app
         .profile_edit_id
         .as_ref()
@@ -1177,6 +1192,15 @@ fn save_profile(app: &mut App) {
                 .as_ref()
                 .and_then(|pf| pf.profiles.get(id))
                 .and_then(|p| p.github_token.clone())
+        });
+    let old_dev_apps_dir: Option<String> = app
+        .profile_edit_id
+        .as_ref()
+        .and_then(|id| {
+            app.profiles
+                .as_ref()
+                .and_then(|pf| pf.profiles.get(id))
+                .and_then(|p| p.dev_apps_dir.clone())
         });
 
     if let Some(profiles) = &mut app.profiles {
@@ -1189,7 +1213,7 @@ fn save_profile(app: &mut App) {
         }
     }
 
-    // Check if the github token changed
+    // Check if values changed
     let new_github_token: Option<String> = app
         .profile_edit_id
         .as_ref()
@@ -1200,6 +1224,17 @@ fn save_profile(app: &mut App) {
                 .and_then(|p| p.github_token.clone())
         });
     let github_token_changed = new_github_token != old_github_token && new_github_token.is_some();
+
+    let new_dev_apps_dir: Option<String> = app
+        .profile_edit_id
+        .as_ref()
+        .and_then(|id| {
+            app.profiles
+                .as_ref()
+                .and_then(|pf| pf.profiles.get(id))
+                .and_then(|p| p.dev_apps_dir.clone())
+        });
+    let dev_apps_dir_changed = new_dev_apps_dir != old_dev_apps_dir;
 
     if let Some(profiles) = &app.profiles {
         if let Some(ref id) = app.profile_edit_id {
@@ -1230,18 +1265,43 @@ fn save_profile(app: &mut App) {
                     }
                 }
 
-                if github_token_changed {
-                    let token = new_github_token.as_deref().unwrap_or("");
-                    let extra_env = format!("GITHUB_AUTH_TOKEN={token}");
-                    app.set_message(
-                        "Profile saved — redeploying deploy-api with new GitHub token...",
-                        MessageKind::Success,
-                    );
+                // Propagate dev_apps_dir to state/env files
+                if dev_apps_dir_changed {
+                    if let Some(ref id) = app.profile_edit_id {
+                        if let Some(p) = profiles.profiles.get(id) {
+                            let prefix = super::install::env_to_prefix(&p.environment);
+                            propagate_dev_apps_dir(&repo_root, &prefix, p.dev_apps_dir.as_deref());
+                        }
+                    }
+                }
+
+                if github_token_changed || dev_apps_dir_changed {
+                    let mut extra_parts = Vec::new();
+                    if github_token_changed {
+                        let token = new_github_token.as_deref().unwrap_or("");
+                        extra_parts.push(format!("GITHUB_AUTH_TOKEN={token}"));
+                    }
+                    let extra_env = extra_parts.join(" ");
+                    let services = if dev_apps_dir_changed && github_token_changed {
+                        "deploy,user-apps"
+                    } else if dev_apps_dir_changed {
+                        "deploy,user-apps"
+                    } else {
+                        "deploy"
+                    };
+                    let msg = if dev_apps_dir_changed && github_token_changed {
+                        "Profile saved — redeploying deploy-api & user-apps..."
+                    } else if dev_apps_dir_changed {
+                        "Profile saved — redeploying deploy-api & user-apps with new Dev Apps Dir..."
+                    } else {
+                        "Profile saved — redeploying deploy-api with new GitHub token..."
+                    };
+                    app.set_message(msg, MessageKind::Success);
                     app.profile_edit_id = None;
                     app.profile_editing = false;
                     app.profile_edit_tier_selecting = false;
                     app.input_mode = InputMode::Normal;
-                    super::manage::spawn_install_with_env(app, "deploy", &extra_env);
+                    super::manage::spawn_install_with_env(app, services, &extra_env);
                 } else {
                     app.set_message("Profile saved", MessageKind::Success);
                     app.screen = Screen::ProfileSelect;
@@ -1258,6 +1318,28 @@ fn save_profile(app: &mut App) {
                 );
             }
         }
+    }
+}
+
+/// Write DEV_APPS_DIR (and DEV_APPS_DIR_HOST) into the `.busibox-state-{prefix}`
+/// and `.env.{prefix}` files so Docker Compose picks up the new value.
+fn propagate_dev_apps_dir(repo_root: &Path, prefix: &str, dir: Option<&str>) {
+    let state_file = repo_root.join(format!(".busibox-state-{prefix}"));
+    let env_file = repo_root.join(format!(".env.{prefix}"));
+
+    for path in [&state_file, &env_file] {
+        let existing = std::fs::read_to_string(path).unwrap_or_default();
+        let mut lines: Vec<String> = existing
+            .lines()
+            .filter(|l| !l.starts_with("DEV_APPS_DIR=") && !l.starts_with("DEV_APPS_DIR_HOST="))
+            .map(|l| l.to_string())
+            .collect();
+        if let Some(d) = dir {
+            lines.push(format!("DEV_APPS_DIR={d}"));
+            lines.push(format!("DEV_APPS_DIR_HOST={d}"));
+        }
+        let content = lines.join("\n") + "\n";
+        let _ = profile::atomic_write(path, &content);
     }
 }
 

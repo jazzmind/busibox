@@ -34,7 +34,8 @@ spec:
     spec:
       containers:
         - name: docs-api
-          image: localhost:30500/docs-api:latest
+          image: ghcr.io/jazzmind/busibox/docs-api:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8004
           env:

@@ -2149,7 +2149,7 @@ handle_databases() {
     # We run it inside the authz-api container which has asyncpg installed
     local run_migration_cmd=""
     local pg_password container_prefix authz_container
-    pg_password=$(grep -E "^POSTGRES_PASSWORD=" "${REPO_ROOT}/.env.local" 2>/dev/null | cut -d'=' -f2 || echo "devpassword")
+    pg_password=$(grep -E "^POSTGRES_PASSWORD=" "${REPO_ROOT}/.env.local" 2>/dev/null | cut -d'=' -f2 || echo "")
     container_prefix=$(get_container_prefix)
     authz_container="${container_prefix}-authz-api"
     
@@ -2174,8 +2174,8 @@ handle_databases() {
         run_migration_cmd="python3"
         export POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
         export POSTGRES_PORT="${POSTGRES_PORT:-5432}"
-        export POSTGRES_PASSWORD="${pg_password:-devpassword}"
-        export SOURCE_PASSWORD="${pg_password:-devpassword}"
+        export POSTGRES_PASSWORD="${pg_password:?POSTGRES_PASSWORD not found in .env.local or vault}"
+        export SOURCE_PASSWORD="${pg_password:?POSTGRES_PASSWORD not found in .env.local or vault}"
     fi
     
     # Get current embedding model for display
@@ -2467,7 +2467,7 @@ async def requeue_all():
         host=os.environ.get('POSTGRES_HOST', 'postgres'),
         port=int(os.environ.get('POSTGRES_PORT', 5432)),
         user=os.environ.get('POSTGRES_USER', 'busibox_user'),
-        password=os.environ.get('POSTGRES_PASSWORD', 'devpassword'),
+        password=os.environ['POSTGRES_PASSWORD'],
         database=os.environ.get('POSTGRES_DB', 'files'),
     )
     
@@ -2763,7 +2763,7 @@ connections.disconnect('default')
                     if [[ "$milvus_host" == docker:* ]]; then
                         # Docker environment
                         # Only reset the milvus service and milvus_data volume
-                        # etcd and milvus-minio store metadata, not vectors - leave them alone
+                        # etcd stores metadata, not vectors - leave it alone
                         
                         info "Step 1/5: Stopping Milvus..."
                         (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local stop milvus) || {
@@ -2777,7 +2777,7 @@ connections.disconnect('default')
                         docker volume rm busibox_milvus_data 2>/dev/null || true
                         
                         info "Step 3/5: Starting fresh Milvus..."
-                        # etcd and milvus-minio should already be running; just start milvus
+                        # etcd should already be running; milvus uses main minio
                         (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$BUSIBOX_HOST_PATH" docker compose -f docker-compose.yml --env-file .env.local up -d milvus) || {
                             error "Failed to start Milvus"
                             pause
@@ -2826,7 +2826,7 @@ async def requeue_all():
         host=os.environ.get('POSTGRES_HOST', 'postgres'),
         port=int(os.environ.get('POSTGRES_PORT', 5432)),
         user=os.environ.get('POSTGRES_USER', 'postgres'),
-        password=os.environ.get('POSTGRES_PASSWORD', 'devpassword'),
+        password=os.environ['POSTGRES_PASSWORD'],
         database=os.environ.get('DATA_DB', 'files'),
     )
     

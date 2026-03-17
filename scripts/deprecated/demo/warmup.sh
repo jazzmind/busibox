@@ -192,7 +192,7 @@ show_stage 88 "Pulling infrastructure images" \
 docker compose -f docker-compose.yml pull --quiet postgres redis minio
 
 # Milvus components
-docker compose -f docker-compose.yml pull --quiet etcd milvus-minio milvus || true
+docker compose -f docker-compose.yml pull --quiet etcd milvus || true
 
 # =============================================================================
 # 8. Cache Embedding Models

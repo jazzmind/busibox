@@ -22,7 +22,8 @@ spec:
           command: ['sh', '-c', 'until wget -q -O /dev/null http://milvus:9091/healthz; do echo "Waiting for Milvus..."; sleep 10; done']
       containers:
         - name: milvus-init
-          image: localhost:30500/milvus-init:latest
+          image: ghcr.io/jazzmind/busibox/milvus-init:latest
+          imagePullPolicy: Always
           env:
             - name: MILVUS_HOST
               value: "milvus"
