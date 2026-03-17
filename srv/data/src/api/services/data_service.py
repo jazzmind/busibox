@@ -937,17 +937,6 @@ class DataService:
                         )
 
                 await conn.execute(
-                    """
-                    UPDATE data_files
-                    SET visibility = $2,
-                        updated_at = NOW()
-                    WHERE file_id = $1 AND doc_type = 'data'
-                    """,
-                    uuid.UUID(document_id),
-                    effective_visibility,
-                )
-
-                await conn.execute(
                     "DELETE FROM document_roles WHERE file_id = $1",
                     uuid.UUID(document_id),
                 )
@@ -966,6 +955,17 @@ class DataService:
                             f"Role-{role_id[:8]}",
                             uuid.UUID(request_user_id) if request_user_id else None,
                         )
+
+                await conn.execute(
+                    """
+                    UPDATE data_files
+                    SET visibility = $2,
+                        updated_at = NOW()
+                    WHERE file_id = $1 AND doc_type = 'data'
+                    """,
+                    uuid.UUID(document_id),
+                    effective_visibility,
+                )
 
         if self.cache_manager:
             await self.cache_manager.invalidate_document(document_id)
