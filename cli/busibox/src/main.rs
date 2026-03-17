@@ -9,6 +9,7 @@ use crate::modules::remote;
 use clap::Parser;
 use color_eyre::Result;
 use crossterm::event::{self, Event, KeyEventKind};
+use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -114,7 +115,15 @@ fn main() -> Result<()> {
             app.should_quit = true;
             break;
         }
-        terminal.draw(|f| render(&app, f))?;
+        if let Err(err) = terminal.draw(|f| render(&app, f)) {
+            let retryable_draw_error =
+                err.raw_os_error() == Some(35) || err.kind() == io::ErrorKind::WouldBlock;
+            if retryable_draw_error {
+                std::thread::sleep(Duration::from_millis(16));
+                continue;
+            }
+            return Err(err.into());
+        }
 
         // Tick spinner animation on install, manage, and welcome screens
         if app.screen == Screen::Install {
