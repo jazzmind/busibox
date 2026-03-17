@@ -264,30 +264,22 @@ async def list_roles(request: Request, app: Optional[str] = None):
 
 
 @router.get("/roles/users/search")
-async def search_users(request: Request, q: str = "", app: Optional[str] = None):
+async def search_users(request: Request, q: str = ""):
     """
-    Search for users to add to a self-service role.
+    Search for active users to add to a self-service role.
 
-    Scoped to active users who already have at least one role in the given app.
-    Requires a session JWT (any audience). Returns minimal user info.
+    Requires a session JWT (any audience). Returns minimal user profile info.
 
     Query params:
-        q: search string (matches email, display name, first/last name)
-        app: app name to scope results (e.g. 'busibox-recruiter')
+        q: search string (min 2 chars, matches email, display name, first/last name)
     """
     if not q or len(q) < 2:
         return {"users": []}
 
-    if not app:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="'app' query parameter is required",
-        )
-
     db = _get_pg(request)
-    auth: AuthContext = await _authenticate_any_session(request, db)
+    await _authenticate_any_session(request, db)
 
-    members = await db.search_users_in_app(app_name=app, search=q, limit=20)
+    members = await db.search_active_users(search=q, limit=20)
     return {
         "users": [
             {

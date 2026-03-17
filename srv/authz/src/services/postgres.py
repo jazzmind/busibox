@@ -628,48 +628,30 @@ class PostgresService:
             )
             return [dict(r) for r in rows]
 
-    async def search_users_in_app(
+    async def search_active_users(
         self,
         *,
-        app_name: str,
         search: str,
         limit: int = 20,
     ) -> List[dict]:
-        """Search active users who have access to a given app.
-
-        Finds users via two paths:
-        1. Role-resource bindings: user has a role bound to resource_type='app', resource_id=app_name
-        2. Self-service roles: user has a role with source_app=app_name (campaign-specific roles etc.)
-        """
+        """Search active users by email, display name, or first/last name."""
         async with self.acquire(None, None) as conn:
             rows = await conn.fetch(
                 """
-                SELECT DISTINCT u.user_id::text, u.email, u.display_name,
+                SELECT u.user_id::text, u.email, u.display_name,
                        u.first_name, u.last_name, u.avatar_url
                 FROM authz_users u
-                JOIN authz_user_roles ur ON ur.user_id = u.user_id
                 WHERE u.status = 'ACTIVE'
                   AND (
-                    ur.role_id IN (
-                      SELECT b.role_id FROM authz_role_bindings b
-                      WHERE b.resource_type = 'app' AND b.resource_id = $1
-                    )
-                    OR ur.role_id IN (
-                      SELECT r.id FROM authz_roles r
-                      WHERE r.source_app = $1
-                    )
-                  )
-                  AND (
-                    u.email ILIKE $2
-                    OR COALESCE(u.display_name, '') ILIKE $2
-                    OR COALESCE(u.first_name, '') ILIKE $2
-                    OR COALESCE(u.last_name, '') ILIKE $2
-                    OR COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '') ILIKE $2
+                    u.email ILIKE $1
+                    OR COALESCE(u.display_name, '') ILIKE $1
+                    OR COALESCE(u.first_name, '') ILIKE $1
+                    OR COALESCE(u.last_name, '') ILIKE $1
+                    OR COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '') ILIKE $1
                   )
                 ORDER BY u.email
-                LIMIT $3
+                LIMIT $2
                 """,
-                app_name,
                 f"%{search}%",
                 limit,
             )
