@@ -635,7 +635,12 @@ class PostgresService:
         search: str,
         limit: int = 20,
     ) -> List[dict]:
-        """Search active users who have access to a given app (via app role bindings)."""
+        """Search active users who have access to a given app.
+
+        Finds users via two paths:
+        1. Role-resource bindings: user has a role bound to resource_type='app', resource_id=app_name
+        2. Self-service roles: user has a role with source_app=app_name (campaign-specific roles etc.)
+        """
         async with self.acquire(None, None) as conn:
             rows = await conn.fetch(
                 """
@@ -643,9 +648,17 @@ class PostgresService:
                        u.first_name, u.last_name, u.avatar_url
                 FROM authz_users u
                 JOIN authz_user_roles ur ON ur.user_id = u.user_id
-                JOIN authz_roles r ON r.id = ur.role_id
                 WHERE u.status = 'ACTIVE'
-                  AND r.source_app = $1
+                  AND (
+                    ur.role_id IN (
+                      SELECT b.role_id FROM authz_role_bindings b
+                      WHERE b.resource_type = 'app' AND b.resource_id = $1
+                    )
+                    OR ur.role_id IN (
+                      SELECT r.id FROM authz_roles r
+                      WHERE r.source_app = $1
+                    )
+                  )
                   AND (
                     u.email ILIKE $2
                     OR COALESCE(u.display_name, '') ILIKE $2
