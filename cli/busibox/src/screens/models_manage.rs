@@ -143,11 +143,7 @@ pub fn init_screen(app: &mut App) {
     app.models_manage_model_selected = 0;
     app.models_manage_gpu_assignments.clear();
 
-    let is_mlx = get_hardware(app)
-        .map(|h| matches!(h.llm_backend, LlmBackend::Mlx))
-        .unwrap_or(false);
-
-    let has_custom_deployed = !is_mlx && has_deployed_config(app);
+    let has_custom_deployed = has_deployed_config(app);
     app.models_manage_is_custom = has_custom_deployed;
 
     if let Some((_, profile)) = app.active_profile() {

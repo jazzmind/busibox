@@ -1183,25 +1183,24 @@ fn save_profile(app: &mut App) {
         return;
     }
 
-    // Snapshot values before applying edits to detect changes
-    let old_github_token: Option<String> = app
-        .profile_edit_id
-        .as_ref()
-        .and_then(|id| {
-            app.profiles
-                .as_ref()
-                .and_then(|pf| pf.profiles.get(id))
-                .and_then(|p| p.github_token.clone())
-        });
-    let old_dev_apps_dir: Option<String> = app
-        .profile_edit_id
-        .as_ref()
-        .and_then(|id| {
-            app.profiles
-                .as_ref()
-                .and_then(|pf| pf.profiles.get(id))
-                .and_then(|p| p.dev_apps_dir.clone())
-        });
+    // Load the persisted profile from disk to detect what actually changed.
+    // (apply_field() already mutated app.profiles in-place, so comparing
+    // in-memory old vs new would always see identical values.)
+    let persisted = profile::load_profiles(&repo_root).ok();
+    let editing_id = app.profile_edit_id.clone();
+
+    let old_github_token: Option<String> = editing_id.as_ref().and_then(|id| {
+        persisted
+            .as_ref()
+            .and_then(|pf| pf.profiles.get(id))
+            .and_then(|p| p.github_token.clone())
+    });
+    let old_dev_apps_dir: Option<String> = editing_id.as_ref().and_then(|id| {
+        persisted
+            .as_ref()
+            .and_then(|pf| pf.profiles.get(id))
+            .and_then(|p| p.dev_apps_dir.clone())
+    });
 
     if let Some(profiles) = &mut app.profiles {
         if let Some(ref id) = app.profile_edit_id {
@@ -1213,27 +1212,20 @@ fn save_profile(app: &mut App) {
         }
     }
 
-    // Check if values changed
-    let new_github_token: Option<String> = app
-        .profile_edit_id
-        .as_ref()
-        .and_then(|id| {
-            app.profiles
-                .as_ref()
-                .and_then(|pf| pf.profiles.get(id))
-                .and_then(|p| p.github_token.clone())
-        });
+    let new_github_token: Option<String> = editing_id.as_ref().and_then(|id| {
+        app.profiles
+            .as_ref()
+            .and_then(|pf| pf.profiles.get(id))
+            .and_then(|p| p.github_token.clone())
+    });
     let github_token_changed = new_github_token != old_github_token && new_github_token.is_some();
 
-    let new_dev_apps_dir: Option<String> = app
-        .profile_edit_id
-        .as_ref()
-        .and_then(|id| {
-            app.profiles
-                .as_ref()
-                .and_then(|pf| pf.profiles.get(id))
-                .and_then(|p| p.dev_apps_dir.clone())
-        });
+    let new_dev_apps_dir: Option<String> = editing_id.as_ref().and_then(|id| {
+        app.profiles
+            .as_ref()
+            .and_then(|pf| pf.profiles.get(id))
+            .and_then(|p| p.dev_apps_dir.clone())
+    });
     let dev_apps_dir_changed = new_dev_apps_dir != old_dev_apps_dir;
 
     if let Some(profiles) = &app.profiles {

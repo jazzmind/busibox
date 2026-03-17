@@ -106,6 +106,26 @@
     which docker-credential-osxkeychain 2>&1 || echo "(not found)"
   changed_when: false
 
+- name: Remove stale or conflicting containers before recreate
+  ansible.builtin.shell: |
+    for svc in {{ _services_arg }}; do
+      cname="{{ container_prefix | default('dev') }}-${svc}"
+      existing_id=$(docker inspect -f '{%raw%}{{.Id}}{%endraw%}' "$cname" 2>/dev/null || true)
+      if [ -n "$existing_id" ]; then
+        existing_project=$(docker inspect -f '{%raw%}{{ index .Config.Labels "com.docker.compose.project" }}{%endraw%}' "$cname" 2>/dev/null || echo "")
+        if [ -n "$existing_project" ] && [ "$existing_project" != "{{ compose_project_name }}" ]; then
+          echo "[WARN] Removing stale container $cname (project=$existing_project, expected={{ compose_project_name }})"
+          docker rm -f "$cname" >/dev/null 2>&1 || true
+        elif [ "{{ docker_force_recreate | default(false) | string | lower }}" = "true" ]; then
+          echo "[INFO] Force-recreate: stopping and removing $cname"
+          docker stop "$cname" >/dev/null 2>&1 || true
+          docker rm "$cname" >/dev/null 2>&1 || true
+        fi
+      fi
+    done
+  changed_when: false
+  when: docker_services_to_start | default([]) | length > 0
+
 - name: Start services with docker compose up
   ansible.builtin.shell: |
     cd {{ docker_compose_dir }}

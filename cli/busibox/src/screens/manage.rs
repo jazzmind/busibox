@@ -70,6 +70,7 @@ fn get_all_services(app: &App) -> Vec<(&'static str, String)> {
 
     services.push(("Frontend", "proxy".to_string()));
     services.push(("Frontend", "core-apps".to_string()));
+    services.push(("Frontend", "user-apps".to_string()));
     services.push(("Frontend", "portal".to_string()));
     services.push(("Frontend", "admin".to_string()));
     services.push(("Frontend", "agents".to_string()));
@@ -517,9 +518,16 @@ pub fn load_service_status(app: &mut App) {
     let prefix = env_to_prefix(&profile.environment);
     let is_remote = profile.remote;
     let is_proxmox = profile.backend == "proxmox";
-    let is_mlx = profile
-        .hardware
-        .as_ref()
+    let hw = if is_remote {
+        app.remote_hardware
+            .as_ref()
+            .or(profile.hardware.as_ref())
+    } else {
+        app.local_hardware
+            .as_ref()
+            .or(profile.hardware.as_ref())
+    };
+    let is_mlx = hw
         .map(|h| matches!(h.llm_backend, LlmBackend::Mlx))
         .unwrap_or(false);
 

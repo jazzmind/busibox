@@ -244,57 +244,63 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                 let profile_ids: Vec<&String> = profiles.profiles.keys().collect();
                 if let Some(id) = profile_ids.get(app.profile_selected) {
                     let id = (*id).clone();
-                    let switched_profile = id.clone();
+                    let is_already_active = id == profiles.active;
 
-                    // Try to lock the new profile before switching
-                    match profile::try_lock_profile(&app.repo_root, &id) {
-                        Ok(Some(new_lock)) => {
-                            // Release the old lock by dropping the handle
-                            app.profile_lock = None;
-                            app.profile_lock = Some(new_lock);
+                    if is_already_active {
+                        // Already the active profile — just go back to welcome
+                        app.screen = Screen::Welcome;
+                        app.menu_selected = 0;
+                    } else {
+                        let switched_profile = id.clone();
 
-                            if let Some(profiles) = &mut app.profiles {
-                                profiles.active = id.clone();
-                                if let Err(e) =
-                                    profile::save_profiles(&app.repo_root, profiles)
-                                {
-                                    app.set_message(
-                                        &format!("Failed to save: {e}"),
-                                        MessageKind::Error,
-                                    );
-                                } else {
-                                    app.set_message(
-                                        &format!("Switched to profile: {id}"),
-                                        MessageKind::Success,
-                                    );
-                                    app.vault_password = None;
-                                    app.kill_ssh_tunnel();
-                                    if vault::has_vault_key(&switched_profile) {
-                                        app.pending_vault_setup = true;
+                        match profile::try_lock_profile(&app.repo_root, &id) {
+                            Ok(Some(new_lock)) => {
+                                app.profile_lock = None;
+                                app.profile_lock = Some(new_lock);
+
+                                if let Some(profiles) = &mut app.profiles {
+                                    profiles.active = id.clone();
+                                    if let Err(e) =
+                                        profile::save_profiles(&app.repo_root, profiles)
+                                    {
+                                        app.set_message(
+                                            &format!("Failed to save: {e}"),
+                                            MessageKind::Error,
+                                        );
+                                    } else {
+                                        app.set_message(
+                                            &format!("Switched to profile: {id}"),
+                                            MessageKind::Success,
+                                        );
+                                        app.vault_password = None;
+                                        app.kill_ssh_tunnel();
+                                        if vault::has_vault_key(&switched_profile) {
+                                            app.pending_vault_setup = true;
+                                        }
+                                        app.health_results.clear();
+                                        app.health_groups.clear();
+                                        app.action_menu_selected = 0;
+                                        app.models_manage_loaded = false;
+                                        app.deployed_models = None;
+                                        app.screen = Screen::Welcome;
+                                        app.menu_selected = 0;
+                                        crate::screens::welcome::load_active_tier_models(app);
+                                        crate::screens::welcome::trigger_health_checks(app);
                                     }
-                                    app.health_results.clear();
-                                    app.health_groups.clear();
-                                    app.action_menu_selected = 0;
-                                    app.models_manage_loaded = false;
-                                    app.deployed_models = None;
-                                    app.screen = Screen::Welcome;
-                                    app.menu_selected = 0;
-                                    crate::screens::welcome::load_active_tier_models(app);
-                                    crate::screens::welcome::trigger_health_checks(app);
                                 }
                             }
-                        }
-                        Ok(None) => {
-                            app.set_message(
-                                &format!("Profile '{id}' is in use by another instance"),
-                                MessageKind::Warning,
-                            );
-                        }
-                        Err(e) => {
-                            app.set_message(
-                                &format!("Failed to lock profile: {e}"),
-                                MessageKind::Error,
-                            );
+                            Ok(None) => {
+                                app.set_message(
+                                    &format!("Profile '{id}' is in use by another instance"),
+                                    MessageKind::Warning,
+                                );
+                            }
+                            Err(e) => {
+                                app.set_message(
+                                    &format!("Failed to lock profile: {e}"),
+                                    MessageKind::Error,
+                                );
+                            }
                         }
                     }
                 }

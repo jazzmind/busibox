@@ -11,42 +11,45 @@ use ratatui::widgets::*;
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// Populate the benchmark screen with running vLLM models from the deployed set.
+/// Populate the benchmark screen with deployed LLM models (vLLM or MLX).
 /// If `preselect_port` is Some, toggle that model on by default.
 pub fn init_screen(app: &mut App, preselect_port: Option<u16>) {
-    let vllm_models: Vec<DeployedModel> = app
+    let llm_models: Vec<DeployedModel> = app
         .deployed_models
         .as_ref()
         .map(|ds| {
             ds.models
                 .iter()
-                .filter(|m| m.provider == "vllm" && m.assigned && m.port > 0)
+                .filter(|m| {
+                    (m.provider == "vllm" || m.provider == "mlx")
+                        && m.assigned
+                        && m.port > 0
+                })
                 .cloned()
                 .collect()
         })
         .unwrap_or_default();
 
-    let count = vllm_models.len();
+    let count = llm_models.len();
     let mut toggled = vec![false; count];
 
     if let Some(port) = preselect_port {
-        for (i, m) in vllm_models.iter().enumerate() {
+        for (i, m) in llm_models.iter().enumerate() {
             if m.port == port {
                 toggled[i] = true;
             }
         }
     }
 
-    // If nothing pre-selected, select all running models
     if !toggled.iter().any(|&t| t) {
-        for (i, m) in vllm_models.iter().enumerate() {
+        for (i, m) in llm_models.iter().enumerate() {
             if m.live_status == LiveStatus::Running {
                 toggled[i] = true;
             }
         }
     }
 
-    app.benchmark_models = vllm_models;
+    app.benchmark_models = llm_models;
     app.benchmark_toggled = toggled;
     app.benchmark_selected = 0;
     app.benchmark_results = Vec::new();
@@ -313,7 +316,7 @@ fn render_model_selector(f: &mut Frame, app: &App, area: Rect) {
 
     if app.benchmark_models.is_empty() {
         let msg = Paragraph::new(Line::from(Span::styled(
-            "  No deployed vLLM models found. Deploy models first.",
+            "  No deployed LLM models found. Deploy models first.",
             theme::warning(),
         )))
         .block(
@@ -654,9 +657,17 @@ fn start_benchmark(app: &mut App) {
         };
 
         for model in &selected_models {
+            // MLX always runs on localhost; vLLM uses the network IP
+            let model_ip = if model.provider == "mlx" {
+                "localhost".to_string()
+            } else {
+                vllm_ip.clone()
+            };
+
+            let provider_label = model.provider.to_uppercase();
             let _ = tx.send(BenchmarkUpdate::Log(format!(
-                ">>> Benchmarking {} (port {})",
-                model.model_key, model.port
+                ">>> Benchmarking {} [{}] (port {})",
+                model.model_key, provider_label, model.port
             )));
 
             let mut result = BenchmarkResult::new(&model.model_name, model.port);
@@ -672,7 +683,7 @@ fn start_benchmark(app: &mut App) {
                     config.num_runs
                 )));
                 let curl_cmd = benchmark::build_curl_command(
-                    &vllm_ip,
+                    &model_ip,
                     model.port,
                     model.api_model_name(),
                     &config.prompt,
@@ -724,7 +735,7 @@ fn start_benchmark(app: &mut App) {
                     config.num_runs
                 )));
                 let curl_cmd = benchmark::build_curl_command(
-                    &vllm_ip,
+                    &model_ip,
                     model.port,
                     model.api_model_name(),
                     &config.prompt,
@@ -771,7 +782,7 @@ fn start_benchmark(app: &mut App) {
                 config.parallel_count, config.max_tokens_parallel
             )));
             let parallel_cmd = benchmark::build_parallel_curl_command(
-                &vllm_ip,
+                &model_ip,
                 model.port,
                 model.api_model_name(),
                 &config.prompt,
@@ -794,7 +805,6 @@ fn start_benchmark(app: &mut App) {
                             .collect();
                         let median_latency = benchmark::median(&mut latencies);
 
-                        // Use wall clock if available, otherwise max individual time
                         let wall_secs = wall_ns
                             .map(|ns| ns as f64 / 1_000_000_000.0)
                             .unwrap_or_else(|| {
@@ -851,7 +861,9 @@ fn start_model_tests(app: &mut App) {
     let selected_models: Vec<DeployedModel> = app
         .benchmark_models
         .iter()
-        .filter(|m| m.provider == "vllm" && m.assigned && m.port > 0)
+        .filter(|m| {
+            (m.provider == "vllm" || m.provider == "mlx") && m.assigned && m.port > 0
+        })
         .cloned()
         .collect();
 
@@ -923,21 +935,28 @@ fn start_model_tests(app: &mut App) {
         let prompt = "Say hello in one word.";
         let max_tokens: usize = 10;
 
-        // --- Phase 1: Direct vLLM tests ---
+        // --- Phase 1: Direct LLM tests (vLLM or MLX) ---
         let _ = tx.send(BenchmarkUpdate::Log(
-            "=== Phase 1: Direct vLLM Tests ===".into(),
+            "=== Phase 1: Direct LLM Tests ===".into(),
         ));
 
         for model in &selected_models {
-            let test_name = format!("vllm:{}", model.api_model_name());
+            let model_ip = if model.provider == "mlx" {
+                "localhost".to_string()
+            } else {
+                vllm_ip.clone()
+            };
+
+            let test_name = format!("{}:{}", model.provider, model.api_model_name());
             let _ = tx.send(BenchmarkUpdate::Log(format!(
-                ">>> Testing {} (port {})...",
+                ">>> Testing {} [{}] (port {})...",
                 model.api_model_name(),
+                model.provider.to_uppercase(),
                 model.port
             )));
 
             let curl_cmd = benchmark::build_curl_command(
-                &vllm_ip,
+                &model_ip,
                 model.port,
                 model.api_model_name(),
                 prompt,

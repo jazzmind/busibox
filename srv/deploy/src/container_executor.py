@@ -151,11 +151,21 @@ def generate_supervisor_conf(app_id: str, app_path: str, start_command: str, env
         env_parts.append(f'{k}="{escaped_v}"')
     env_string = ",".join(env_parts) if env_parts else ""
     
+    # Wrap the start command with a pre-flight check so supervisord gets a clear
+    # error instead of a cryptic npm ENOENT when the app source is missing.
+    # The entire command string is single-quoted by supervisord, so avoid
+    # embedded single quotes — use only double quotes or no quotes.
+    preflight = (
+        f"if [ ! -f {app_path}/package.json ]; then "
+        f"echo [{app_id}] ERROR: {app_path}/package.json not found >&2; "
+        f"exit 1; fi; "
+    )
+    
     conf = f"""# =============================================================================
 # {app_id} - Managed by deploy-api
 # =============================================================================
 [program:{app_id}]
-command=/bin/bash -c '{start_command}'
+command=/bin/bash -c '{preflight}{start_command}'
 directory={app_path}
 environment={env_string}
 autostart=true
@@ -441,8 +451,15 @@ async def recreate_user_apps_with_volumes(dev_app_ids: Set[str], logs: List[str]
             logs.append(f"🔄 Restoring {len(running_apps)} previously running apps to supervisord...")
             for app_id_to_restart, app_info in running_apps.items():
                 try:
+                    app_path = app_info["app_path"]
+                    check_stdout, _, check_rc = await execute_docker_command(
+                        f"test -f {app_path}/package.json && echo ok || echo missing", _retry=False
+                    )
+                    if "missing" in check_stdout:
+                        logs.append(f"  ⏭️ Skipping {app_id_to_restart}: {app_path}/package.json not found")
+                        continue
+
                     logs.append(f"  ↪ Configuring {app_id_to_restart}...")
-                    # Generate and write supervisord config for this app
                     conf_content = generate_supervisor_conf(
                         app_id_to_restart,
                         app_info["app_path"],
@@ -943,7 +960,7 @@ async def install_dependencies(app_path: str, logs: List[str], github_token: Opt
         # - node_modules as a normal directory (safe to rm -rf the directory)
         # - node_modules as a Docker volume mount point (rm -rf directory may fail)
         logs.append("📦 Using npm ci (package-lock.json found)")
-        logs.append("🧹 Clearing node_modules (Docker volume)...")
+        logs.append("🧹 Clearing node_modules and npm cache...")
         clear_cmd = f"""
 # Try to remove node_modules entirely (best for normal dirs)
 rm -rf {app_path}/node_modules 2>/dev/null && mkdir -p {app_path}/node_modules || true
@@ -954,6 +971,13 @@ rm -rf {app_path}/node_modules/* \
        {app_path}/node_modules/.[!.]* \
        {app_path}/node_modules/..?* \
        2>/dev/null || true
+
+# Clear npm cache to prevent EEXIST/ENOENT corruption errors
+rm -rf /root/.npm/_cacache /root/.npm/_logs 2>/dev/null || true
+
+# Remove stale .npmrc that may redirect @jazzmind to GitHub Packages
+# (busibox-app is public on npmjs.org - no auth needed)
+rm -f /root/.npmrc 2>/dev/null || true
 """
         await execute_in_container(clear_cmd)
         
@@ -1020,15 +1044,18 @@ exit $NPM_EXIT
             logs.append(f"⚠️ npm had deprecation warnings (exit code {code}) but no actual errors - continuing")
             code = 0  # Override to success
         
-        # Retry on transient directory cleanup issues
-        if code != 0 and ("ENOTEMPTY" in combined or "EBUSY" in combined):
-            logs.append("⚠️ npm failed with ENOTEMPTY/EBUSY; retrying after full cleanup...")
+        # Retry on transient FS errors: ENOTEMPTY/EBUSY (volume cleanup race)
+        # and EEXIST/ENOENT (corrupted npm cache)
+        retryable_errors = ("ENOTEMPTY", "EBUSY", "EEXIST", "ENOENT", "_cacache")
+        if code != 0 and any(err in combined for err in retryable_errors):
+            logs.append("⚠️ npm failed with filesystem error; retrying after full cleanup...")
             retry_cleanup = f"""
 rm -rf {app_path}/node_modules 2>/dev/null || true
 rm -rf {app_path}/node_modules/* \
        {app_path}/node_modules/.[!.]* \
        {app_path}/node_modules/..?* \
        2>/dev/null || true
+rm -rf /root/.npm/_cacache /root/.npm/_logs 2>/dev/null || true
 npm cache clean --force 2>/dev/null || true
 """
             await execute_in_container(retry_cleanup)

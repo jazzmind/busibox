@@ -159,11 +159,27 @@ pub fn parse_curl_response(output: &str) -> Option<CurlResponse> {
                 .map(|s| s.to_string())
         });
 
-    let completion_tokens = json
+    let mut completion_tokens = json
         .get("usage")
         .and_then(|u| u.get("completion_tokens"))
         .and_then(|t| t.as_u64())
         .unwrap_or(0) as usize;
+
+    // MLX servers report completion_tokens=0 despite generating content.
+    // Fall back to estimating from the response text (~4 chars per token).
+    if completion_tokens == 0 {
+        if let Some(content) = json
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+        {
+            if !content.is_empty() {
+                completion_tokens = (content.len() / 4).max(1);
+            }
+        }
+    }
 
     Some(CurlResponse {
         completion_tokens,
