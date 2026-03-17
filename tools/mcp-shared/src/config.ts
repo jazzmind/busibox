@@ -6,6 +6,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
+import type { DeploymentModel } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -32,3 +33,13 @@ export const CONTAINER_SSH_KEY_PATH =
   process.env.CONTAINER_SSH_KEY_PATH || join(homedir(), '.ssh', 'id_rsa');
 export const BUSIBOX_PATH_ON_PROXMOX =
   process.env.BUSIBOX_PATH_ON_PROXMOX || '/root/busibox';
+
+export const DEFAULT_DEPLOYMENT_MODEL: DeploymentModel =
+  (process.env.BUSIBOX_DEPLOYMENT_MODEL as DeploymentModel) || 'proxmox';
+
+export const BUSIBOX_LOCAL_PATH =
+  process.env.BUSIBOX_LOCAL_PATH || DEFAULT_PROJECT_ROOT;
+
+export const K8S_OVERLAY = process.env.K8S_OVERLAY || 'rackspace-spot';
+export const KUBECONFIG_PATH =
+  process.env.KUBECONFIG || '';

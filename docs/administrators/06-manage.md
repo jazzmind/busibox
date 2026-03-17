@@ -1,37 +1,53 @@
 ---
-title: "Command-Line Management"
+title: "Service Management"
 category: "administrator"
 order: 6
-description: "Managing Busibox services from the command line"
+description: "Managing Busibox services with the CLI"
 published: true
 ---
 
-# Command-Line Management
+# Service Management
 
-All Busibox service operations go through the unified `make` interface. This ensures secrets are properly injected, environments are auto-detected, and commands work identically across Docker and Proxmox deployments.
+All Busibox service management is done through the **Busibox CLI** -- an interactive terminal UI that handles vault decryption, SSH connectivity, and service operations across Docker, Proxmox, and Kubernetes deployments.
 
-**Critical**: Never run `docker compose`, `docker`, or `ansible-playbook` directly. Always use `make` commands.
+**Critical**: Never run `docker compose`, `docker`, or `ansible-playbook` directly. The CLI decrypts vault secrets and injects them at runtime; direct commands skip this and cause authentication failures.
 
-## Quick Reference
+## Using the CLI
+
+Launch the CLI from the repository root:
 
 ```bash
-# Deploy a service
-make install SERVICE=authz
-
-# Restart a service
-make manage SERVICE=authz ACTION=restart
-
-# View logs
-make manage SERVICE=authz ACTION=logs
-
-# Check status
-make manage SERVICE=authz ACTION=status
-
-# Full redeploy (rebuild + restart with fresh secrets)
-make manage SERVICE=authz ACTION=redeploy
+busibox
 ```
 
-## Service Names
+On launch, the CLI prompts for your master password to decrypt the vault key for the active profile. Once unlocked, all service operations use the decrypted secrets automatically.
+
+### Manage Screen
+
+Press `m` from the main menu to enter the **Manage** screen:
+
+- **View status** -- see all services with health indicators (running, stopped, error)
+- **Restart** -- restart a service with existing configuration
+- **Stop / Start** -- stop or start individual services
+- **Redeploy** -- full rebuild: pull code, install dependencies, inject fresh secrets, restart
+- **Logs** -- follow service logs in real-time
+- **Switch profiles** -- change between deployment targets (Docker, Proxmox, K8s)
+
+### Models Screen
+
+Press `m` again (or access from the main menu) for AI model management:
+
+- Browse available models with resource requirements
+- Download models to your deployment target
+- Benchmark model performance
+- Configure model tiers (which models serve which tasks)
+
+### When to Restart vs Redeploy
+
+- **Restart** -- service is misbehaving, you want to clear its state. Uses existing configuration.
+- **Redeploy** -- you changed configuration, updated code, or rotated secrets. Performs a full rebuild.
+
+## Services Reference
 
 ### Infrastructure
 
@@ -69,7 +85,7 @@ make manage SERVICE=authz ACTION=redeploy
 | `nginx` | Reverse proxy |
 | `busibox-portal` | Busibox Portal application |
 | `busibox-agents` | Busibox Agents application |
-| `core-apps` | Both Busibox Portal and Busibox Agents |
+| `core-apps` | Both Portal and Agents |
 
 ### Service Groups
 
@@ -81,93 +97,33 @@ make manage SERVICE=authz ACTION=redeploy
 | `frontend` | nginx, core-apps |
 | `all` | Everything |
 
-## Deploying Services
+## Common Workflows
 
-### Install (Deploy)
+### After Pulling New Code
 
-```bash
-# Single service
-make install SERVICE=authz
+Launch the CLI, select the affected profile, and redeploy the changed services from the Manage screen.
 
-# Multiple services (comma-separated)
-make install SERVICE=authz,agent,data
+### Investigating Issues
 
-# Service group
-make install SERVICE=apis
+1. Open the Manage screen and check service status
+2. View logs for the affected service
+3. Restart if the service is in a bad state
+4. Redeploy if restart doesn't resolve the issue
 
-# Everything
-make install SERVICE=all
+### Managing Multiple Environments
 
-# Specific version/branch for apps
-make install SERVICE=busibox-portal REF=v1.2.3
-```
+The CLI supports multiple deployment profiles. Each profile has its own:
 
-`make install` performs a full deployment: pulls code, installs dependencies, injects secrets from vault, builds, and starts the service.
+- Deployment target (Docker, Proxmox, Kubernetes)
+- SSH configuration
+- Vault key (encrypted separately)
+- Environment settings (staging vs production)
 
-## Managing Running Services
+Switch between profiles from the main menu. See [Multiple Deployments](07-multiple-deployments.md).
 
-### Actions
+## Proxmox Container Reference
 
-| Action | What It Does |
-|--------|-------------|
-| `status` | Show service status (running/stopped, uptime) |
-| `start` | Start a stopped service |
-| `stop` | Stop a running service |
-| `restart` | Stop and start a service (keeps existing config) |
-| `logs` | Follow service logs in real-time |
-| `redeploy` | Full rebuild: pull code, install deps, inject secrets, restart |
-
-### Examples
-
-```bash
-# Check if services are running
-make manage SERVICE=authz,postgres ACTION=status
-
-# Restart a service (uses existing environment)
-make manage SERVICE=agent ACTION=restart
-
-# Full redeploy (re-injects secrets, rebuilds)
-make manage SERVICE=agent ACTION=redeploy
-
-# Stop a service
-make manage SERVICE=vllm ACTION=stop
-
-# View logs (Ctrl+C to exit)
-make manage SERVICE=data ACTION=logs
-```
-
-**When to restart vs redeploy**:
-- **Restart**: Service is misbehaving, you want to clear its state
-- **Redeploy**: You changed configuration, updated code, or rotated secrets
-
-## Interactive Menus
-
-Running `make` commands without arguments launches interactive menus:
-
-```bash
-make            # Main launcher menu
-make install    # Installation wizard (no SERVICE=)
-make manage     # Service management menu (no SERVICE=)
-make test       # Testing menu
-```
-
-## Proxmox-Specific Commands
-
-On the Proxmox host, you can also interact with containers directly:
-
-```bash
-# Check container status
-pct status <CTID>
-
-# Enter a container shell
-pct enter <CTID>
-
-# Inside a container, check services
-systemctl status <service-name>
-journalctl -u <service-name> -n 50 --no-pager
-```
-
-### Container IDs
+For low-level debugging on the Proxmox host, containers can be accessed directly:
 
 | Container | Default CTID |
 |-----------|-------------|
@@ -180,74 +136,9 @@ journalctl -u <service-name> -n 50 --no-pager
 | agent-lxc | 207 |
 | authz-lxc | 210 |
 
-## Testing
+## For AI Agents
 
-```bash
-# Docker testing (local)
-make test-docker SERVICE=authz
-
-# Remote testing (against staging/production)
-make test-local SERVICE=agent INV=staging
-
-# Interactive test menu
-make test
-```
-
-## Health Checks
-
-Quick health check commands:
-
-```bash
-# All services
-make manage SERVICE=all ACTION=status
-
-# Individual health endpoints
-curl http://<authz-ip>:8010/health/live
-curl http://<data-ip>:8002/health
-curl http://<search-ip>:8003/health
-curl http://<agent-ip>:8000/health
-curl http://<files-ip>:9000/minio/health/live
-curl http://<milvus-ip>:9091/healthz
-```
-
-## Common Workflows
-
-### After Pulling New Code
-
-```bash
-git pull origin main
-make install SERVICE=<changed-services>
-```
-
-### After Changing Secrets
-
-```bash
-cd provision/ansible
-ansible-vault edit roles/secrets/vars/vault.yml
-cd ../..
-make install SERVICE=<affected-services>
-```
-
-### Investigating Issues
-
-```bash
-# 1. Check status
-make manage SERVICE=data ACTION=status
-
-# 2. Check logs
-make manage SERVICE=data ACTION=logs
-
-# 3. Restart if needed
-make manage SERVICE=data ACTION=restart
-
-# 4. Full redeploy if restart doesn't help
-make manage SERVICE=data ACTION=redeploy
-```
-
-## Reference
-
-- [Log Viewing Commands](../developers/reference/log-viewing-commands.md) — Scripts for viewing logs by app or service
-- [Core App Rebuild](../developers/reference/core-app-rebuild.md) — Rebuilding core apps without container restart
+AI coding agents should use the `mcp-admin` MCP server rather than the CLI or `make` commands directly. The MCP server provides the same service management operations with proper vault authentication. See [MCP and Make Internals](../developers/reference/mcp-and-make-internals.md).
 
 ## Next Steps
 

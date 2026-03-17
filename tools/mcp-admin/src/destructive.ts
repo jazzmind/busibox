@@ -26,6 +26,6 @@ export function isDestructiveCommand(command: string): boolean {
 }
 
 export function isDestructiveMakeTarget(target: string): boolean {
-  const destructive = ['docker-clean', 'docker-clean-all', 'vault-migrate'];
+  const destructive = ['docker-clean', 'docker-clean-all', 'vault-migrate', 'k8s-delete'];
   return destructive.includes(target.toLowerCase());
 }

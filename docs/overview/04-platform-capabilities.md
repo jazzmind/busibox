@@ -73,14 +73,40 @@ Administrators can define custom agents with specific system prompts, tool confi
 
 Agents can be assigned to specific roles, so different teams see different agents tailored to their workflows.
 
+### Guardrails and Cost Controls
+
+Agents and workflows operate under configurable guardrails that prevent runaway execution and enforce cost ceilings:
+
+- **Request limits** — cap the number of LLM calls a workflow can make
+- **Token limits** — set a maximum total token budget across all requests
+- **Tool call limits** — restrict how many tool invocations can occur
+- **Cost ceilings** — set a hard dollar limit based on model pricing
+- **Timeouts** — enforce wall-clock time limits
+
+These guardrails are defined per workflow and enforced in real-time by the workflow engine. When a limit is hit, execution halts cleanly and the reason is recorded. This makes it safe to run autonomous multi-step agents — they cannot consume unbounded resources.
+
+Agent tiers provide an additional layer of control: `simple` (30-second timeout), `complex` (5-minute timeout), and `batch` (30-minute timeout) set appropriate resource boundaries for different task types.
+
 ## Chat and Messaging
 
 Users interact with agents through multiple channels:
 
 - **Web interface**: Full-featured chat in the AI Portal with thinking indicators, streaming responses, citations, file attachments, and conversation history.
-- **Bridge channels**: The Bridge service connects agents to external messaging platforms — Telegram, Signal, Discord, WhatsApp, and email. Users can ask questions and receive AI-powered responses without opening the web platform.
+- **Bridge channels**: The Bridge service connects agents to external messaging platforms. Users can ask questions and receive AI-powered responses in the tools they already use.
 
-Bridge channels adapt formatting to each platform's capabilities (Telegram markdown, WhatsApp formatting, SMS length limits) with text fallbacks for channels that don't support rich content.
+### Supported Messaging Channels
+
+| Channel | Capabilities |
+|---------|-------------|
+| **Telegram** | Text, markdown formatting, group chats |
+| **Signal** | Encrypted messaging |
+| **Discord** | Text channels, rich embeds |
+| **WhatsApp** | WhatsApp Cloud API, text formatting |
+| **Email** | Inbound IMAP polling, outbound replies |
+
+Bridge channels adapt formatting to each platform's capabilities with text fallbacks for channels that don't support rich content. User identity is bound across channels via `channelUserBindings` so the same person gets consistent access and conversation history regardless of which channel they use.
+
+Bridge configuration is managed through the Busibox Portal admin interface (**Admin > Settings > Bridge**).
 
 ## Application Ecosystem
 

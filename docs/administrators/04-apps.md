@@ -62,7 +62,7 @@ make manage SERVICE=busibox-portal ACTION=restart
 make manage SERVICE=busibox-portal ACTION=redeploy
 ```
 
-For GitHub Packages (npm) authentication and user app development mode, see [GitHub Packages Authentication](../developers/reference/github-packages-authentication.md) and [User App Dev Mode](../developers/reference/user-app-dev-mode.md).
+For user app development mode, see [User App Dev Mode](../developers/reference/user-app-dev-mode.md). The `@jazzmind/busibox-app` package is published publicly on npmjs.org — no authentication or `.npmrc` configuration is needed to install it.
 
 ## Add-On Apps
 

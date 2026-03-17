@@ -20,8 +20,8 @@ Busibox implements a true Zero Trust architecture. There are no static admin tok
 
 **How it works:**
 
-1. Users authenticate via passkey, TOTP, or magic link through the AuthZ service.
-2. AuthZ issues an RS256-signed JWT (session token) — the only authentication authority in the system.
+1. Users authenticate via passkey (biometrics/security keys), TOTP, magic link, or SSO (EntraID, SAML, other identity providers) through the AuthZ service. No passwords are used — ever.
+2. AuthZ issues an RS256-signed JWT (session token) via the OAuth2 protocol — the only authentication authority in the system.
 3. When a user accesses a downstream service (Agent API, Data API, Search API), their session JWT is exchanged for a service-specific token with scoped permissions.
 4. Every service validates tokens by verifying the RS256 signature via JWKS — no database lookups required for basic validation.
 5. Background tasks and service-to-service calls use service account JWTs — never static credentials.
@@ -90,11 +90,24 @@ Roles are defined per organization, and a user can hold multiple roles. The perm
 
 ## Secrets Management
 
-Infrastructure secrets (database passwords, API keys, service credentials) are stored in Ansible Vault — encrypted at rest and injected at deployment time. Secrets never appear in source code, environment files committed to version control, or container images. The `make` command interface ensures that secrets are properly injected for every service operation.
+Infrastructure secrets (database passwords, API keys, service credentials) are stored in Ansible Vault — encrypted at rest and injected at deployment time via the Busibox CLI. Secrets never appear in source code, environment files committed to version control, or container images. The CLI decrypts vault keys using AES-256-GCM with Argon2id key derivation, and injects the vault password into every deployment operation.
 
 ## Audit Trail
 
 Authentication events, token exchanges, and administrative actions are logged to PostgreSQL with timestamps, user identifiers, IP addresses, and action details. Audit records are queryable through standard SQL and can be integrated with external logging and SIEM systems.
+
+## Built-in Security Testing
+
+Busibox includes automated security test suites covering the OWASP API Security Top 10:
+
+- **Authentication and authorization** (API2, API5) — token validation, privilege escalation, session management
+- **Broken object-level authorization** (API1) — cross-user data access attempts
+- **Injection** (API8) — SQL injection, NoSQL injection, command injection
+- **Rate limiting** (API4) — brute-force and abuse prevention
+- **Endpoint coverage** — automated discovery and testing of all API endpoints
+- **Fuzzing** — randomized input testing across API surfaces
+
+These tests run against live services and can be executed from the CLI or as part of CI/CD pipelines.
 
 ## Further Reading
 

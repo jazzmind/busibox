@@ -16,6 +16,8 @@ export interface ContainerConfig {
 
 export type Environment = 'production' | 'staging';
 
+export type DeploymentModel = 'proxmox' | 'docker' | 'k8s';
+
 export interface DocEntry {
   name: string;
   path: string;
@@ -40,11 +42,14 @@ export interface MakeTargetInfo {
   description: string;
   category: string;
   requiresEnv?: boolean;
+  requiresVault?: boolean;
+  deploymentModels?: DeploymentModel[];
+  makefile?: 'root' | 'ansible';
 }
 
 export interface MainMakefileTarget {
   description: string;
-  category: 'menu' | 'setup' | 'deploy' | 'test' | 'docker' | 'mcp';
+  category: 'menu' | 'setup' | 'deploy' | 'test' | 'docker' | 'k8s' | 'mcp';
   variables?: Record<string, string>;
   examples?: string[];
 }

@@ -223,6 +223,54 @@ const { output, error } = await res.json();
 - **Always include `required` arrays** — omitting them means the LLM can skip fields
 - **Use `maxItems` on arrays** — prevents the LLM from generating unbounded lists
 
+## Guardrails and Cost Controls
+
+Workflows and agents operate under configurable guardrails that prevent runaway execution and enforce cost ceilings. The workflow engine tracks usage in real-time and raises `GuardrailsExceededError` when any limit is hit, halting execution cleanly.
+
+### Available Guardrails
+
+| Guardrail | What It Controls | Example |
+|-----------|-----------------|---------|
+| `request_limit` | Maximum number of LLM requests across all steps | `200` |
+| `total_tokens_limit` | Maximum total tokens (input + output) across all requests | `200000` |
+| `tool_calls_limit` | Maximum number of tool invocations | `500` |
+| `max_cost_dollars` | Hard cost ceiling in USD based on model pricing | `10.0` |
+| `timeout_seconds` | Maximum wall-clock execution time | `600` |
+
+### How It Works
+
+Guardrails are defined per workflow definition and stored in the `guardrails` column of the workflow table. The workflow engine (`UsageLimits` class in `srv/agent/app/workflows/engine.py`) initializes counters from the guardrails configuration and checks limits before each LLM call or tool invocation.
+
+```json
+{
+  "name": "data-collection-workflow",
+  "steps": [ ... ],
+  "guardrails": {
+    "request_limit": 200,
+    "tool_calls_limit": 500,
+    "total_tokens_limit": 200000,
+    "max_cost_dollars": 10.0,
+    "timeout_seconds": 600
+  }
+}
+```
+
+When a limit is exceeded, the engine stops execution and records the reason in the run output. Workflows can also override default guardrails at creation time for specific runs.
+
+### Agent Tiers as Guardrails
+
+The agent tier system (`simple`, `complex`, `batch`) also acts as a guardrail layer, setting timeout and memory boundaries:
+
+- `simple` -- 30s timeout, 512MB memory (default for quick tasks)
+- `complex` -- 5min timeout, 2GB memory (multi-step reasoning)
+- `batch` -- 30min timeout, 4GB memory (large data processing)
+
+### Implementation
+
+- **Domain model**: `guardrails` field on `WorkflowDefinition` (`srv/agent/app/models/domain.py`)
+- **Schema**: `guardrails` in `WorkflowCreate` / `WorkflowUpdate` (`srv/agent/app/schemas/definitions.py`)
+- **Engine**: `UsageLimits` class and `GuardrailsExceededError` (`srv/agent/app/workflows/engine.py`)
+
 ## Custom Agents
 
 Apps can register custom agents via `POST /agents/definitions`. Custom agents are useful when you need specific system instructions or tool configurations.

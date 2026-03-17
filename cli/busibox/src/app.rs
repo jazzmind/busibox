@@ -900,8 +900,8 @@ impl App {
         if is_k8s {
             return match &self.deployment_state {
                 DeploymentState::Unknown | DeploymentState::Checking => vec![],
-                DeploymentState::None => vec!["Install", "K8s Manage"],
-                _ => vec!["K8s Manage", "Admin Login", "Update", "Clean Install"],
+                DeploymentState::None => vec!["Manage"],
+                _ => vec!["Admin Login", "Manage"],
             };
         }
 

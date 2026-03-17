@@ -154,6 +154,75 @@ export const MAIN_MAKEFILE_TARGETS: Record<string, MainMakefileTarget> = {
     category: 'docker',
     examples: ['make ssl-check'],
   },
+  'k8s-deploy': {
+    description: 'Full K8s deployment: secrets + manifests + rollout restart',
+    category: 'k8s',
+    variables: {
+      SERVICE: 'Optional: deploy a single service',
+      K8S_OVERLAY: 'Kustomize overlay (default: rackspace-spot)',
+      K8S_TAG: 'Image tag (default: git short SHA)',
+    },
+    examples: ['make k8s-deploy', 'make k8s-deploy SERVICE=authz-api'],
+  },
+  'k8s-apply': {
+    description: 'Apply K8s manifests only (images must already exist)',
+    category: 'k8s',
+    variables: { K8S_OVERLAY: 'Kustomize overlay' },
+    examples: ['make k8s-apply'],
+  },
+  'k8s-secrets': {
+    description: 'Generate and apply K8s secrets from Ansible vault',
+    category: 'k8s',
+    variables: { K8S_OVERLAY: 'Kustomize overlay' },
+    examples: ['make k8s-secrets'],
+  },
+  'k8s-status': {
+    description: 'Show K8s deployment status (pods, services)',
+    category: 'k8s',
+    variables: { K8S_OVERLAY: 'Kustomize overlay' },
+    examples: ['make k8s-status'],
+  },
+  'k8s-logs': {
+    description: 'View K8s pod logs',
+    category: 'k8s',
+    variables: {
+      SERVICE: 'Required: pod name (e.g. authz-api, data-api)',
+      K8S_OVERLAY: 'Kustomize overlay',
+    },
+    examples: ['make k8s-logs SERVICE=authz-api'],
+  },
+  'k8s-delete': {
+    description: 'Delete all K8s resources',
+    category: 'k8s',
+    variables: { K8S_OVERLAY: 'Kustomize overlay' },
+    examples: ['make k8s-delete'],
+  },
+  'k8s-sync': {
+    description: 'Sync code to in-cluster build server (legacy)',
+    category: 'k8s',
+    variables: { SERVICE: 'Optional: sync a single service' },
+    examples: ['make k8s-sync', 'make k8s-sync SERVICE=authz-api'],
+  },
+  'k8s-build': {
+    description: 'Build images on in-cluster build server (legacy)',
+    category: 'k8s',
+    variables: { SERVICE: 'Optional: build a single service' },
+    examples: ['make k8s-build', 'make k8s-build SERVICE=authz-api'],
+  },
+  connect: {
+    description: 'Start HTTPS tunnel to K8s cluster',
+    category: 'k8s',
+    variables: {
+      DOMAIN: 'Local domain (default: busibox.local)',
+      LOCAL_PORT: 'Local port (default: 443)',
+    },
+    examples: ['make connect', 'make connect DOMAIN=my.local LOCAL_PORT=8443'],
+  },
+  disconnect: {
+    description: 'Stop HTTPS tunnel to K8s cluster',
+    category: 'k8s',
+    examples: ['make disconnect'],
+  },
   mcp: {
     description: 'Build the MCP server for Cursor AI',
     category: 'mcp',
@@ -163,57 +232,96 @@ export const MAIN_MAKEFILE_TARGETS: Record<string, MainMakefileTarget> = {
 
 /**
  * Ansible Makefile targets (provision/ansible/Makefile)
+ * These are Proxmox-only targets that run via SSH on the Proxmox host.
  */
-export const MAKE_TARGETS: Record<string, MakeTargetInfo> = {
-  all: { description: 'Deploy all services', category: 'deployment', requiresEnv: true },
-  ping: { description: 'Ping all hosts to verify connectivity', category: 'verification', requiresEnv: true },
-  files: { description: 'Deploy MinIO file storage', category: 'deployment', requiresEnv: true },
-  pg: { description: 'Deploy PostgreSQL database', category: 'deployment', requiresEnv: true },
-  authz: { description: 'Deploy AuthZ service', category: 'deployment', requiresEnv: true },
-  'deploy-api': { description: 'Deploy Deploy API service', category: 'deployment', requiresEnv: true },
-  litellm: { description: 'Deploy LiteLLM gateway', category: 'deployment', requiresEnv: true },
-  vllm: { description: 'Deploy vLLM inference server', category: 'deployment', requiresEnv: true },
-  'vllm-embedding': { description: 'Deploy vLLM embedding model', category: 'deployment', requiresEnv: true },
-  colpali: { description: 'Deploy ColPali visual model', category: 'deployment', requiresEnv: true },
-  milvus: { description: 'Deploy Milvus vector database', category: 'deployment', requiresEnv: true },
-  nginx: { description: 'Deploy nginx reverse proxy', category: 'deployment', requiresEnv: true },
-  search: { description: 'Deploy Milvus + Search API', category: 'deployment', requiresEnv: true },
-  'search-api': { description: 'Deploy Search API only', category: 'deployment', requiresEnv: true },
-  agent: { description: 'Deploy Agent API', category: 'deployment', requiresEnv: true },
-  data: { description: 'Deploy Data service', category: 'deployment', requiresEnv: true },
-  'data-api': { description: 'Deploy Data API only', category: 'deployment', requiresEnv: true },
-  'data-worker': { description: 'Deploy Data worker only', category: 'deployment', requiresEnv: true },
-  apps: { description: 'Deploy all Next.js apps', category: 'deployment', requiresEnv: true },
-  'deploy-apps': { description: 'Deploy all applications', category: 'app-deployment', requiresEnv: true },
-  'deploy-busibox-portal': { description: 'Deploy Busibox Portal app', category: 'app-deployment', requiresEnv: true },
-  'deploy-busibox-agents': { description: 'Deploy Agent Manager app', category: 'app-deployment', requiresEnv: true },
-  'deploy-doc-intel': { description: 'Deploy Doc Intel app', category: 'app-deployment', requiresEnv: true },
-  'deploy-foundation': { description: 'Deploy Foundation app', category: 'app-deployment', requiresEnv: true },
-  'deploy-busibox-analysis': { description: 'Deploy Project Analysis app', category: 'app-deployment', requiresEnv: true },
-  'deploy-innovation': { description: 'Deploy Innovation app', category: 'app-deployment', requiresEnv: true },
-  verify: { description: 'Run all verification checks', category: 'verification', requiresEnv: true },
-  'verify-health': { description: 'Service health checks', category: 'verification', requiresEnv: true },
-  'verify-smoke': { description: 'Database smoke tests', category: 'verification', requiresEnv: true },
-  'test-all': { description: 'Run all service tests', category: 'testing', requiresEnv: true },
-  'test-data': { description: 'Run data service tests', category: 'testing', requiresEnv: true },
-  'test-data-all': { description: 'Run all data tests including integration', category: 'testing', requiresEnv: true },
-  'test-data-coverage': { description: 'Run data tests with coverage', category: 'testing', requiresEnv: true },
-  'test-search': { description: 'Run search service tests', category: 'testing', requiresEnv: true },
-  'test-search-unit': { description: 'Run search unit tests only', category: 'testing', requiresEnv: true },
-  'test-search-integration': { description: 'Run search integration tests', category: 'testing', requiresEnv: true },
-  'test-search-coverage': { description: 'Run search tests with coverage', category: 'testing', requiresEnv: true },
-  'test-agent': { description: 'Run agent service tests', category: 'testing', requiresEnv: true },
-  'test-agent-unit': { description: 'Run agent unit tests only', category: 'testing', requiresEnv: true },
-  'test-agent-integration': { description: 'Run agent integration tests', category: 'testing', requiresEnv: true },
-  'test-agent-coverage': { description: 'Run agent tests with coverage', category: 'testing', requiresEnv: true },
-  'test-authz': { description: 'Run authz service tests', category: 'testing', requiresEnv: true },
-  'test-apps': { description: 'Run app tests', category: 'testing', requiresEnv: true },
-  'test-security': { description: 'Run security tests', category: 'testing', requiresEnv: true },
-  'test-extraction-simple': { description: 'Test simple PDF extraction', category: 'testing', requiresEnv: true },
-  'test-extraction-llm': { description: 'Test LLM-enhanced extraction', category: 'testing', requiresEnv: true },
-  'test-extraction-marker': { description: 'Test Marker extraction (GPU)', category: 'testing', requiresEnv: true },
-  'test-extraction-colpali': { description: 'Test ColPali visual extraction', category: 'testing', requiresEnv: true },
-  configure: { description: 'Run configuration wizard', category: 'configuration' },
-  'generate-token-keys': { description: 'Generate token service keys', category: 'configuration' },
-  'bootstrap-test-creds': { description: 'Bootstrap test credentials', category: 'configuration', requiresEnv: true },
+export const ANSIBLE_MAKE_TARGETS: Record<string, MakeTargetInfo> = {
+  all: { description: 'Deploy all services', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  ping: { description: 'Ping all hosts to verify connectivity', category: 'verification', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  files: { description: 'Deploy MinIO file storage', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  pg: { description: 'Deploy PostgreSQL database', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  authz: { description: 'Deploy AuthZ service', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'deploy-api': { description: 'Deploy Deploy API service', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  litellm: { description: 'Deploy LiteLLM gateway', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  vllm: { description: 'Deploy vLLM inference server', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'vllm-embedding': { description: 'Deploy vLLM embedding model', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  colpali: { description: 'Deploy ColPali visual model', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  milvus: { description: 'Deploy Milvus vector database', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  nginx: { description: 'Deploy nginx reverse proxy', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  search: { description: 'Deploy Milvus + Search API', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'search-api': { description: 'Deploy Search API only', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  agent: { description: 'Deploy Agent API', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  data: { description: 'Deploy Data service', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'data-api': { description: 'Deploy Data API only', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'data-worker': { description: 'Deploy Data worker only', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  apps: { description: 'Deploy all Next.js apps', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'apps-frontend': { description: 'Deploy frontend apps (portal, agents, appbuilder)', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  bridge: { description: 'Deploy Bridge service (messaging integrations)', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  docs: { description: 'Deploy Docs API service', category: 'deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'deploy-apps': { description: 'Deploy all applications (app_deployer + secrets + nginx)', category: 'app-deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'deploy-frontend': { description: 'Deploy all frontend apps from busibox-frontend monorepo', category: 'app-deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'deploy-busibox-portal': { description: 'Deploy Busibox Portal app', category: 'app-deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'deploy-busibox-admin': { description: 'Deploy Busibox Admin app', category: 'app-deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'deploy-busibox-agents': { description: 'Deploy Agent Manager app', category: 'app-deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'deploy-busibox-chat': { description: 'Deploy Busibox Chat app', category: 'app-deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'deploy-busibox-appbuilder': { description: 'Deploy Busibox App Builder', category: 'app-deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'deploy-busibox-media': { description: 'Deploy Busibox Media app', category: 'app-deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'deploy-busibox-documents': { description: 'Deploy Busibox Documents app', category: 'app-deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'deploy-app-ref': { description: 'Deploy a specific app from a branch/tag (APP= REF=)', category: 'app-deployment', requiresEnv: true, requiresVault: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  verify: { description: 'Run all verification checks', category: 'verification', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'verify-health': { description: 'Service health checks', category: 'verification', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'verify-smoke': { description: 'Database smoke tests', category: 'verification', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-all': { description: 'Run all service tests', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-data': { description: 'Run data service tests', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-data-all': { description: 'Run all data tests including integration', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-data-coverage': { description: 'Run data tests with coverage', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-search': { description: 'Run search service tests', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-search-unit': { description: 'Run search unit tests only', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-search-integration': { description: 'Run search integration tests', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-search-coverage': { description: 'Run search tests with coverage', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-agent': { description: 'Run agent service tests', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-agent-unit': { description: 'Run agent unit tests only', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-agent-integration': { description: 'Run agent integration tests', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-agent-coverage': { description: 'Run agent tests with coverage', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-authz': { description: 'Run authz service tests', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-apps': { description: 'Run app tests', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-security': { description: 'Run security tests', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-extraction-simple': { description: 'Test simple PDF extraction', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-extraction-llm': { description: 'Test LLM-enhanced extraction', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-extraction-marker': { description: 'Test Marker extraction (GPU)', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'test-extraction-colpali': { description: 'Test ColPali visual extraction', category: 'testing', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
+  configure: { description: 'Run configuration wizard', category: 'configuration', deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'generate-token-keys': { description: 'Generate token service keys', category: 'configuration', deploymentModels: ['proxmox'], makefile: 'ansible' },
+  'bootstrap-test-creds': { description: 'Bootstrap test credentials', category: 'configuration', requiresEnv: true, deploymentModels: ['proxmox'], makefile: 'ansible' },
 };
+
+/**
+ * @deprecated Use ANSIBLE_MAKE_TARGETS instead. Kept for backward compatibility.
+ */
+export const MAKE_TARGETS = ANSIBLE_MAKE_TARGETS;
+
+/**
+ * All targets across both Makefiles, unified for MCP server lookups.
+ * Merges root Makefile targets (as MakeTargetInfo) with Ansible targets.
+ */
+export function getAllMakeTargets(): Record<string, MakeTargetInfo> {
+  const rootTargets: Record<string, MakeTargetInfo> = {};
+  for (const [name, info] of Object.entries(MAIN_MAKEFILE_TARGETS)) {
+    const deploymentModels: import('./types.js').DeploymentModel[] = [];
+    if (info.category === 'docker') deploymentModels.push('docker');
+    else if (info.category === 'k8s') deploymentModels.push('k8s');
+    else deploymentModels.push('proxmox', 'docker', 'k8s');
+
+    const requiresVault = ['deploy', 'setup'].includes(info.category) ||
+      name === 'k8s-secrets' || name === 'k8s-deploy';
+
+    rootTargets[name] = {
+      description: info.description,
+      category: info.category,
+      requiresEnv: !!info.variables?.['INV'] || !!info.variables?.['ENV'],
+      requiresVault,
+      deploymentModels,
+      makefile: 'root',
+    };
+  }
+  return { ...rootTargets, ...ANSIBLE_MAKE_TARGETS };
+}

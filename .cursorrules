@@ -5,7 +5,7 @@
 Busibox is a local LLM infrastructure platform running on Docker or Proxmox LXC containers.
 See `CLAUDE.md` for full project documentation.
 
-## ⚠️ CRITICAL: Always Use `make` Commands
+## ⚠️ CRITICAL: Service Operations
 
 **NEVER run `docker compose`, `docker`, or `ansible-playbook` commands directly.**
 
@@ -15,12 +15,16 @@ docker compose up -d authz-api
 docker restart prod-authz-api
 ansible-playbook -i inventory/docker docker.yml --tags authz
 
-# ✅ CORRECT - uses vault secrets, auto-detects environment
+# ✅ CORRECT for AI agents - use make with vault password
 make install SERVICE=authz
 make manage SERVICE=authz ACTION=restart
 ```
 
-**Why**: Secrets are injected from Ansible Vault at runtime. Direct commands skip this and cause authentication failures. All orchestration runs inside a **manager container** with guaranteed dependencies.
+**Why**: Secrets are injected from Ansible Vault at runtime. Direct commands skip this and cause authentication failures.
+
+**Vault password**: Most `make` targets require `ANSIBLE_VAULT_PASSWORD` env var or a vault password file (`~/.busibox-vault-pass-*`). If neither is available, ask the user for the vault password. Prefer `mcp-admin` MCP tools when available — they handle SSH and targeting.
+
+**Humans use the Busibox CLI** (`busibox`), not `make` targets. The CLI handles vault decryption interactively.
 
 **Quick Reference**:
 - Deploy: `make install SERVICE=authz`
@@ -31,7 +35,7 @@ make manage SERVICE=authz ACTION=restart
 - Rebuild manager: `make build-manager`
 - Skip manager: `make install SERVICE=authz USE_MANAGER=0`
 
-See `.cursor/rules/010-make-commands.md` for complete reference.
+See `.cursor/rules/010-make-commands.md` for complete reference and `docs/developers/reference/mcp-and-make-internals.md` for vault password flow.
 
 ## Critical: Organization Rules
 

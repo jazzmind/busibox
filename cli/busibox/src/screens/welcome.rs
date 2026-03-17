@@ -955,7 +955,7 @@ fn handle_action_select(app: &mut App, action: &str) {
             crate::screens::model_benchmark::init_screen(app, None);
             app.screen = Screen::ModelBenchmark;
         }
-        "K8s Manage" => {
+        "K8s Manage" | "Manage" => {
             app.k8s_manage_selected = 0;
             app.k8s_manage_log_visible = false;
             app.k8s_manage_action_running = false;

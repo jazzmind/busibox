@@ -9,8 +9,8 @@ published: true
 # Documentation-Code Inconsistencies
 
 **Created**: 2026-02-14  
-**Updated**: 2026-02-14  
-**Status**: Resolved (architecture docs); administrator/user docs may need follow-up  
+**Updated**: 2026-03-16  
+**Status**: Resolved — all sections reviewed and fixed  
 **Purpose**: Track inconsistencies found during documentation audit so we can decide whether to fix the code or the docs in each case.
 
 ## Doc Structure (2026-02-14)
@@ -47,39 +47,17 @@ The following were fixed in the architecture docs:
 
 ---
 
-## Administrator Docs — May Need Updates
+## Administrator Docs — Resolved (2026-03-16)
 
-These paths reference docs that may have moved. Verify against current structure:
-
-| Doc | Section | Issue | Recommendation |
-|-----|---------|-------|----------------|
-| 00-setup | Related Docs | `guides/01-configuration.md` → `01-configuration.md` (same dir) | Fix doc |
-| 00-setup | Service code | `srv/ingest` → `srv/data` | Fix doc |
-| 01-configuration | Ingestion | `srv/ingest` → `srv/data` | Fix doc |
-| 01-configuration | Apps env | Data API port 8002 | Fix doc |
-| 02-deployment | Test inventory | `INV=inventory/test` → `INV=inventory/staging` | Fix doc |
-| 02-deployment | Make target | `make ingest` → `make data` | Fix doc |
-| 02-deployment | Health check | Data API port 8002 | Fix doc |
-| runtime-deployment | Related docs | Paths may not exist | Fix doc |
-| runtime-deployment | Docker commands | Use `make` per project rules | Fix doc |
+The docs referenced below (`00-setup`, `01-configuration`, `02-deployment`, `runtime-deployment`) no longer exist. Administrator docs were reorganized into `01-quickstart` through `11-kubernetes` with correct service names, ports, and API paths. No references to `ingest-api`, `srv/ingest`, or `INV=inventory/test` remain.
 
 ---
 
-## User Docs — May Need Updates
+## User Docs — Resolved (2026-03-16)
 
-| Doc | Section | Issue | Recommendation |
-|-----|---------|-------|----------------|
-| 05-usage | Upload/Status | Data API port 8002 | Fix doc |
-| 05-usage | Agent chat | `POST /chat/message` (not `/api/chat`) | Fix doc |
-| 05-usage | Token exchange | `exchangeTokenZeroTrust` | Fix doc |
-| 05-usage | Audience | `data-api` (not `ingest-api`) | Fix doc |
-| 10-platform-overview | Getting Started | Link to `../administrators/01-configuration.md` | Fix doc |
-| 11-ai-models | Configuration | `AGENT_SERVER_DEFAULT_MODEL` — verify in agent settings | Verify |
-| 15-agent-tools | Web Crawler | No web crawler tool in agent codebase | Fix doc (remove or mark planned) |
-| 15-agent-tools | Agent API | Paths: `/chat/message`, `/agents`, `/conversations` | Fix doc |
-| 15-agent-tools | Example | Agents use UUIDs | Fix doc |
-| 16-app-development | Service Clients | `createAgentClient`, `uploadChatAttachment`, `generateEmbedding` | Fix doc |
-| 16-app-development | Auth helpers | Use `createZeroTrustClient` | Fix doc |
+The docs referenced below (`05-usage`, `10-platform-overview`, `11-ai-models`, `15-agent-tools`, `16-app-development`) no longer exist. User docs were reorganized into `01-quickstart` through `08-troubleshooting` with correct API paths and service names. No references to `ingest-api`, `/api/chat`, or old busibox-app APIs remain.
+
+Additional fix: `web-crawler` tool reference removed from `architecture/02-ai.md` (tool does not exist in agent codebase).
 
 ---
 

@@ -23,13 +23,13 @@ export const CONTAINERS: ContainerConfig[] = [
   {
     id: 201,
     testId: 301,
-    name: 'apps-lxc',
+    name: 'core-apps-lxc',
     ip: '10.96.200.201',
     testIp: '10.96.201.201',
-    purpose: 'Next.js apps (Busibox Portal, Agent Manager, etc.)',
+    purpose: 'Next.js frontend apps (portal, admin, agents, chat, appbuilder, media, documents)',
     ports: [{ port: 3000, service: 'Next.js apps (proxied via proxy-lxc)' }],
-    services: ['nginx', 'busibox-portal', 'busibox-agents', 'doc-intel', 'foundation', 'busibox-analysis', 'innovation'],
-    notes: 'No direct access to data/search; proxies internal calls',
+    services: ['nginx', 'busibox-portal', 'busibox-admin', 'busibox-agents', 'busibox-chat', 'busibox-appbuilder', 'busibox-media', 'busibox-documents'],
+    notes: 'All core frontend apps from busibox-frontend monorepo',
   },
   {
     id: 202,
@@ -90,7 +90,7 @@ export const CONTAINERS: ContainerConfig[] = [
     testIp: '10.96.201.206',
     purpose: 'Data API + worker + Redis',
     ports: [
-      { port: 8000, service: 'Data API' },
+      { port: 8002, service: 'Data API' },
       { port: 6379, service: 'Redis' },
     ],
     services: ['data-api', 'data-worker', 'redis'],
@@ -117,9 +117,8 @@ export const CONTAINERS: ContainerConfig[] = [
     ports: [
       { port: 8000, service: 'vLLM (chat/completions)' },
       { port: 8001, service: 'vLLM embedding' },
-      { port: 8002, service: 'ColPali visual' },
     ],
-    services: ['vllm', 'vllm-embedding', 'colpali'],
+    services: ['vllm', 'vllm-embedding'],
     notes: 'GPU-capable local model serving; staging env uses production vLLM by default',
   },
   {
@@ -142,7 +141,29 @@ export const CONTAINERS: ContainerConfig[] = [
     purpose: 'AuthZ service (OAuth2/JWT)',
     ports: [{ port: 8010, service: 'AuthZ API' }],
     services: ['authz'],
-    notes: 'Issues HS256 JWTs and records audit events',
+    notes: 'Issues RS256 JWTs and records audit events',
+  },
+  {
+    id: 211,
+    testId: 311,
+    name: 'bridge-lxc',
+    ip: '10.96.200.211',
+    testIp: '10.96.201.211',
+    purpose: 'Bridge service (messaging integrations)',
+    ports: [{ port: 8020, service: 'Bridge API' }],
+    services: ['bridge'],
+    notes: 'Telegram, Signal, Discord, WhatsApp, email integrations',
+  },
+  {
+    id: 212,
+    testId: 312,
+    name: 'user-apps-lxc',
+    ip: '10.96.200.212',
+    testIp: '10.96.201.212',
+    purpose: 'User-deployed applications',
+    ports: [],
+    services: [],
+    notes: 'Sandboxed user apps deployed via Deploy API',
   },
 ];
 

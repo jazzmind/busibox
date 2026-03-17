@@ -1275,12 +1275,16 @@ fn spawn_install_worker(app: &mut App) {
                 });
             }
 
-            let result = std::process::Command::new("bash")
+            let mut k8s_cmd = std::process::Command::new("bash");
+            k8s_cmd
                 .arg("-c")
                 .arg(&cmd)
                 .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::null())
-                .spawn();
+                .stderr(std::process::Stdio::null());
+            if let Some(ref vp) = vault_password {
+                k8s_cmd.env("ANSIBLE_VAULT_PASSWORD", vp.as_str());
+            }
+            let result = k8s_cmd.spawn();
 
             match result {
                 Ok(mut child) => {

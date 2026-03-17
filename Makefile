@@ -297,7 +297,7 @@ help:
 	@echo "═══════════════════════════════════════════════════════════════════════"
 	@echo ""
 	@echo "  make build-images                  # Trigger GHA image build (all services)"
-	@echo "  make k8s-deploy                    # Full deploy (build+apply+secrets)"
+	@echo "  make k8s-deploy                    # Apply + secrets + rollout restart"
 	@echo "  make k8s-apply                     # Apply manifests only"
 	@echo "  make k8s-secrets                   # Generate secrets from vault"
 	@echo "  make k8s-status                    # Show deployment status"
@@ -1368,7 +1368,7 @@ docker-test: test-docker
 # Usage:
 #   make build-images                  # Trigger GHA image build (all services)
 #   make build-images SERVICE=authz-api  # Build one service
-#   make k8s-deploy                    # Trigger build + apply + secrets
+#   make k8s-deploy                    # Apply + secrets + rollout restart
 #   make k8s-apply                     # Apply manifests only
 #   make k8s-secrets                   # Generate and apply secrets from vault
 #   make k8s-status                    # Show deployment status
@@ -1392,7 +1392,7 @@ else
 	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --trigger-build
 endif
 
-# Full deployment: trigger GHA build, generate secrets, apply manifests, rollout
+# Full deployment: generate secrets, apply manifests, rollout restart (pulls :latest from GHCR)
 k8s-deploy:
 ifdef SERVICE
 	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --all --service $(SERVICE)

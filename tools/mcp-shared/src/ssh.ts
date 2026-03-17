@@ -1,8 +1,9 @@
 /**
- * SSH execution helpers for Proxmox host and containers
+ * SSH and local command execution helpers
  */
 
 import { readFileSync } from 'fs';
+import { exec } from 'child_process';
 import { Client as SSHClient } from 'ssh2';
 
 /**
@@ -88,6 +89,47 @@ export async function executeSSHCommand(
       username: user,
       privateKey,
       readyTimeout: 10000,
+    });
+  });
+}
+
+/**
+ * Execute a command locally (for Docker deployment model).
+ * Optionally injects environment variables like ANSIBLE_VAULT_PASSWORD.
+ */
+export async function executeLocalCommand(
+  command: string,
+  cwd: string,
+  timeout: number = 300000,
+  env?: Record<string, string>
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolve, reject) => {
+    const timeoutHandle = setTimeout(() => {
+      reject(new Error(`Local command timed out after ${timeout}ms`));
+    }, timeout);
+
+    const childEnv = { ...process.env, ...env };
+    const child = exec(command, { cwd, timeout, env: childEnv, maxBuffer: 10 * 1024 * 1024 });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout?.on('data', (data: Buffer | string) => {
+      stdout += data.toString();
+    });
+
+    child.stderr?.on('data', (data: Buffer | string) => {
+      stderr += data.toString();
+    });
+
+    child.on('close', (code: number | null) => {
+      clearTimeout(timeoutHandle);
+      resolve({ stdout, stderr, exitCode: code ?? 0 });
+    });
+
+    child.on('error', (err: Error) => {
+      clearTimeout(timeoutHandle);
+      reject(err);
     });
   });
 }

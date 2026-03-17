@@ -14,22 +14,22 @@ struct Section {
 
 const SECTIONS: &[Section] = &[
     Section {
-        name: "Deploy",
+        name: "Deployment",
         icon: "▶",
         actions: &[
-            ("Deploy All", "k8s-deploy", "Build images (GHCR) + apply + secrets"),
-            ("Build Images", "build-images", "Trigger GitHub Actions image build"),
-            ("Apply Manifests", "k8s-apply", "Apply kustomize manifests"),
-            ("Update Secrets", "k8s-secrets", "Generate & apply from vault"),
+            ("Install / Update", "k8s-deploy", "Apply secrets + manifests + rollout (pulls images from GHCR)"),
+            ("Clean Install", "k8s-clean-install", "Delete everything and redeploy from scratch"),
+            ("Rotate Secrets", "k8s-secrets", "Regenerate secrets from vault and apply"),
+            ("Build Images", "build-images", "Trigger GitHub Actions build (requires gh auth)"),
         ],
     },
     Section {
-        name: "Monitor",
+        name: "Services",
         icon: "◉",
         actions: &[
             ("Status", "k8s-status", "Show pods, services, PVCs"),
-            ("Logs", "k8s-logs", "Stream pod logs"),
-            ("Delete All", "k8s-delete", "Remove all K8s resources"),
+            ("Service Logs", "k8s-logs", "View logs for a service (will prompt)"),
+            ("Restart Service", "k8s-restart-service", "Rollout restart a single service (will prompt)"),
         ],
     },
     Section {
@@ -39,6 +39,13 @@ const SECTIONS: &[Section] = &[
             ("Connect HTTPS", "connect", "Start local HTTPS tunnel"),
             ("Disconnect", "disconnect", "Tear down tunnel"),
             ("Tunnel Status", "k8s-connect-status", "Check tunnel state"),
+        ],
+    },
+    Section {
+        name: "Danger Zone",
+        icon: "⚠",
+        actions: &[
+            ("Delete All", "k8s-delete", "Remove all K8s resources"),
         ],
     },
     Section {
@@ -191,13 +198,76 @@ fn render_detail_panel(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(Span::styled(label, theme::heading())));
         lines.push(Line::from(Span::styled(desc, theme::muted())));
         lines.push(Line::from(""));
+        let target_display = match target {
+            "k8s-clean-install" => "k8s-delete + k8s-deploy",
+            "k8s-restart-service" => "k8s-deploy SERVICE=<name>",
+            _ => target,
+        };
         lines.push(Line::from(vec![
             Span::styled("  make ", theme::dim()),
-            Span::styled(target, theme::info()),
+            Span::styled(target_display, theme::info()),
         ]));
 
         // Show input hint for actions that need it
         match target {
+            "k8s-deploy" => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Generates secrets, applies manifests,",
+                    theme::dim(),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "  and restarts services (pulls :latest from GHCR)",
+                    theme::dim(),
+                )));
+            }
+            "k8s-clean-install" => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  ⚠ Deletes all resources + PVCs, then redeploys",
+                    theme::warning(),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "  ⚠ Requires confirmation",
+                    theme::warning(),
+                )));
+            }
+            "k8s-logs" => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Will prompt for service name",
+                    theme::dim(),
+                )));
+            }
+            "k8s-restart-service" => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Will prompt for service name",
+                    theme::dim(),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "  Runs rollout restart to pull latest image",
+                    theme::dim(),
+                )));
+            }
+            "build-images" => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Triggers GitHub Actions via gh CLI",
+                    theme::dim(),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "  Requires: gh auth login with repo write access",
+                    theme::dim(),
+                )));
+            }
+            "k8s-delete" => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  ⚠ Requires confirmation",
+                    theme::warning(),
+                )));
+            }
             "spot-swap" => {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
@@ -217,13 +287,6 @@ fn render_detail_panel(f: &mut Frame, app: &App, area: Rect) {
                 lines.push(Line::from(Span::styled(
                     "  Will prompt for duration (min)",
                     theme::dim(),
-                )));
-            }
-            "k8s-delete" => {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "  ⚠ Requires confirmation",
-                    theme::warning(),
                 )));
             }
             _ => {}
@@ -419,6 +482,26 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
             }
             if let Some(&(_si, _ai, _label, target, _desc)) = actions.get(app.k8s_manage_selected) {
                 match target {
+                    "k8s-logs" => {
+                        app.k8s_manage_input_mode = true;
+                        app.k8s_manage_input_buffer.clear();
+                        app.k8s_manage_input_label = "Service name (e.g. authz-api, postgres, data-api)".into();
+                    }
+                    "k8s-restart-service" => {
+                        app.k8s_manage_input_mode = true;
+                        app.k8s_manage_input_buffer.clear();
+                        app.k8s_manage_input_label = "Service to restart (e.g. authz-api, data-api)".into();
+                    }
+                    "k8s-clean-install" => {
+                        app.k8s_manage_input_mode = true;
+                        app.k8s_manage_input_buffer.clear();
+                        app.k8s_manage_input_label = "Type 'yes' to delete everything and reinstall".into();
+                    }
+                    "k8s-delete" => {
+                        app.k8s_manage_input_mode = true;
+                        app.k8s_manage_input_buffer.clear();
+                        app.k8s_manage_input_label = "Type 'yes' to confirm delete".into();
+                    }
                     "spot-swap" => {
                         app.k8s_manage_input_mode = true;
                         app.k8s_manage_input_buffer.clear();
@@ -433,11 +516,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                         app.k8s_manage_input_mode = true;
                         app.k8s_manage_input_buffer.clear();
                         app.k8s_manage_input_label = "Minutes (e.g. 30)".into();
-                    }
-                    "k8s-delete" => {
-                        app.k8s_manage_input_mode = true;
-                        app.k8s_manage_input_buffer.clear();
-                        app.k8s_manage_input_label = "Type 'yes' to confirm delete".into();
                     }
                     _ => {
                         spawn_k8s_action(app, target, None);
@@ -462,6 +540,23 @@ fn handle_input_mode(app: &mut App, key: KeyEvent) {
             let actions = flat_actions();
             if let Some(&(_si, _ai, _label, target, _desc)) = actions.get(app.k8s_manage_selected) {
                 match target {
+                    "k8s-logs" => {
+                        if !input.trim().is_empty() {
+                            let make_target = format!("k8s-logs SERVICE={}", input.trim());
+                            spawn_k8s_raw_action(app, &make_target);
+                        }
+                    }
+                    "k8s-restart-service" => {
+                        if !input.trim().is_empty() {
+                            let make_target = format!("k8s-deploy SERVICE={}", input.trim());
+                            spawn_k8s_raw_action(app, &make_target);
+                        }
+                    }
+                    "k8s-clean-install" => {
+                        if input.trim().eq_ignore_ascii_case("yes") {
+                            spawn_k8s_raw_action(app, "k8s-delete k8s-deploy");
+                        }
+                    }
                     "k8s-delete" => {
                         if input.trim().eq_ignore_ascii_case("yes") {
                             spawn_k8s_action(app, target, None);
@@ -564,6 +659,7 @@ fn spawn_k8s_raw_action(app: &mut App, make_target: &str) {
     let environment: Option<String> = app
         .active_profile()
         .map(|(_, p)| p.environment.clone());
+    let vault_password: Option<String> = app.vault_password.clone();
 
     std::thread::spawn(move || {
         let _ = tx.send(K8sManageUpdate::Log(format!("Running: make {target}")));
@@ -590,12 +686,16 @@ fn spawn_k8s_raw_action(app: &mut App, make_target: &str) {
         // Merge stderr into stdout to avoid pipe deadlocks with kubectl exec
         let cmd = format!("{env_prefix}make -C {} {target} 2>&1", repo_root.display());
 
-        let result = std::process::Command::new("bash")
+        let mut k8s_cmd = std::process::Command::new("bash");
+        k8s_cmd
             .arg("-c")
             .arg(&cmd)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn();
+            .stderr(std::process::Stdio::null());
+        if let Some(ref vp) = vault_password {
+            k8s_cmd.env("ANSIBLE_VAULT_PASSWORD", vp.as_str());
+        }
+        let result = k8s_cmd.spawn();
 
         match result {
             Ok(mut child) => {

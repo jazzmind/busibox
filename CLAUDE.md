@@ -6,17 +6,26 @@ This file provides guidance to Claude Code (claude.ai/code) and Cursor AI when w
 
 **Busibox** is a local LLM infrastructure platform that provides secure file storage, automated document processing with embeddings, semantic search via RAG (Retrieval Augmented Generation), and AI agent operations—all running on isolated containers (Docker or LXC) with role-based access control.
 
-## ⚠️ CRITICAL: Always Use `make` Commands
+## ⚠️ CRITICAL: Service Operations
 
 **NEVER run `docker compose`, `docker`, or `ansible-playbook` commands directly.**
 
-All service operations MUST go through the unified `make` interface because:
+### For AI agents (you)
+
+Prefer the `mcp-admin` MCP server tools when available — they handle SSH and targeting. When using `make` targets directly, most operations require the vault password via `ANSIBLE_VAULT_PASSWORD` environment variable. If the vault password is not available, check for `~/.busibox-vault-pass-*` files on the target host, or ask the user for the vault password.
+
+### For humans
+
+All service operations go through the **Busibox CLI** (`busibox`) — an interactive terminal UI that handles vault decryption, SSH connectivity, and service management. Humans should never need to run `make` targets directly.
+
+### Why
+
 - Secrets are injected from Ansible Vault at runtime
 - Environment is auto-detected from state files
-- Works identically for Docker and Proxmox backends
-- Operations run inside a **manager container** with guaranteed dependencies (Ansible, Docker CLI, vault tools, SSH)
+- Works identically for Docker, Proxmox, and Kubernetes backends
+- The CLI and MCP servers handle vault password management automatically
 
-See `.cursor/rules/010-make-commands.md` for complete details.
+See `.cursor/rules/010-make-commands.md` for the `make` target reference, and `docs/developers/reference/mcp-and-make-internals.md` for the vault password flow.
 
 ## Quick Start
 

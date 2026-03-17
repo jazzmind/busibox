@@ -37,7 +37,7 @@ Your documents, conversations, embeddings, and search indexes live on your infra
 
 ### Secure by Design
 
-Busibox implements Zero Trust authentication with RS256-signed JWTs, Row-Level Security in PostgreSQL, and container isolation for every service. Users only see documents they're authorized to access. AI agents inherit the permissions of the user they serve — they cannot access data the user cannot access.
+Busibox is single-tenant and multi-user — each installation serves one organization with strong isolation between users. Zero Trust authentication with OAuth2, RS256-signed JWTs, and Row-Level Security in PostgreSQL means access control is enforced at the database level, not just the application layer. Users authenticate with passkeys, TOTP, or magic links — no passwords. SSO integration supports EntraID, SAML, and other identity providers. Built-in OWASP API Security Top 10 test suites validate the security posture continuously.
 
 [Read more: Security Architecture](02-security-architecture.md)
 
@@ -59,9 +59,11 @@ Busibox is not just a tool — it's a platform. Developers can build Next.js app
 
 [Read more: Platform Capabilities](04-platform-capabilities.md)
 
-### Production-Ready Infrastructure
+### Fleet Management
 
-Busibox is not a prototype or a demo. It includes Ansible-based infrastructure-as-code for repeatable deployments, a unified `make` command interface for service management, multi-environment support (staging and production), container health monitoring, and comprehensive logging. It's designed to be operated, not just installed.
+Busibox is not a prototype or a demo — it's designed to be operated at scale. The Busibox CLI manages multiple deployments from a single workstation through deployment profiles. Each profile targets a different backend — Docker for development, Proxmox LXC for production, Kubernetes for cloud scaling — with separate encrypted vault keys, SSH configurations, and environment settings. Deploy to staging, test, then promote to production. Manage a fleet of installations across organizations or geographies.
+
+Under the hood, Ansible-based infrastructure-as-code ensures repeatable deployments, and MCP servers provide AI agents with programmatic access to the same operations.
 
 ## Who It's For
 
@@ -79,12 +81,13 @@ Busibox is not a prototype or a demo. It includes Ansible-based infrastructure-a
 |-----------|-------------|
 | **Document Processing** | Upload PDFs, Word, Excel, images, and more. Automatic text extraction, semantic chunking, and vector embedding. |
 | **Hybrid Search** | Vector search, BM25 keyword search, and graph-based retrieval — combined with LLM reranking for accurate results. |
-| **AI Agents** | Chat assistants with access to your documents, web search, and custom tools. Agents respect user permissions. |
+| **AI Agents** | Chat assistants with access to your documents, web search, and custom tools. Agents respect user permissions. Guardrails enforce cost, token, and time limits. |
 | **Applications** | Core apps (AI Portal, Agent Manager) plus custom apps built on the platform. |
 | **LLM Gateway** | Route requests to local or cloud models. Supports vLLM, MLX, OpenAI, Anthropic, Bedrock, and more. |
-| **Authentication** | Zero Trust OAuth2 with passkey, TOTP, and magic link login. RBAC and RLS enforce access control. |
+| **Authentication** | Zero Trust OAuth2 with passkey, TOTP, magic link, and SSO (EntraID/SAML). RBAC and RLS enforce access control. No passwords. |
 | **Bridge Channels** | Connect AI agents to Telegram, Signal, Discord, WhatsApp, and email. |
-| **Infrastructure Tooling** | Ansible IaC, `make` command interface, multi-environment support, health monitoring. |
+| **Fleet Management** | Interactive CLI with deployment profiles. Manage Docker, Proxmox, and Kubernetes installations from one workstation. |
+| **Security Testing** | Built-in OWASP API Security Top 10 test suites for auth, injection, fuzzing, and endpoint coverage. |
 
 ## Next Steps
 

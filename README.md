@@ -20,7 +20,7 @@ Most AI platforms require uploading your documents to third-party servers. Busib
 | AI tools are fragmented | One platform: documents, search, agents, and apps share auth and data |
 | Building AI apps is slow | App template + shared library + deploy in minutes, not weeks |
 | Access control is an afterthought | Zero Trust auth, RBAC, and PostgreSQL Row-Level Security from day one |
-| Infra is painful to manage | Ansible IaC, unified `make` interface, one command to deploy |
+| Infra is painful to manage | Interactive CLI, fleet management across Docker/Proxmox/K8s |
 
 ---
 
@@ -32,8 +32,8 @@ Upload PDFs, Word, Excel, PowerPoint, images (with OCR), or Markdown. Busibox au
 ### Hybrid Search
 Natural language queries against your document library. Combines vector search (semantic), BM25 (keyword), graph-based retrieval, and LLM reranking — all filtered by the user's permissions. Ask "What are the budget assumptions for Q3?" instead of guessing keywords.
 
-### AI Agents
-Conversational agents that search your documents (RAG), browse the web, accept file attachments, remember context, and stream responses with source citations. Configure agents with custom instructions, tools, and model routing per task.
+### AI Agents with Guardrails
+Conversational agents that search your documents (RAG), browse the web, accept file attachments, remember context, and stream responses with source citations. Configure agents with custom instructions, tools, and model routing per task. Built-in guardrails enforce request limits, token budgets, cost ceilings, and timeouts — so autonomous agents can't consume unbounded resources.
 
 ### Hybrid LLM Routing
 LiteLLM gateway routes requests to local models (vLLM on NVIDIA GPUs, MLX on Apple Silicon) or cloud providers (OpenAI, Anthropic, AWS Bedrock) — per agent, per task. Use a fast local model for extraction and a frontier model for complex reasoning, all through one API.
@@ -43,6 +43,9 @@ Build and deploy Next.js apps that inherit Busibox auth, data access, and AI cap
 
 ### Bridge Channels
 Connect agents to Telegram, Signal, Discord, WhatsApp, and email. Users interact with AI in the tools they already use.
+
+### Fleet Management
+Manage multiple Busibox installations from a single workstation. The CLI supports deployment profiles for Docker, Proxmox LXC, and Kubernetes backends — self-hosted or cloud. Deploy to staging, test, then promote to production with separate vault keys, SSH configs, and environment settings per profile.
 
 ---
 
@@ -82,14 +85,15 @@ Each service runs in its own isolated container. Compromise in one container doe
 
 ## Security Model
 
-Busibox treats security as architecture, not a feature bolted on later.
+Busibox is single-tenant and multi-user — each installation serves one organization with strong isolation between users. Security is architecture, not a feature bolted on later.
 
-- **Zero Trust Authentication** — AuthZ is the sole token authority. RS256-signed JWTs verified via JWKS; subject token exchange scopes tokens per service.
+- **Zero Trust Authentication** — OAuth2-based AuthZ service is the sole token authority. RS256-signed JWTs verified via JWKS; subject token exchange scopes tokens per service. No shared secrets, no static API keys.
+- **Passwordless Auth** — Passkeys (biometrics/security keys), TOTP, or magic links. No passwords by design. SSO via EntraID, SAML, and other identity providers.
 - **Row-Level Security** — PostgreSQL RLS enforces access at the database level. Even with an application bug, the database won't return unauthorized rows.
 - **RBAC Everywhere** — Documents, agents, and apps are assigned to roles. Users see only what their roles permit. Agents inherit the calling user's permissions.
-- **Envelope Encryption** — Files encrypted at rest with Master Key → Key Encryption Keys → Data Encryption Keys, per file.
-- **Passwordless Auth** — Passkeys (biometrics/security keys), TOTP, or magic links. No passwords by design.
+- **Envelope Encryption** — Files encrypted at rest with Master Key → Key Encryption Keys → Data Encryption Keys, per file. TLS for all inter-service communication.
 - **Audit Trail** — Auth events, token exchanges, and admin actions logged with timestamps, user IDs, and IP addresses.
+- **Built-in Security Testing** — OWASP API Security Top 10 test suite covering auth bypass, injection, fuzzing, and endpoint coverage. Run with the CLI or `make test-security`.
 
 ---
 
@@ -104,30 +108,23 @@ Busibox treats security as architecture, not a feature bolted on later.
 
 ## Quick Start
 
-All operations use the unified `make` interface — it handles secrets injection, environment detection, and runs inside a manager container with guaranteed dependencies.
+The **Busibox CLI** is an interactive terminal UI that walks you through setup, deployment, and ongoing management. It handles SSH connectivity, encrypted vault passwords, model selection, and service health — all from one interface.
 
 ```bash
-# Deploy infrastructure (PostgreSQL, Redis, MinIO, Milvus)
-make install SERVICE=infrastructure
-
-# Deploy all API services
-make install SERVICE=apis
-
-# Deploy the portal and agent manager
-make install SERVICE=frontend
-
-# Check status
-make manage SERVICE=all ACTION=status
-
-# View logs
-make manage SERVICE=agent ACTION=logs
-
-# Interactive menus
-make            # Main launcher
-make install    # Installation wizard
-make manage     # Service management
-make test       # Testing menu
+cd cli/busibox
+cargo build --release
+./target/release/busibox
 ```
+
+The CLI guides you through:
+
+1. **Profile setup** — configure Docker, Proxmox, or Kubernetes targets
+2. **Hardware profiling** — detect GPUs and available resources
+3. **Model selection** — choose and download AI models for your hardware
+4. **Deployment** — install all services with proper secrets injection
+5. **Management** — restart, monitor, redeploy, and view logs
+
+Manage multiple Busibox installations (Docker, Proxmox, Kubernetes — self-hosted or cloud) from a single workstation through deployment profiles.
 
 See [docs/administrators/](docs/administrators/) for full deployment and configuration guides.
 
@@ -143,7 +140,7 @@ The app template and `@jazzmind/busibox-app` library give you:
 - **Data API client** — structured CRUD with automatic RLS enforcement
 - **Chat components** — `SimpleChatInterface` for agent-powered UIs
 - **Search client** — hybrid search with permission filtering
-- **Deploy in one command** — `make install SERVICE=my-app`
+- **Deploy in one command** — deploy from the CLI or via MCP
 
 ```bash
 # Start from the template
@@ -153,15 +150,17 @@ cd my-app && npm install && npm run dev
 
 Apps are cloned and built at runtime — code changes deploy without rebuilding containers.
 
-### MCP Servers for Cursor
+### MCP Servers for AI Agents
 
-Three MCP servers provide structured access to documentation, testing, and deployment:
+Three MCP servers provide structured access for AI coding agents (Cursor, Claude Code):
 
 | Server | For | What It Does |
 |--------|-----|-------------|
 | `mcp-core-dev` | Core developers | Docs, scripts, testing, container logs |
 | `mcp-app-builder` | App developers | Auth patterns, template reference, service endpoints |
-| `mcp-admin` | Operators | Deployment, SSH, container management |
+| `mcp-admin` | Operators / agents | Deployment, SSH, container management (handles vault auth) |
+
+AI agents should use MCP tools rather than `make` targets directly. The `make` interface is an internal implementation detail used by the CLI and MCP servers — it requires vault password setup that the CLI handles automatically.
 
 ```bash
 make mcp   # Build all servers and write Cursor config

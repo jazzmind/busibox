@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Busibox Kubernetes Deployment (In-Cluster Build Server)
+# Busibox Kubernetes Deployment
 # =============================================================================
 #
 # Execution Context: Admin workstation
@@ -110,7 +110,7 @@ while [[ $# -gt 0 ]]; do
         --trigger-build) DO_TRIGGER_BUILD=true; shift ;;
         --apply) DO_APPLY=true; shift ;;
         --service) SERVICE_FILTER="$2"; shift 2 ;;
-        --all) DO_TRIGGER_BUILD=true; DO_APPLY=true; DO_SECRETS=true; shift ;;
+        --all) DO_APPLY=true; DO_SECRETS=true; shift ;;
         --legacy-build) DO_SYNC=true; DO_BUILD=true; shift ;;
         --clean-storage) DO_CLEAN_STORAGE=true; shift ;;
         --status) DO_STATUS=true; shift ;;
@@ -127,7 +127,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --apply            Apply Kubernetes manifests and rollout restart"
             echo "  --service NAME     Build/rollout only a specific service (e.g., authz-api)"
             echo "  --secrets          Generate and apply secrets from vault"
-            echo "  --all              Trigger build, generate secrets, apply, and rollout"
+            echo "  --all              Generate secrets, apply manifests, and rollout restart"
             echo "  --legacy-build     Sync code + build on in-cluster build server (old method)"
             echo "  --sync             Sync source code to in-cluster build server (legacy)"
             echo "  --build            Build images on in-cluster build server (legacy)"
@@ -842,12 +842,12 @@ delete_all() {
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║         Busibox K8s Deployment (In-Cluster Build)          ║"
+echo "║              Busibox K8s Deployment                        ║"
 echo "╠══════════════════════════════════════════════════════════════╣"
 echo "║  Overlay:    ${OVERLAY}"
 echo "║  Tag:        ${TAG}"
 echo "║  Kubeconfig: ${KUBECONFIG_FILE}"
-echo "║  Registry:   ${REGISTRY} (in-cluster)"
+echo "║  Registry:   ${REGISTRY}"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 
@@ -886,17 +886,15 @@ $DO_SECRETS && generate_secrets
 
 if $DO_APPLY; then
     apply_manifests
-    # Rollout restart services to pull latest images
-    if $DO_TRIGGER_BUILD || $DO_BUILD; then
-        if [[ -n "$SERVICE_FILTER" ]]; then
-            rollout_service "$SERVICE_FILTER"
-        else
-            info "Rolling out updated services..."
-            for service_spec in "${BUILDABLE_SERVICES[@]}"; do
-                IFS=':' read -r name _ _ <<< "$service_spec"
-                rollout_service "$name" || warn "Failed to rollout ${name}"
-            done
-        fi
+    # Always rollout restart — imagePullPolicy: Always ensures latest :latest is pulled from GHCR
+    if [[ -n "$SERVICE_FILTER" ]]; then
+        rollout_service "$SERVICE_FILTER"
+    else
+        info "Rolling out updated services..."
+        for service_spec in "${BUILDABLE_SERVICES[@]}"; do
+            IFS=':' read -r name _ _ <<< "$service_spec"
+            rollout_service "$name" || warn "Failed to rollout ${name}"
+        done
     fi
 fi
 
