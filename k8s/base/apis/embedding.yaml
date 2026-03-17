@@ -69,10 +69,14 @@ spec:
           volumeMounts:
             - name: fastembed-cache
               mountPath: /root/.cache/fastembed
+              subPath: cache/fastembed
             - name: model-cache
               mountPath: /root/.cache/huggingface
+              subPath: cache/huggingface
       volumes:
         - name: fastembed-cache
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: objects-store
         - name: model-cache
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: objects-store

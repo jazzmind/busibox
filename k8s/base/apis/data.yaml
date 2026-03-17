@@ -127,11 +127,13 @@ spec:
               mountPath: /tmp/data
             - name: model-cache
               mountPath: /root/.cache
+              subPath: cache/data-api
       volumes:
         - name: data-temp
           emptyDir: {}
         - name: model-cache
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: objects-store
 ---
 # Data Worker - Background Job Processor
 apiVersion: apps/v1
@@ -240,8 +242,10 @@ spec:
               mountPath: /tmp/data
             - name: model-cache
               mountPath: /root/.cache
+              subPath: cache/data-worker
       volumes:
         - name: data-temp
           emptyDir: {}
         - name: model-cache
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: objects-store

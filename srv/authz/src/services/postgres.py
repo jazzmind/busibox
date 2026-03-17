@@ -611,6 +611,57 @@ class PostgresService:
             )
             return result != "DELETE 0"
 
+    async def get_role_members(self, role_id: str) -> List[dict]:
+        """Return users assigned to a role with basic profile info."""
+        rid = validate_uuid(role_id, "role_id")
+        async with self.acquire(None, None) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT u.user_id::text, u.email, u.display_name, u.first_name,
+                       u.last_name, u.avatar_url, u.status, ur.created_at AS assigned_at
+                FROM authz_user_roles ur
+                JOIN authz_users u ON u.user_id = ur.user_id
+                WHERE ur.role_id = $1
+                ORDER BY ur.created_at
+                """,
+                rid,
+            )
+            return [dict(r) for r in rows]
+
+    async def search_users_in_app(
+        self,
+        *,
+        app_name: str,
+        search: str,
+        limit: int = 20,
+    ) -> List[dict]:
+        """Search active users who have access to a given app (via app role bindings)."""
+        async with self.acquire(None, None) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT u.user_id::text, u.email, u.display_name,
+                       u.first_name, u.last_name, u.avatar_url
+                FROM authz_users u
+                JOIN authz_user_roles ur ON ur.user_id = u.user_id
+                JOIN authz_roles r ON r.id = ur.role_id
+                WHERE u.status = 'ACTIVE'
+                  AND r.source_app = $1
+                  AND (
+                    u.email ILIKE $2
+                    OR COALESCE(u.display_name, '') ILIKE $2
+                    OR COALESCE(u.first_name, '') ILIKE $2
+                    OR COALESCE(u.last_name, '') ILIKE $2
+                    OR COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '') ILIKE $2
+                  )
+                ORDER BY u.email
+                LIMIT $3
+                """,
+                app_name,
+                f"%{search}%",
+                limit,
+            )
+            return [dict(r) for r in rows]
+
     # ---------------------------------------------------------------------
     # Envelope Encryption - Key Encryption Keys (KEKs)
     # ---------------------------------------------------------------------

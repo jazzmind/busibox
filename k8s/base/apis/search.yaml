@@ -107,6 +107,8 @@ spec:
           volumeMounts:
             - name: model-cache
               mountPath: /root/.cache
+              subPath: cache/search-api
       volumes:
         - name: model-cache
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: objects-store

@@ -263,6 +263,46 @@ async def list_roles(request: Request, app: Optional[str] = None):
     return [_role_response(r) for r in roles]
 
 
+@router.get("/roles/users/search")
+async def search_users(request: Request, q: str = "", app: Optional[str] = None):
+    """
+    Search for users to add to a self-service role.
+
+    Scoped to active users who already have at least one role in the given app.
+    Requires a session JWT (any audience). Returns minimal user info.
+
+    Query params:
+        q: search string (matches email, display name, first/last name)
+        app: app name to scope results (e.g. 'busibox-recruiter')
+    """
+    if not q or len(q) < 2:
+        return {"users": []}
+
+    if not app:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="'app' query parameter is required",
+        )
+
+    db = _get_pg(request)
+    auth: AuthContext = await _authenticate_any_session(request, db)
+
+    members = await db.search_users_in_app(app_name=app, search=q, limit=20)
+    return {
+        "users": [
+            {
+                "user_id": m["user_id"],
+                "email": m["email"],
+                "display_name": m.get("display_name"),
+                "first_name": m.get("first_name"),
+                "last_name": m.get("last_name"),
+                "avatar_url": m.get("avatar_url"),
+            }
+            for m in members
+        ],
+    }
+
+
 @router.get("/roles/{role_id}")
 async def get_role(request: Request, role_id: str):
     """Get a role by ID (must be creator or assigned)."""
@@ -336,6 +376,44 @@ async def delete_role(request: Request, role_id: str):
 
     logger.info("Self-service role deleted: %s by user %s", role_id, auth.actor_id)
     return {"status": "ok", "deleted": True}
+
+
+@router.get("/roles/{role_id}/members")
+async def list_members(request: Request, role_id: str):
+    """List members of a self-service role (creator or assigned user)."""
+    try:
+        UUID(role_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role ID format") from e
+
+    db = _get_pg(request)
+    auth: AuthContext = await _authenticate_any_session(request, db)
+
+    role = await db.get_role(role_id)
+    if not role:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+
+    accessible = await db.get_user_accessible_roles(auth.actor_id)
+    if not any(r["id"] == role_id for r in accessible):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    members = await db.get_role_members(role_id)
+    return {
+        "role_id": role_id,
+        "members": [
+            {
+                "user_id": m["user_id"],
+                "email": m["email"],
+                "display_name": m.get("display_name"),
+                "first_name": m.get("first_name"),
+                "last_name": m.get("last_name"),
+                "avatar_url": m.get("avatar_url"),
+                "status": m.get("status"),
+                "assigned_at": m["assigned_at"].isoformat() if m.get("assigned_at") else "",
+            }
+            for m in members
+        ],
+    }
 
 
 @router.post("/roles/{role_id}/members")

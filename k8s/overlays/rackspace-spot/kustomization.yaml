@@ -40,7 +40,7 @@ patches:
         path: /spec/template/spec/containers/0/resources/requests/memory
         value: 512Mi
 
-  # Scale down in-cluster build infra (using GHCR external builds)
+  # Scale down unused services to reduce image footprint on small root partitions
   - target:
       kind: Deployment
       name: build-server
@@ -51,6 +51,20 @@ patches:
   - target:
       kind: Deployment
       name: registry
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  - target:
+      kind: Deployment
+      name: neo4j
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  - target:
+      kind: Deployment
+      name: vllm
     patch: |
       - op: replace
         path: /spec/replicas
