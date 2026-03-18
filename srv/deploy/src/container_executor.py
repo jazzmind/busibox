@@ -358,29 +358,41 @@ async def recreate_user_apps_with_volumes(dev_app_ids: Set[str], logs: List[str]
     # Build environment args
     env_args = ['-e', 'NODE_ENV=development']
     
-    # Entrypoint script that:
-    # 1. Installs required tools (git, curl, procps, supervisor)
-    # 2. Creates supervisor directories
-    # 3. Patches the Debian-default supervisord.conf to add nodaemon=true
-    # 4. Starts supervisord as PID 1
-    #
-    # NOTE: @jazzmind/busibox-app is public on npmjs.org - no npm auth needed.
-    # The Debian `supervisor` package installs a working config at
-    # /etc/supervisor/supervisord.conf with [include] for conf.d/*.conf.
-    # We only need to add `nodaemon=true` so supervisord stays in foreground
-    # as PID 1 (required for Docker containers).
-    entrypoint_script = (
-        'apt-get update && apt-get install -y --no-install-recommends git curl procps supervisor && '
-        'mkdir -p /var/log/user-apps /var/log/supervisor /etc/supervisor/conf.d && '
-        # Patch Debian default config: add nodaemon=true and redirect log to stdout
-        'grep -q "nodaemon" /etc/supervisor/supervisord.conf || '
-        'sed -i "/\\[supervisord\\]/a nodaemon=true" /etc/supervisor/supervisord.conf && '
-        'sed -i "s|logfile=.*|logfile=/dev/stdout|" /etc/supervisor/supervisord.conf && '
-        'sed -i "/logfile_maxbytes/d" /etc/supervisor/supervisord.conf && '
-        'sed -i "/\\[supervisord\\]/a logfile_maxbytes=0" /etc/supervisor/supervisord.conf && '
-        # Start supervisord as PID 1 (exec replaces shell)
-        'exec supervisord -c /etc/supervisor/supervisord.conf'
+    # Use the compose-built image (which has supervisor, git, curl, procps
+    # pre-installed from user-apps.Dockerfile) instead of node:20-slim.
+    # This avoids fragile inline apt-get installation that can fail when
+    # network is unavailable inside Docker, breaking supervisorctl.
+    compose_image = f"{compose_project}-user-apps"
+    
+    # Check if the compose-built image exists; fall back to node:20-slim
+    # with inline installation if it doesn't (e.g., first run before
+    # docker compose build).
+    check_image = await asyncio.create_subprocess_exec(
+        'docker', 'image', 'inspect', compose_image,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
+    await check_image.communicate()
+    
+    if check_image.returncode == 0:
+        image_name = compose_image
+        entrypoint_args: list[str] = []
+        logs.append(f"   Using pre-built image: {compose_image}")
+    else:
+        image_name = 'node:20-slim'
+        entrypoint_script = (
+            'apt-get update && apt-get install -y --no-install-recommends git curl procps supervisor && '
+            'mkdir -p /var/log/user-apps /var/log/supervisor /etc/supervisor/conf.d && '
+            'grep -q "nodaemon" /etc/supervisor/supervisord.conf || '
+            'sed -i "/\\[supervisord\\]/a nodaemon=true" /etc/supervisor/supervisord.conf && '
+            'sed -i "s|logfile=.*|logfile=/dev/stdout|" /etc/supervisor/supervisord.conf && '
+            'sed -i "/logfile_maxbytes/d" /etc/supervisor/supervisord.conf && '
+            'sed -i "/\\[supervisord\\]/a logfile_maxbytes=0" /etc/supervisor/supervisord.conf && '
+            'exec supervisord -c /etc/supervisor/supervisord.conf'
+        )
+        entrypoint_args = ['/bin/bash', '-c', entrypoint_script]
+        logger.warning(f"Compose image {compose_image} not found, falling back to node:20-slim with inline install")
+        logs.append(f"   ⚠️ Pre-built image not found, using node:20-slim (will install supervisor inline)")
     
     run_cmd = [
         'docker', 'run', '-d',
@@ -397,8 +409,8 @@ async def recreate_user_apps_with_volumes(dev_app_ids: Set[str], logs: List[str]
         # Environment variables
         *env_args,
         *volume_args,
-        'node:20-slim',
-        '/bin/bash', '-c', entrypoint_script
+        image_name,
+        *entrypoint_args,
     ]
     
     logger.info(f"Running: {' '.join(run_cmd)}")
@@ -1345,6 +1357,19 @@ rm -f /tmp/{app_id}.pid 2>/dev/null || true
             return False
         
         logs.append(f"📝 Supervisord config written to {conf_path}")
+        
+        # Wait for supervisord to be ready (socket must exist for supervisorctl)
+        for attempt in range(10):
+            probe_stdout, _, probe_code = await execute_in_container(
+                "supervisorctl status 2>/dev/null; echo $?"
+            )
+            if probe_code == 0 and "command not found" not in probe_stdout:
+                break
+            if attempt < 9:
+                await asyncio.sleep(1)
+        else:
+            logs.append("❌ supervisord is not available in the container")
+            return False
         
         # Tell supervisord to pick up the new/updated config and start the app
         # reread: re-reads config files; update: applies changes (starts new, stops removed)
