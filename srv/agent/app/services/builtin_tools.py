@@ -797,6 +797,169 @@ BUILTIN_TOOL_METADATA = {
             }
         }
     },
+    # Workforce-specific tools (busibox-workforce app)
+    "workforce_search_employees_tool": {
+        "name": "workforce_search_employees",
+        "description": "Search and filter workforce employees using HR-friendly parameters (department, division, status, type, name/title search, hire date range).",
+        "entrypoint": "app.tools.workforce_tool:workforce_search_employees",
+        "scopes": ["data:read"],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string", "description": "Employee data document UUID (schemaDocumentId)"},
+                    "departments": {"type": "array", "description": "Filter by department names"},
+                    "divisions": {"type": "array", "description": "Filter by division names"},
+                    "statuses": {"type": "array", "description": "Filter by status (Active, Terminated, Leave, Retired)"},
+                    "employee_types": {"type": "array", "description": "Filter by type (Full-Time, Part-Time, Contract, Intern, Temporary)"},
+                    "search_term": {"type": "string", "description": "Search across firstName, lastName, and title"},
+                    "hire_date_from": {"type": "string", "description": "Hire date lower bound (ISO format)"},
+                    "hire_date_to": {"type": "string", "description": "Hire date upper bound (ISO format)"},
+                    "limit": {"type": "integer", "description": "Max records (default 25, max 100)", "default": 25},
+                    "offset": {"type": "integer", "description": "Pagination offset", "default": 0}
+                },
+                "required": ["document_id"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "employees": {"type": "array", "description": "Matching employee records"},
+                    "total": {"type": "integer", "description": "Total matching (before limit)"},
+                    "limit": {"type": "integer"},
+                    "offset": {"type": "integer"},
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    },
+    "workforce_get_stats_tool": {
+        "name": "workforce_get_stats",
+        "description": "Compute workforce analytics: headcount, turnover rate, hires/departures by month, department/division breakdowns, tenure, and status/type counts.",
+        "entrypoint": "app.tools.workforce_tool:workforce_get_stats",
+        "scopes": ["data:read"],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string", "description": "Employee data document UUID (schemaDocumentId)"},
+                    "months_back": {"type": "integer", "description": "Trailing months to include (default 12)", "default": 12},
+                    "departments": {"type": "array", "description": "Optional department filter"},
+                    "divisions": {"type": "array", "description": "Optional division filter"},
+                    "statuses": {"type": "array", "description": "Optional status filter"},
+                    "employee_types": {"type": "array", "description": "Optional employee type filter"}
+                },
+                "required": ["document_id"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "total_headcount": {"type": "integer", "description": "Active employees"},
+                    "total_employees": {"type": "integer", "description": "All employees (any status)"},
+                    "turnover_rate": {"type": "number", "description": "Turnover rate percentage"},
+                    "net_growth": {"type": "integer", "description": "Net hires minus departures"},
+                    "average_tenure_years": {"type": "number"},
+                    "hires_by_month": {"type": "array"},
+                    "departures_by_month": {"type": "array"},
+                    "employees_by_department": {"type": "array"},
+                    "employees_by_division": {"type": "array"},
+                    "status_breakdown": {"type": "object"},
+                    "type_breakdown": {"type": "object"},
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    },
+    "workforce_get_employee_tool": {
+        "name": "workforce_get_employee",
+        "description": "Get a single employee's full profile and their related check-ins/exit interviews.",
+        "entrypoint": "app.tools.workforce_tool:workforce_get_employee",
+        "scopes": ["data:read"],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string", "description": "Employee data document UUID (schemaDocumentId)"},
+                    "employee_id": {"type": "string", "description": "Employee record id"},
+                    "checkins_document_id": {"type": "string", "description": "Check-ins document UUID (checkinsDocumentId)"}
+                },
+                "required": ["document_id", "employee_id"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "employee": {"type": "object", "description": "Full employee record"},
+                    "checkins": {"type": "array", "description": "Related check-ins"},
+                    "checkin_count": {"type": "integer"},
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    },
+    "workforce_search_checkins_tool": {
+        "name": "workforce_search_checkins",
+        "description": "Search check-in and exit interview records with workforce-aware filters (employee, type, status).",
+        "entrypoint": "app.tools.workforce_tool:workforce_search_checkins",
+        "scopes": ["data:read"],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string", "description": "Check-ins data document UUID (checkinsDocumentId)"},
+                    "employee_id": {"type": "string", "description": "Filter by employee record id"},
+                    "checkin_type": {"type": "string", "description": "Filter: checkin or exit-interview"},
+                    "status": {"type": "string", "description": "Filter: scheduled, invited, survey-complete, interview-complete, summarized, shared"},
+                    "limit": {"type": "integer", "description": "Max records (default 20, max 100)", "default": 20}
+                },
+                "required": ["document_id"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "checkins": {"type": "array", "description": "Matching check-in records"},
+                    "total": {"type": "integer"},
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    },
+    "workforce_get_facets_tool": {
+        "name": "workforce_get_facets",
+        "description": "Get available filter values (departments, divisions, statuses, employee types, pay groups, years) for the workforce dataset.",
+        "entrypoint": "app.tools.workforce_tool:workforce_get_facets",
+        "scopes": ["data:read"],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string", "description": "Employee data document UUID (schemaDocumentId)"}
+                },
+                "required": ["document_id"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "departments": {"type": "array"},
+                    "divisions": {"type": "array"},
+                    "employee_types": {"type": "array"},
+                    "statuses": {"type": "array"},
+                    "pay_groups": {"type": "array"},
+                    "years": {"type": "array"},
+                    "total_employees": {"type": "integer"},
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    },
 }
 
 
@@ -923,6 +1086,12 @@ def get_tool_executor(tool_name: str) -> Optional[Callable]:
         "memory_save": ("app.tools.memory_tool", "memory_save"),
         "calendar_list_events": ("app.tools.calendar_tool", "calendar_list_events"),
         "calendar_create_event": ("app.tools.calendar_tool", "calendar_create_event"),
+        # Workforce tools
+        "workforce_search_employees": ("app.tools.workforce_tool", "workforce_search_employees"),
+        "workforce_get_stats": ("app.tools.workforce_tool", "workforce_get_stats"),
+        "workforce_get_employee": ("app.tools.workforce_tool", "workforce_get_employee"),
+        "workforce_search_checkins": ("app.tools.workforce_tool", "workforce_search_checkins"),
+        "workforce_get_facets": ("app.tools.workforce_tool", "workforce_get_facets"),
     }
     
     if tool_name not in executors:
@@ -983,6 +1152,12 @@ def get_tool_object(tool_name: str) -> Optional[Any]:
         "memory_save": ("app.tools.memory_tool", "memory_save_tool"),
         "calendar_list_events": ("app.tools.calendar_tool", "calendar_list_events_tool"),
         "calendar_create_event": ("app.tools.calendar_tool", "calendar_create_event_tool"),
+        # Workforce tools
+        "workforce_search_employees": ("app.tools.workforce_tool", "workforce_search_employees_tool"),
+        "workforce_get_stats": ("app.tools.workforce_tool", "workforce_get_stats_tool"),
+        "workforce_get_employee": ("app.tools.workforce_tool", "workforce_get_employee_tool"),
+        "workforce_search_checkins": ("app.tools.workforce_tool", "workforce_search_checkins_tool"),
+        "workforce_get_facets": ("app.tools.workforce_tool", "workforce_get_facets_tool"),
     }
     
     if tool_name not in tool_objects:
