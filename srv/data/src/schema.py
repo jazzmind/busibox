@@ -390,6 +390,30 @@ def get_data_schema() -> SchemaManager:
         )
     """)
     
+    # Data provenance - cryptographic hash chain for data lineage
+    schema.add_table("""
+        CREATE TABLE IF NOT EXISTS data_provenance (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            entity_type VARCHAR(20) NOT NULL
+                CHECK (entity_type IN ('file', 'chunk', 'record', 'embedding', 'image', 'agent_run')),
+            entity_id VARCHAR(255) NOT NULL,
+            parent_id UUID REFERENCES data_provenance(id) ON DELETE SET NULL,
+            step_type VARCHAR(30) NOT NULL
+                CHECK (step_type IN (
+                    'upload', 'ocr', 'chunk', 'embedding', 'extraction',
+                    'image_extract', 'vlm_describe', 'markdown',
+                    'agent_tool_call', 'agent_output', 'agent_extraction'
+                )),
+            input_hash VARCHAR(64) NOT NULL,
+            output_hash VARCHAR(64) NOT NULL,
+            chain_hash VARCHAR(64) NOT NULL,
+            model_version VARCHAR(100),
+            processor_version VARCHAR(100),
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+
     # Data record history - audit log
     schema.add_table("""
         CREATE TABLE IF NOT EXISTS data_record_history (
@@ -942,6 +966,13 @@ def get_data_schema() -> SchemaManager:
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_record_history_time ON data_record_history(changed_at DESC)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_record_history_batch ON data_record_history(batch_id) WHERE batch_id IS NOT NULL")
     
+    # data_provenance indexes
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_provenance_entity ON data_provenance(entity_type, entity_id)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_provenance_parent ON data_provenance(parent_id)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_provenance_chain_hash ON data_provenance(chain_hash)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_provenance_step_type ON data_provenance(step_type)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_provenance_created_at ON data_provenance(created_at DESC)")
+    
     # ==========================================================================
     # Row-Level Security (RLS)
     # ==========================================================================
@@ -1412,6 +1443,21 @@ def get_data_schema() -> SchemaManager:
     
     schema.add_rls("CREATE POLICY data_cache_modify ON data_document_cache FOR ALL USING (true) WITH CHECK (true)")
     
+    # DATA_PROVENANCE POLICIES
+    schema.add_rls("ALTER TABLE data_provenance ENABLE ROW LEVEL SECURITY")
+    schema.add_rls("ALTER TABLE data_provenance FORCE ROW LEVEL SECURITY")
+    schema.add_rls("DROP POLICY IF EXISTS provenance_select ON data_provenance")
+    schema.add_rls("DROP POLICY IF EXISTS provenance_insert ON data_provenance")
+    
+    # Provenance is readable by any authenticated user (hash chains are not sensitive)
+    schema.add_rls("""
+        CREATE POLICY provenance_select ON data_provenance FOR SELECT USING (
+            NULLIF(current_setting('app.user_id', true), '') IS NOT NULL
+        )
+    """)
+    
+    schema.add_rls("CREATE POLICY provenance_insert ON data_provenance FOR INSERT WITH CHECK (true)")
+    
     # DATA_RECORD_HISTORY POLICIES
     schema.add_rls("DROP POLICY IF EXISTS record_history_select ON data_record_history")
     schema.add_rls("DROP POLICY IF EXISTS record_history_insert ON data_record_history")
@@ -1483,6 +1529,7 @@ def get_data_schema() -> SchemaManager:
     schema.add_function("GRANT SELECT, INSERT, UPDATE, DELETE ON data_records TO busibox_user")
     schema.add_function("GRANT SELECT, INSERT, UPDATE, DELETE ON record_roles TO busibox_user")
     schema.add_function("GRANT SELECT, INSERT, UPDATE, DELETE ON library_triggers TO busibox_user")
+    schema.add_function("GRANT SELECT, INSERT ON data_provenance TO busibox_user")
     
     return schema
 
