@@ -44,8 +44,7 @@ Most users will use Agent Manager primarily for chatting with agents. Admins can
 
 Beyond the core apps, your organization may have additional tools:
 
-- **Status Report** — Track projects and get AI-powered status updates. The agent helps you summarize progress, blockers, and next steps.
-- **Estimator** — Cost estimation with Monte Carlo simulation. Useful for bidding, planning, and scenario analysis.
+- **Projects** — Track projects and get AI-powered status updates. The agent helps you summarize progress, blockers, and next steps.
 
 Other apps may be added over time. Each app appears as a card on the AI Portal home page.
 

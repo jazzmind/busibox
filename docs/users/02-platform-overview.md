@@ -17,7 +17,7 @@ Busibox combines several capabilities into one platform:
 - **Document processing** — Upload PDFs, Word files, spreadsheets, images, and more. The system extracts text, chunks it, and makes it searchable.
 - **Semantic search** — Ask questions in natural language and get answers grounded in your documents. No need to remember exact keywords.
 - **AI agents** — Chat with assistants that can search your documents, browse the web, and help with tasks.
-- **Custom apps** — Specialized tools like Status Report and Estimator run on the same platform, with the same security and data access.
+- **Custom apps** — Specialized tools like Status Report and Recruiter run on the same platform, with the same security and data access.
 
 ## Why It Matters
 
@@ -116,6 +116,6 @@ A typical session looks like this:
 1. **Authenticate** — Log in to the AI Portal with passkey, TOTP, or magic link.
 2. **Upload** — Add documents. They're stored, processed, and indexed automatically.
 3. **Search or chat** — Ask questions. The system finds relevant passages and, when you use an agent, synthesizes answers with citations.
-4. **Use apps** — Open Agent Manager, Status Report, Estimator, or other apps. They use the same documents and permissions.
+4. **Use apps** — Open Agent Manager, Document Manager, Chat, or other apps. They use the same documents and permissions.
 
 Everything is connected: your documents power search and agents, and your permissions control what you can see across the platform.

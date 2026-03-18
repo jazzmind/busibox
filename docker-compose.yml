@@ -986,7 +986,7 @@ services:
       - ${HOST_SSH_DIR:-~/.ssh}:/root/.ssh:ro  # SSH keys for remote operations
       - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for docker exec
       # DEV_APPS_DIR should point to a directory containing your app source folders
-      # e.g., /Users/you/Code which contains estimator/, busibox-analysis/, etc.
+      # e.g., /Users/you/Code which contains busibox-projects, busibox-analysis/, etc.
       # This is mounted directly - no symlinks needed
       - ${DEV_APPS_DIR:-./dev-apps}:/srv/dev-apps:ro
       # Mount busibox root at its HOST path so docker compose paths work for both builds and volumes

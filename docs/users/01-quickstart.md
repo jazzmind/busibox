@@ -25,7 +25,7 @@ Choose whichever method your organization has set up. No passwords required.
 After logging in, you'll see the main dashboard. This is your home base. From here you can:
 
 - **Browse your documents** — See what you've uploaded and what's shared with you
-- **Launch apps** — Open Agent Manager, Status Report, Estimator, and other tools
+- **Launch apps** — Open Agent Manager, Chat, Documents, and other tools
 - **Access admin settings** — If you're an admin, manage users, ingestion, and deployments
 
 The layout is simple: a sidebar for navigation, app cards on the home page, and quick access to documents and agents.

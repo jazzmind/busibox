@@ -16,7 +16,7 @@ This directory is a placeholder. For local development, you should configure
 2. **Your code directory structure** should look like:
    ```
    /Users/yourname/Code/
-     estimator/           <- Your app with busibox.json
+     busibox-projects/    <- Your app with busibox.json
      busibox-analysis/    <- Another app with busibox.json
      my-custom-app/       <- etc.
    ```
@@ -28,7 +28,7 @@ This directory is a placeholder. For local development, you should configure
 
 4. **Register apps in Busibox Portal** with "Development Mode" enabled
    - Toggle "Development Mode" ON
-   - Enter the directory name (e.g., `estimator`)
+   - Enter the directory name (e.g., `myproject`)
    - The system validates the directory contains a valid `busibox.json`
 
 ## Important: No Symlinks!
@@ -39,13 +39,13 @@ within DEV_APPS_DIR, not symlinks.
 **This works:**
 ```
 DEV_APPS_DIR=/Users/you/Code
-/Users/you/Code/estimator/busibox.json  # actual file
+/Users/you/Code/myapp/busibox.json  # actual file
 ```
 
 **This does NOT work:**
 ```
 DEV_APPS_DIR=/Users/you/busibox/dev-apps
-/Users/you/busibox/dev-apps/estimator -> /Users/you/Code/estimator  # symlink - won't work!
+/Users/you/busibox/dev-apps/myapp -> /Users/you/Code/myapp  # symlink - won't work!
 ```
 
 ## Hot-Reload Development
@@ -53,7 +53,7 @@ DEV_APPS_DIR=/Users/you/busibox/dev-apps
 For hot-reload during active development:
 ```bash
 docker exec -it local-user-apps bash
-cd /srv/dev-apps/estimator && npm run dev
+cd /srv/dev-apps/myapp && npm run dev
 ```
 
 ## How It Works

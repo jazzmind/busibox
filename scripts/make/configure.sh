@@ -771,7 +771,7 @@ configure_dev_apps_dir() {
     echo ""
     echo "Example structure:"
     echo "  /Users/you/Code/"
-    echo "    ├── estimator/        <- Your app with busibox.json"
+    echo "    ├── busibox-projects/ <- Your app with busibox.json"
     echo "    ├── busibox-analysis/ <- Another app"
     echo "    └── my-app/           <- etc."
     echo ""

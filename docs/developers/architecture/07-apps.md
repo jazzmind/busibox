@@ -183,17 +183,6 @@ See `busibox-app/src/lib/authz/zero-trust.ts` for implementation.
 
 ---
 
-## Core Apps
-
-| App | Port | Base Path | Description |
-|-----|------|-----------|-------------|
-| Busibox Portal | 3000 | / | Main dashboard, admin, document manager |
-| Busibox Agents | 3001 | /agents | Agent management and chat |
-| Busibox Projects | 3003 | /status | Project tracking with AI agents |
-| Estimator | 3004 | /estimator | Cost estimation tool |
-
----
-
 ## Deploy API Architecture
 
 The Deploy API (co-located with AuthZ, port 8011) provides deployment orchestration with a two-tier security model:
