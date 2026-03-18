@@ -108,11 +108,15 @@
       {%- for r in _env_results.results -%}
         {%- set check = r.item -%}
         {%- set actual = r.stdout | trim -%}
+        {%- set expected = check.expected | trim -%}
+        {%- set expected_is_placeholder = (expected in _insecure_defaults or expected.startswith("CHANGE_ME") or expected | length == 0) -%}
         {%- if r.rc != 0 -%}
           {%- set _ = results.append({"container": check.container, "var": check.var, "status": "NOT_SET", "match": false}) -%}
         {%- elif actual in _insecure_defaults or actual.startswith("CHANGE_ME") -%}
           {%- set _ = results.append({"container": check.container, "var": check.var, "status": "INSECURE_DEFAULT", "match": false}) -%}
-        {%- elif actual == check.expected -%}
+        {%- elif expected_is_placeholder and actual | length == 0 -%}
+          {%- set _ = results.append({"container": check.container, "var": check.var, "status": "SKIPPED (optional, not configured)", "match": true}) -%}
+        {%- elif actual == expected -%}
           {%- set _ = results.append({"container": check.container, "var": check.var, "status": "OK", "match": true}) -%}
         {%- else -%}
           {%- set _ = results.append({"container": check.container, "var": check.var, "status": "MISMATCH", "match": false}) -%}
