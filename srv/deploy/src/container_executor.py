@@ -1096,6 +1096,21 @@ npm cache clean --force 2>/dev/null || true
         logs.append(f"❌ npm install failed (exit code {code}): {error_msg}")
         return False
     
+    # Verify key binaries were actually installed (catches silent npm failures
+    # where exit code is 0 but node_modules is empty, e.g. volume mount issues)
+    verify_cmd = f"test -d {app_path}/node_modules/.bin && ls {app_path}/node_modules/.bin/ | head -5"
+    verify_stdout, _, verify_code = await execute_in_container(verify_cmd)
+    if verify_code != 0 or not verify_stdout.strip():
+        logs.append("⚠️ npm reported success but node_modules/.bin is empty or missing")
+        logs.append(f"   Checking mount info...")
+        mount_cmd = f"df -h {app_path}/node_modules 2>/dev/null; ls -la {app_path}/node_modules/ 2>&1 | head -10"
+        mount_stdout, _, _ = await execute_in_container(mount_cmd)
+        if mount_stdout.strip():
+            for line in mount_stdout.strip().split('\n'):
+                logs.append(f"   {line}")
+        logs.append("❌ Dependencies not properly installed - node_modules appears empty")
+        return False
+    
     logs.append("✅ Dependencies installed")
     return True
 
