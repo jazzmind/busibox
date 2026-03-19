@@ -1420,6 +1420,120 @@ class DataService:
         
         return False
     
+    # ========================================================================
+    # Admin Operations (bypass RLS via app.is_admin session variable)
+    # ========================================================================
+
+    @asynccontextmanager
+    async def acquire_admin(self, request):
+        """
+        Get a connection with both RLS session variables and admin flag set.
+        
+        The app.is_admin='true' session variable activates admin_docs_select
+        and admin_docs_delete RLS policies, allowing access to all documents.
+        
+        Callers MUST verify the user has data.admin scope before using this.
+        """
+        async with self.pool.acquire() as conn:
+            await set_rls_session_vars(conn, request)
+            await conn.execute("SET LOCAL app.is_admin = 'true'")
+            yield conn
+
+    async def admin_list_all_documents(
+        self,
+        request,
+        source_app: Optional[str] = None,
+        visibility: Optional[str] = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> Dict:
+        """
+        List all data documents with safe metadata only (no record contents).
+        
+        Returns only an explicit allowlist of non-sensitive columns.
+        Requires data.admin scope (enforced by the route).
+        """
+        async with self.acquire_admin(request) as conn:
+            where = "doc_type = 'data'"
+            params: list = []
+            param_idx = 1
+
+            if source_app:
+                where += f" AND metadata->>'sourceApp' = ${param_idx}"
+                params.append(source_app)
+                param_idx += 1
+
+            if visibility:
+                where += f" AND visibility = ${param_idx}"
+                params.append(visibility)
+                param_idx += 1
+
+            total = await conn.fetchval(
+                f"SELECT COUNT(*) FROM data_files WHERE {where}", *params
+            )
+
+            rows = await conn.fetch(
+                f"""
+                SELECT 
+                    file_id,
+                    filename,
+                    owner_id,
+                    visibility,
+                    metadata->>'sourceApp' AS source_app,
+                    metadata->>'displayName' AS display_name,
+                    data_record_count,
+                    data_version,
+                    created_at,
+                    updated_at
+                FROM data_files
+                WHERE {where}
+                ORDER BY created_at DESC
+                LIMIT ${param_idx} OFFSET ${param_idx + 1}
+                """,
+                *params, limit, offset,
+            )
+
+            documents = []
+            for row in rows:
+                documents.append({
+                    "id": str(row["file_id"]),
+                    "name": row["filename"],
+                    "ownerId": str(row["owner_id"]),
+                    "visibility": row["visibility"],
+                    "sourceApp": row["source_app"],
+                    "displayName": row["display_name"],
+                    "recordCount": row["data_record_count"] or 0,
+                    "version": row["data_version"] or 1,
+                    "createdAt": row["created_at"].isoformat() if row["created_at"] else None,
+                    "updatedAt": row["updated_at"].isoformat() if row["updated_at"] else None,
+                })
+
+            return {
+                "documents": documents,
+                "total": total or 0,
+                "limit": limit,
+                "offset": offset,
+            }
+
+    async def admin_delete_document(self, request, document_id: str) -> bool:
+        """
+        Delete a data document regardless of ownership/visibility.
+        
+        Uses cascading foreign keys to remove document_roles and data_records.
+        Requires data.admin scope (enforced by the route).
+        """
+        async with self.acquire_admin(request) as conn:
+            result = await conn.execute(
+                "DELETE FROM data_files WHERE file_id = $1 AND doc_type = 'data'",
+                uuid.UUID(document_id),
+            )
+            deleted = result == "DELETE 1"
+
+        if deleted and self.cache_manager:
+            await self.cache_manager.invalidate_document(document_id)
+
+        return deleted
+
     def _row_to_document(self, row: asyncpg.Record, include_records: bool = True) -> Dict:
         """
         Convert a database row to a document dict.

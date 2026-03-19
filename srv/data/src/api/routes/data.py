@@ -471,6 +471,69 @@ async def create_data_document(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# =============================================================================
+# Admin Endpoints (require data.admin scope)
+# Must be registered BEFORE /{document_id} routes to avoid path conflicts.
+# =============================================================================
+
+require_data_admin = ScopeChecker("data.admin")
+
+
+@router.get(
+    "/admin/documents",
+    summary="List all data documents (admin)",
+    dependencies=[Depends(require_data_admin)],
+)
+async def admin_list_documents(
+    request: Request,
+    source_app: Optional[str] = Query(None, alias="sourceApp"),
+    visibility: Optional[str] = Query(None),
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    data_service: DataService = Depends(get_data_service),
+):
+    """List all data documents with safe metadata only. Bypasses RLS."""
+    try:
+        return await data_service.admin_list_all_documents(
+            request,
+            source_app=source_app,
+            visibility=visibility,
+            limit=limit,
+            offset=offset,
+        )
+    except Exception as e:
+        logger.error("Admin list documents failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete(
+    "/admin/documents/{document_id}",
+    summary="Delete a data document (admin)",
+    dependencies=[Depends(require_data_admin)],
+)
+async def admin_delete_document(
+    request: Request,
+    document_id: str,
+    data_service: DataService = Depends(get_data_service),
+):
+    """Delete a data document regardless of ownership. Bypasses RLS."""
+    validate_uuid(document_id, "document_id")
+    try:
+        deleted = await data_service.admin_delete_document(request, document_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return {"deleted": True, "documentId": document_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Admin delete document failed", document_id=document_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Document CRUD Endpoints
+# =============================================================================
+
 @router.get(
     "/{document_id}",
     summary="Get a data document",

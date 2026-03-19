@@ -301,8 +301,17 @@ class MilvusService:
             
             # Load collection into memory for querying
             load_state = utility.load_state(self.collection_name)
-            if load_state.name != "Loaded":
-                self.collection.load()
+            if load_state.name == "Loaded":
+                logger.info("Collection already loaded", collection=self.collection_name)
+            elif load_state.name == "Loading":
+                logger.warning(
+                    "Collection stuck in Loading state, releasing and reloading",
+                    collection=self.collection_name,
+                )
+                self.collection.release()
+                self._load_collection_with_timeout(connect_timeout)
+            else:
+                self._load_collection_with_timeout(connect_timeout)
             
             self.connected = True
             self._unavailable = False
@@ -326,6 +335,30 @@ class MilvusService:
             )
             raise MilvusConnectionError(f"Failed to connect to Milvus: {e}")
     
+    def _load_collection_with_timeout(self, timeout: float = 30.0):
+        """Load collection with a timeout to avoid hanging on corrupted segments."""
+        import concurrent.futures
+        
+        def _do_load():
+            self.collection.load()
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_do_load)
+            try:
+                future.result(timeout=timeout)
+            except concurrent.futures.TimeoutError:
+                logger.warning(
+                    "Collection load timed out, dropping and recreating",
+                    collection=self.collection_name,
+                    timeout=timeout,
+                )
+                try:
+                    self.collection.release()
+                except Exception:
+                    pass
+                self.collection.drop()
+                self.collection = self._create_collection()
+
     def close(self):
         """Close Milvus connections."""
         if self.connected:

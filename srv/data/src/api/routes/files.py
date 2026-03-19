@@ -311,10 +311,11 @@ async def reprocess_all_files(request: Request, body: BulkReprocessRequest = Non
                     user_id = str(file_row["user_id"])
                     
                     try:
-                        # Delete vectors if needed
+                        # Delete vectors if needed (run in thread pool to avoid blocking event loop)
                         if start_stage in stages_needing_vector_delete:
+                            import asyncio
                             try:
-                                milvus_service.delete_file_vectors(file_id)
+                                await asyncio.to_thread(milvus_service.delete_file_vectors, file_id)
                             except Exception as milvus_err:
                                 logger.warning(
                                     "Failed to delete vectors (may not exist)",
@@ -1084,19 +1085,29 @@ async def get_file_chunks(
     fileId: str,
     request: Request,
     limit: int = 100,
-    offset: int = 0
+    offset: int = 0,
+    page: Optional[int] = None,
+    page_size: Optional[int] = None,
 ):
     """
     Get text chunks for a file.
+    
+    Supports both limit/offset and page/page_size pagination.
     
     Args:
         fileId: File identifier
         limit: Number of chunks to return (default: 100)
         offset: Offset for pagination (default: 0)
+        page: Page number (1-indexed, overrides offset if provided)
+        page_size: Page size (overrides limit if provided)
     
     Returns:
         List of text chunks with metadata
     """
+    if page_size is not None:
+        limit = page_size
+    if page is not None and page >= 1:
+        offset = (page - 1) * limit
     user_id = request.state.user_id
     
     # Use the shared singleton - pool is connected on startup
@@ -1118,9 +1129,9 @@ async def get_file_chunks(
                     content={"error": error_msg}
                 )
             
-            # Get chunk count
+            # Get actual chunk count from data_chunks (not from stale metadata)
             chunk_count_row = await conn.fetchrow("""
-                SELECT chunk_count FROM data_files WHERE file_id = $1
+                SELECT count(*)::int as chunk_count FROM data_chunks WHERE file_id = $1
             """, uuid.UUID(fileId))
             
             # Get chunks
@@ -1596,9 +1607,10 @@ async def delete_file(fileId: str, request: Request):
             
             storage_path = file_row["storage_path"]
             
-            # Delete vectors from Milvus
+            # Delete vectors from Milvus (run in thread pool to avoid blocking event loop)
+            import asyncio
             try:
-                milvus_service.delete_file_vectors(fileId)
+                await asyncio.to_thread(milvus_service.delete_file_vectors, fileId)
                 logger.info("Deleted Milvus vectors", file_id=fileId)
             except Exception as e:
                 logger.warning(
@@ -1880,10 +1892,13 @@ async def reprocess_file(fileId: str, request: Request):
                 file_id=fileId,
             )
             
-            # Only delete vectors if needed for this stage
+            # Only delete vectors if needed for this stage.
+            # Run in thread pool: Milvus SDK is synchronous and will block
+            # the event loop (freezing the entire API) if called directly.
             if start_stage in stages_needing_vector_delete:
+                import asyncio
                 try:
-                    milvus_service.delete_file_vectors(fileId)
+                    await asyncio.to_thread(milvus_service.delete_file_vectors, fileId)
                     logger.info("Deleted Milvus vectors", file_id=fileId)
                 except Exception as e:
                     logger.warning(

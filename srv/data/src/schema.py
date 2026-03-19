@@ -822,6 +822,27 @@ def get_data_schema() -> SchemaManager:
         END $$;
     """)
     
+    # Add 'cancelled' stage to data_status_stage_check constraint
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'data_status_stage_check'
+                  AND pg_get_constraintdef(oid) LIKE '%cancelled%'
+            ) THEN
+                ALTER TABLE data_status DROP CONSTRAINT IF EXISTS data_status_stage_check;
+                ALTER TABLE data_status ADD CONSTRAINT data_status_stage_check
+                    CHECK (stage IN (
+                        'queued', 'parsing', 'classifying', 'extracting_metadata',
+                        'chunking', 'cleanup', 'markdown', 'entity_extraction',
+                        'embedding', 'indexing', 'available', 'completed', 'failed',
+                        'cancelled'
+                    ));
+            END IF;
+        END $$;
+    """)
+
     # --------------------------------------------------------------------------
     # libraries migrations
     # --------------------------------------------------------------------------
@@ -995,6 +1016,7 @@ def get_data_schema() -> SchemaManager:
     schema.add_rls("DROP POLICY IF EXISTS personal_docs_select ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS shared_docs_select ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS authenticated_docs_select ON data_files")
+    schema.add_rls("DROP POLICY IF EXISTS admin_docs_select ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS data_files_insert ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS personal_docs_update ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS shared_docs_update ON data_files")
@@ -1002,6 +1024,7 @@ def get_data_schema() -> SchemaManager:
     schema.add_rls("DROP POLICY IF EXISTS personal_docs_delete ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS shared_docs_delete ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS authenticated_docs_delete ON data_files")
+    schema.add_rls("DROP POLICY IF EXISTS admin_docs_delete ON data_files")
     
     # DATA_FILES POLICIES
     schema.add_rls("""
@@ -1034,6 +1057,12 @@ def get_data_schema() -> SchemaManager:
         CREATE POLICY authenticated_docs_select ON data_files FOR SELECT USING (
             visibility = 'authenticated'
             AND NULLIF(current_setting('app.user_id', true), '') IS NOT NULL
+        )
+    """)
+    
+    schema.add_rls("""
+        CREATE POLICY admin_docs_select ON data_files FOR SELECT USING (
+            current_setting('app.is_admin', true) = 'true'
         )
     """)
     
@@ -1127,6 +1156,12 @@ def get_data_schema() -> SchemaManager:
                 NULLIF(current_setting('app.user_id', true), '')::uuid,
                 '00000000-0000-0000-0000-000000000000'::uuid
             )
+        )
+    """)
+    
+    schema.add_rls("""
+        CREATE POLICY admin_docs_delete ON data_files FOR DELETE USING (
+            current_setting('app.is_admin', true) = 'true'
         )
     """)
     

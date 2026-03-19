@@ -46,6 +46,7 @@ class PipelineMixin:
         self.postgres_service.update_status(
             file_id=file_id,
             stage="cancelled",
+            progress=0,
             status_message="Processing cancelled by user",
             request=self._current_rls_context,
         )

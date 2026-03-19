@@ -766,9 +766,10 @@ async def _get_api_key_for_provider(provider: str) -> Optional[str]:
     2. Query LiteLLM config/DB for stored env vars (survives agent-api restarts)
     3. If found in LiteLLM, also populate os.environ for future calls
     
-    For Bedrock: we don't need an API key for listing models (we use a curated list),
-    but we return a truthy value if credentials are configured so the endpoint
-    knows that models can be shown.
+    For Bedrock: returns a truthy value if AWS credentials are configured.
+    Live model listing uses SigV4-signed calls to the Bedrock API when IAM
+    credentials are available; bearer-token auth falls back to a curated list.
+    The credentials themselves are read from os.environ by _get_bedrock_credentials().
     """
     import os
     
@@ -899,16 +900,12 @@ async def _fetch_live_anthropic_models(api_key: str) -> List[CloudModel]:
 def _get_bedrock_curated_models() -> List[CloudModel]:
     """Return the curated list of popular Bedrock models with region prefix.
     
-    Bedrock doesn't have a simple REST list-models API like OpenAI/Anthropic.
-    The official way is via boto3 ListFoundationModels, but we don't require
-    boto3 in agent-api. Instead we return a curated list of the most popular
-    models with the appropriate geographic region prefix (e.g. 'us.', 'eu.')
-    based on the configured AWS region.
+    Used as fallback when live Bedrock API calls fail (e.g. bearer token auth,
+    network issues, or permissions problems).
     """
     prefix = _get_bedrock_region_prefix()
     models = []
     for base_model_id, display_name, description in BEDROCK_CURATED_MODELS:
-        # Bedrock inference profiles require region prefix: us.model-id, eu.model-id, etc.
         model_id = f"{prefix}.{base_model_id}"
         models.append(CloudModel(
             id=model_id,
@@ -919,6 +916,237 @@ def _get_bedrock_curated_models() -> List[CloudModel]:
     return models
 
 
+def _get_bedrock_credentials() -> Optional[Dict[str, str]]:
+    """Get Bedrock IAM credentials from environment.
+    
+    Returns dict with access_key, secret_key, region (and optionally session_token)
+    if IAM credentials are available. Returns None for bearer-token auth or missing creds.
+    """
+    import os
+    access_key = os.environ.get("AWS_ACCESS_KEY_ID", "")
+    secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+    if not access_key or not secret_key:
+        return None
+    region = os.environ.get("AWS_REGION_NAME", os.environ.get("AWS_REGION", "us-east-1"))
+    creds = {"access_key": access_key, "secret_key": secret_key, "region": region}
+    session_token = os.environ.get("AWS_SESSION_TOKEN", "")
+    if session_token:
+        creds["session_token"] = session_token
+    return creds
+
+
+def _aws_sigv4_headers(
+    method: str,
+    url: str,
+    region: str,
+    service: str,
+    access_key: str,
+    secret_key: str,
+    session_token: str = "",
+    payload: bytes = b"",
+) -> Dict[str, str]:
+    """Generate AWS Signature V4 headers for an HTTP request.
+    
+    Pure stdlib implementation (hashlib + hmac) -- no boto3/botocore needed.
+    """
+    import hashlib
+    import hmac
+    from datetime import datetime, timezone
+    from urllib.parse import urlparse, parse_qsl, quote
+
+    now = datetime.now(timezone.utc)
+    datestamp = now.strftime("%Y%m%d")
+    amzdate = now.strftime("%Y%m%dT%H%M%SZ")
+
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    canonical_uri = parsed.path or "/"
+
+    # SigV4 canonical query string: params sorted by key, URI-encoded
+    qs_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    sorted_qs = "&".join(
+        f"{quote(k, safe='')}={quote(v, safe='')}"
+        for k, v in sorted(qs_pairs)
+    )
+
+    payload_hash = hashlib.sha256(payload).hexdigest()
+
+    headers_to_sign: Dict[str, str] = {
+        "host": host,
+        "x-amz-date": amzdate,
+        "x-amz-content-sha256": payload_hash,
+    }
+    if session_token:
+        headers_to_sign["x-amz-security-token"] = session_token
+
+    signed_header_keys = sorted(headers_to_sign.keys())
+    signed_headers_str = ";".join(signed_header_keys)
+    canonical_headers = "".join(
+        f"{k}:{headers_to_sign[k]}\n" for k in signed_header_keys
+    )
+
+    canonical_request = "\n".join([
+        method.upper(),
+        canonical_uri,
+        sorted_qs,
+        canonical_headers,
+        signed_headers_str,
+        payload_hash,
+    ])
+
+    algorithm = "AWS4-HMAC-SHA256"
+    credential_scope = f"{datestamp}/{region}/{service}/aws4_request"
+    string_to_sign = "\n".join([
+        algorithm,
+        amzdate,
+        credential_scope,
+        hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
+    ])
+
+    def _sign(key: bytes, msg: str) -> bytes:
+        return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+    signing_key = _sign(
+        _sign(
+            _sign(
+                _sign(f"AWS4{secret_key}".encode("utf-8"), datestamp),
+                region,
+            ),
+            service,
+        ),
+        "aws4_request",
+    )
+    signature = hmac.new(
+        signing_key, string_to_sign.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+    authorization = (
+        f"{algorithm} Credential={access_key}/{credential_scope}, "
+        f"SignedHeaders={signed_headers_str}, Signature={signature}"
+    )
+
+    result_headers = {
+        "Authorization": authorization,
+        "x-amz-date": amzdate,
+        "x-amz-content-sha256": payload_hash,
+    }
+    if session_token:
+        result_headers["x-amz-security-token"] = session_token
+    return result_headers
+
+
+async def _fetch_live_bedrock_models(creds: Dict[str, str]) -> List[CloudModel]:
+    """Fetch live model list from Bedrock using ListFoundationModels + ListInferenceProfiles.
+    
+    Calls the Bedrock control-plane REST API with SigV4 signing.
+    Returns models the account actually has access to, serving as both a
+    connectivity test and a live model discovery.
+    
+    Only works with IAM credentials (access key + secret key). Bearer-token
+    auth cannot sign SigV4 requests, so callers should fall back to curated list.
+    """
+    region = creds["region"]
+    access_key = creds["access_key"]
+    secret_key = creds["secret_key"]
+    session_token = creds.get("session_token", "")
+    prefix = _get_bedrock_region_prefix(region)
+    base = f"https://bedrock.{region}.amazonaws.com"
+
+    models_by_id: Dict[str, CloudModel] = {}
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        # 1. ListInferenceProfiles -- these are what Busibox actually uses
+        #    (cross-region inference profiles like us.anthropic.claude-sonnet-4-...)
+        try:
+            profiles_url = f"{base}/inference-profiles?maxResults=1000&type=SYSTEM_DEFINED"
+            headers = _aws_sigv4_headers(
+                "GET", profiles_url, region, "bedrock",
+                access_key, secret_key, session_token,
+            )
+            resp = await client.get(profiles_url, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                for p in data.get("inferenceProfileSummaries", []):
+                    pid = p.get("inferenceProfileId", "")
+                    name = p.get("inferenceProfileName", "")
+                    desc = p.get("description", "")
+                    if not pid:
+                        continue
+                    models_by_id[pid] = CloudModel(
+                        id=pid,
+                        name=name or pid,
+                        provider="bedrock",
+                        description=desc or f"Bedrock inference profile ({region})",
+                    )
+                logger.info(
+                    f"Bedrock ListInferenceProfiles returned "
+                    f"{len(data.get('inferenceProfileSummaries', []))} profiles"
+                )
+            elif resp.status_code == 403:
+                logger.warning(
+                    f"Bedrock ListInferenceProfiles returned 403 (AccessDenied). "
+                    f"Credentials may lack bedrock:ListInferenceProfiles permission."
+                )
+            else:
+                logger.warning(
+                    f"Bedrock ListInferenceProfiles returned {resp.status_code}: "
+                    f"{resp.text[:200]}"
+                )
+        except Exception as e:
+            logger.warning(f"Bedrock ListInferenceProfiles failed: {e}")
+
+        # 2. ListFoundationModels -- base models (add with region prefix for
+        #    on-demand inference profile IDs)
+        try:
+            fm_url = f"{base}/foundation-models?byInferenceType=ON_DEMAND&byOutputModality=TEXT"
+            headers = _aws_sigv4_headers(
+                "GET", fm_url, region, "bedrock",
+                access_key, secret_key, session_token,
+            )
+            resp = await client.get(fm_url, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                for m in data.get("modelSummaries", []):
+                    mid = m.get("modelId", "")
+                    mname = m.get("modelName", "")
+                    provider_name = m.get("providerName", "")
+                    if not mid:
+                        continue
+                    lifecycle = m.get("modelLifecycle", {})
+                    if lifecycle.get("status") == "LEGACY":
+                        continue
+                    profile_id = f"{prefix}.{mid}"
+                    if profile_id not in models_by_id:
+                        models_by_id[profile_id] = CloudModel(
+                            id=profile_id,
+                            name=mname or mid,
+                            provider="bedrock",
+                            description=f"{provider_name} {mname} ({prefix})" if provider_name else f"{mname} ({prefix})",
+                        )
+                logger.info(
+                    f"Bedrock ListFoundationModels returned "
+                    f"{len(data.get('modelSummaries', []))} models"
+                )
+            elif resp.status_code == 403:
+                logger.warning(
+                    f"Bedrock ListFoundationModels returned 403 (AccessDenied). "
+                    f"Credentials may lack bedrock:ListFoundationModels permission."
+                )
+            else:
+                logger.warning(
+                    f"Bedrock ListFoundationModels returned {resp.status_code}: "
+                    f"{resp.text[:200]}"
+                )
+        except Exception as e:
+            logger.warning(f"Bedrock ListFoundationModels failed: {e}")
+
+    if not models_by_id:
+        return []
+
+    models = sorted(models_by_id.values(), key=lambda m: m.name)
+    return models
+
+
 async def _fetch_live_cloud_models(provider: str, api_key: str) -> List[CloudModel]:
     """Fetch live model list from a cloud provider."""
     if provider == "openai":
@@ -926,6 +1154,12 @@ async def _fetch_live_cloud_models(provider: str, api_key: str) -> List[CloudMod
     elif provider == "anthropic":
         return await _fetch_live_anthropic_models(api_key)
     elif provider == "bedrock":
+        creds = _get_bedrock_credentials()
+        if creds:
+            live = await _fetch_live_bedrock_models(creds)
+            if live:
+                return live
+            logger.info("Live Bedrock model listing returned empty, falling back to curated list")
         return _get_bedrock_curated_models()
     return []
 
