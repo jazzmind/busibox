@@ -465,31 +465,37 @@
       Should stamp: {{ tables_count.stdout|int > 0 and (alembic_table_exists.stdout != 't' or (alembic_version_num.stdout is defined and alembic_version_num.stdout | trim == '')) }}
   tags: [agent_api, agent_api_migrations]
 
+- name: Check if mcp_servers column exists (for orphan version fix)
+  shell: |
+    su - postgres -c "psql -d agent -tAc \"SELECT COUNT(*) FROM information_schema.columns WHERE table_name='agent_definitions' AND column_name='mcp_servers';\""
+  delegate_to: "{{ groups['pg'][0] }}"
+  register: mcp_column_exists
+  failed_when: false
+  changed_when: false
+  when: >
+    alembic_table_exists.stdout == 't' and
+    alembic_version_num.stdout is defined and
+    alembic_version_num.stdout | trim != '' and
+    alembic_version_num.stdout | trim not in [
+      'collapsed_001',
+      'chat_extensions_002',
+      'agent_frontier_fallback_003',
+      'task_library_fields_004',
+      'eval_tables_005',
+      'agent_mcp_servers_006'
+    ]
+  tags: [agent_api, agent_api_migrations]
+
 - name: Fix orphaned alembic version (version not in migration chain)
   shell: |
-    cd /srv/agent
-    . .venv/bin/activate
-    echo "Current version '{{ alembic_version_num.stdout | trim }}' not in migration chain, checking DB state..."
-    # Check if mcp_servers column exists (added by migration 006)
-    HAS_MCP=$(python3 -c "
-    import sqlalchemy, os
-    e = sqlalchemy.create_engine(os.environ['DATABASE_URL'].replace('+asyncpg', ''))
-    with e.connect() as c:
-        cols = [r[0] for r in c.execute(sqlalchemy.text(\"SELECT column_name FROM information_schema.columns WHERE table_name='agent_definitions'\")).fetchall()]
-        print('yes' if 'mcp_servers' in cols else 'no')
-    ")
-    if [ "$HAS_MCP" = "yes" ]; then
-      echo "mcp_servers column exists, stamping to agent_mcp_servers_006"
-      alembic stamp agent_mcp_servers_006
-    else
-      echo "mcp_servers column missing, stamping to eval_tables_005"
-      alembic stamp eval_tables_005
-    fi
-  become: yes
-  become_user: "{{ agent_api_user }}"
-  environment:
-    DATABASE_URL: "postgresql+asyncpg://{{ postgres_user }}:{{ secrets.postgresql.password }}@{{ postgres_host }}:{{ postgres_port }}/agent"
-    PYTHONPATH: "/srv/agent"
+    {% if mcp_column_exists.stdout | default('0') | trim == '1' %}
+    STAMP_TO="agent_mcp_servers_006"
+    {% else %}
+    STAMP_TO="eval_tables_005"
+    {% endif %}
+    echo "Orphaned version '{{ alembic_version_num.stdout | trim }}' -> re-stamping to ${STAMP_TO}"
+    su - postgres -c "psql -d agent -c \"UPDATE alembic_version SET version_num = '${STAMP_TO}';\""
+  delegate_to: "{{ groups['pg'][0] }}"
   when: >
     alembic_table_exists.stdout == 't' and
     alembic_version_num.stdout is defined and
