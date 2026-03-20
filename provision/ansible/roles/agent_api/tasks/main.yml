@@ -546,6 +546,63 @@
   when: enable_pytest_databases | default(false)
   tags: [agent_api, agent_api_pytest_db]
 
+- name: Check pytest DB alembic version
+  shell: |
+    su - postgres -c "psql -d test_agent -tAc \"SELECT version_num FROM alembic_version LIMIT 1;\""
+  delegate_to: "{{ groups['pg'][0] }}"
+  register: pytest_alembic_version
+  failed_when: false
+  changed_when: false
+  when: enable_pytest_databases | default(false)
+  tags: [agent_api, agent_api_pytest_db]
+
+- name: Check pytest DB mcp_servers column (for orphan fix)
+  shell: |
+    su - postgres -c "psql -d test_agent -tAc \"SELECT COUNT(*) FROM information_schema.columns WHERE table_name='agent_definitions' AND column_name='mcp_servers';\""
+  delegate_to: "{{ groups['pg'][0] }}"
+  register: pytest_mcp_column_exists
+  failed_when: false
+  changed_when: false
+  when: >
+    enable_pytest_databases | default(false) and
+    pytest_alembic_version.stdout is defined and
+    pytest_alembic_version.stdout | trim != '' and
+    pytest_alembic_version.stdout | trim not in [
+      'collapsed_001',
+      'chat_extensions_002',
+      'agent_frontier_fallback_003',
+      'task_library_fields_004',
+      'eval_tables_005',
+      'agent_mcp_servers_006'
+    ]
+  tags: [agent_api, agent_api_pytest_db]
+
+- name: Fix orphaned alembic version in pytest database
+  shell: |
+    {% if pytest_mcp_column_exists.stdout | default('0') | trim == '1' %}
+    STAMP_TO="agent_mcp_servers_006"
+    {% else %}
+    STAMP_TO="eval_tables_005"
+    {% endif %}
+    echo "Pytest DB orphaned version '{{ pytest_alembic_version.stdout | trim }}' -> re-stamping to ${STAMP_TO}"
+    su - postgres -c "psql -d test_agent -c \"UPDATE alembic_version SET version_num = '${STAMP_TO}';\""
+  delegate_to: "{{ groups['pg'][0] }}"
+  when: >
+    enable_pytest_databases | default(false) and
+    pytest_alembic_version.stdout is defined and
+    pytest_alembic_version.stdout | trim != '' and
+    pytest_alembic_version.stdout | trim not in [
+      'collapsed_001',
+      'chat_extensions_002',
+      'agent_frontier_fallback_003',
+      'task_library_fields_004',
+      'eval_tables_005',
+      'agent_mcp_servers_006'
+    ]
+  register: pytest_fix_orphan_result
+  changed_when: true
+  tags: [agent_api, agent_api_pytest_db]
+
 - name: Run migrations on pytest database
   shell: |
     cd /srv/agent
