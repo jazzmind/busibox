@@ -924,6 +924,11 @@ def get_data_schema() -> SchemaManager:
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_data_files_library ON data_files(library_id)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_data_files_has_markdown ON data_files(has_markdown)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_data_files_encrypted ON data_files(is_encrypted)")
+    schema.add_index("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_data_files_unique_app_doc
+        ON data_files (filename, (metadata->>'sourceApp'))
+        WHERE doc_type = 'data' AND metadata->>'sourceApp' IS NOT NULL
+    """)
     
     # data_status indexes
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_data_status_stage ON data_status(stage)")
@@ -1308,6 +1313,8 @@ def get_data_schema() -> SchemaManager:
     schema.add_rls("DROP POLICY IF EXISTS records_inherit_select ON data_records")
     schema.add_rls("DROP POLICY IF EXISTS records_personal_select ON data_records")
     schema.add_rls("DROP POLICY IF EXISTS records_shared_select ON data_records")
+    schema.add_rls("DROP POLICY IF EXISTS admin_records_select ON data_records")
+    schema.add_rls("DROP POLICY IF EXISTS admin_records_delete ON data_records")
     schema.add_rls("DROP POLICY IF EXISTS records_insert ON data_records")
     schema.add_rls("DROP POLICY IF EXISTS records_inherit_update ON data_records")
     schema.add_rls("DROP POLICY IF EXISTS records_personal_update ON data_records")
@@ -1425,6 +1432,18 @@ def get_data_schema() -> SchemaManager:
                     )
                 )
             )
+        )
+    """)
+    
+    schema.add_rls("""
+        CREATE POLICY admin_records_select ON data_records FOR SELECT USING (
+            current_setting('app.is_admin', true) = 'true'
+        )
+    """)
+    
+    schema.add_rls("""
+        CREATE POLICY admin_records_delete ON data_records FOR DELETE USING (
+            current_setting('app.is_admin', true) = 'true'
         )
     """)
     

@@ -530,6 +530,58 @@ async def admin_delete_document(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get(
+    "/admin/documents/{document_id}/records",
+    summary="List records for a document (admin, metadata only)",
+    dependencies=[Depends(require_data_admin)],
+)
+async def admin_list_document_records(
+    request: Request,
+    document_id: str,
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    data_service: DataService = Depends(get_data_service),
+):
+    """List record metadata for a document. No record data content is exposed."""
+    validate_uuid(document_id, "document_id")
+    try:
+        return await data_service.admin_list_document_records(
+            request,
+            document_id,
+            limit=limit,
+            offset=offset,
+        )
+    except Exception as e:
+        logger.error("Admin list document records failed", document_id=document_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete(
+    "/admin/documents/{document_id}/records/{record_id}",
+    summary="Delete a record (admin)",
+    dependencies=[Depends(require_data_admin)],
+)
+async def admin_delete_record(
+    request: Request,
+    document_id: str,
+    record_id: str,
+    data_service: DataService = Depends(get_data_service),
+):
+    """Delete a single record regardless of ownership. Bypasses RLS."""
+    validate_uuid(document_id, "document_id")
+    validate_uuid(record_id, "record_id")
+    try:
+        deleted = await data_service.admin_delete_record(request, document_id, record_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Record not found")
+        return {"deleted": True, "recordId": record_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Admin delete record failed", record_id=record_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # =============================================================================
 # Document CRUD Endpoints
 # =============================================================================

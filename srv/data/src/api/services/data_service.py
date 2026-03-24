@@ -50,6 +50,18 @@ class DataService:
         """
         self.pool = pool
         self.cache_manager = cache_manager
+
+    @staticmethod
+    def _resolve_role_name(request, role_id: str) -> str:
+        """Resolve a human-readable role name from the JWT context, falling back to truncated ID."""
+        user_roles = getattr(request.state, "user_roles", []) or []
+        for role in user_roles:
+            rid = getattr(role, "id", None) or (role.get("id") if isinstance(role, dict) else None)
+            if str(rid) == str(role_id):
+                name = getattr(role, "name", None) or (role.get("name") if isinstance(role, dict) else None)
+                if name:
+                    return name
+        return f"Role-{role_id[:8]}"
     
     @asynccontextmanager
     async def acquire_with_rls(self, request):
@@ -201,7 +213,7 @@ class DataService:
                         """,
                             uuid.UUID(document_id),
                             uuid.UUID(role_id),
-                            f"Role-{role_id[:8]}",
+                            self._resolve_role_name(request, role_id),
                             uuid.UUID(user_id),
                         )
         
@@ -547,7 +559,7 @@ class DataService:
                             """,
                                 record_id,
                                 uuid.UUID(role_id),
-                                f"Role-{role_id[:8]}",
+                                self._resolve_role_name(request, role_id),
                                 uuid.UUID(user_id) if user_id else None,
                             )
                     
@@ -1125,7 +1137,7 @@ class DataService:
                             """,
                             uuid.UUID(document_id),
                             uuid.UUID(role_id),
-                            f"Role-{role_id[:8]}",
+                            self._resolve_role_name(request, role_id),
                             uuid.UUID(request_user_id) if request_user_id else None,
                         )
 
@@ -1533,6 +1545,73 @@ class DataService:
             await self.cache_manager.invalidate_document(document_id)
 
         return deleted
+
+    async def admin_list_document_records(
+        self,
+        request,
+        document_id: str,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> Dict:
+        """
+        List records for a document with metadata only (no data content).
+        Requires data.admin scope (enforced by the route).
+        """
+        async with self.acquire_admin(request) as conn:
+            total = await conn.fetchval(
+                "SELECT COUNT(*) FROM data_records WHERE document_id = $1",
+                uuid.UUID(document_id),
+            )
+
+            rows = await conn.fetch(
+                """
+                SELECT
+                    record_id,
+                    document_id,
+                    owner_id,
+                    visibility,
+                    created_at,
+                    updated_at
+                FROM data_records
+                WHERE document_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2 OFFSET $3
+                """,
+                uuid.UUID(document_id), limit, offset,
+            )
+
+            records = []
+            for row in rows:
+                records.append({
+                    "recordId": str(row["record_id"]),
+                    "documentId": str(row["document_id"]),
+                    "ownerId": str(row["owner_id"]) if row["owner_id"] else None,
+                    "visibility": row["visibility"],
+                    "createdAt": row["created_at"].isoformat() if row["created_at"] else None,
+                    "updatedAt": row["updated_at"].isoformat() if row["updated_at"] else None,
+                })
+
+            return {
+                "records": records,
+                "total": total or 0,
+                "limit": limit,
+                "offset": offset,
+            }
+
+    async def admin_delete_record(
+        self, request, document_id: str, record_id: str
+    ) -> bool:
+        """
+        Delete a single record regardless of ownership/visibility.
+        Requires data.admin scope (enforced by the route).
+        """
+        async with self.acquire_admin(request) as conn:
+            result = await conn.execute(
+                "DELETE FROM data_records WHERE record_id = $1 AND document_id = $2",
+                uuid.UUID(record_id),
+                uuid.UUID(document_id),
+            )
+            return result == "DELETE 1"
 
     def _row_to_document(self, row: asyncpg.Record, include_records: bool = True) -> Dict:
         """
