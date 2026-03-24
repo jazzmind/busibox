@@ -1095,6 +1095,11 @@ class DataService:
 
         Safety: prevents the requesting user from removing their own access when
         the resulting visibility is "shared".
+
+        To avoid the ``ensure_document_has_roles`` trigger blocking bulk deletes
+        on shared documents, we temporarily set visibility to ``personal`` before
+        clearing the old roles, then re-insert the new roles and set the final
+        visibility.
         """
         request_role_ids = {str(role_id) for role_id in (getattr(request.state, "role_ids", []) or [])}
         request_user_id = getattr(request.state, "user_id", None)
@@ -1129,6 +1134,18 @@ class DataService:
                         raise PermissionError(
                             "Role update would remove your own access to this document"
                         )
+
+                # Temporarily set visibility to 'personal' so the
+                # ensure_document_has_roles trigger won't block role deletion.
+                if document_row["visibility"] == "shared":
+                    await conn.execute(
+                        """
+                        UPDATE data_files
+                        SET visibility = 'personal', updated_at = NOW()
+                        WHERE file_id = $1 AND doc_type = 'data'
+                        """,
+                        uuid.UUID(document_id),
+                    )
 
                 await conn.execute(
                     "DELETE FROM document_roles WHERE file_id = $1",
