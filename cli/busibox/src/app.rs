@@ -267,8 +267,11 @@ pub struct App {
     // Pending vault setup (needs TUI suspended for password prompts)
     pub pending_vault_setup: bool,
 
-    // Pending profile export (needs TUI suspended for password prompts)
+    // Pending profile export to remote host (needs TUI suspended for password prompts)
     pub pending_profile_export: bool,
+
+    // Pending profile export to local file (needs TUI suspended for password prompts)
+    pub pending_local_export: bool,
 
     // Pending master password change (needs TUI suspended)
     pub pending_password_change: bool,
@@ -751,6 +754,7 @@ impl App {
             vault_password: None,
             pending_vault_setup: false,
             pending_profile_export: false,
+            pending_local_export: false,
             pending_password_change: false,
             pending_password_change_profile: None,
             pending_deploy_binary: false,

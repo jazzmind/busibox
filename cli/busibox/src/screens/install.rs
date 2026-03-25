@@ -2391,6 +2391,20 @@ fi
                     echo "✓ Prerequisites installed"
                 "#;
 
+                // Dump prereq script to temp file for debugging syntax errors
+                let prereq_debug_path = std::env::temp_dir().join("busibox-prereq-script.sh");
+                if let Err(e) = std::fs::write(&prereq_debug_path, prereq_script) {
+                    let _ = tx.send(InstallUpdate::Log(format!(
+                        "  (debug: could not write prereq script: {e})"
+                    )));
+                } else {
+                    let _ = tx.send(InstallUpdate::Log(format!(
+                        "  Prereq script saved to: {} ({} lines)",
+                        prereq_debug_path.display(),
+                        prereq_script.lines().count()
+                    )));
+                }
+
                 let prereq_ok = loop {
                     let result: color_eyre::Result<(i32, String)> = if is_remote {
                         if let Some((ref host, ref user, ref key)) = ssh_details {
@@ -2406,6 +2420,10 @@ fi
                                 crate::modules::remote::SHELL_PATH_PREAMBLE,
                                 shell_escape(prereq_script)
                             );
+                            let _ = tx.send(InstallUpdate::Log(format!(
+                                "  (debug: remote prereq command length: {} chars)",
+                                full_cmd.len()
+                            )));
                             let mut args: Vec<String> = vec![
                                 "-o".into(),
                                 "BatchMode=yes".into(),
@@ -2481,6 +2499,35 @@ fi
                             // Extract user-facing hint lines (from ERROR: onward)
                             let mut hint: Vec<String> = Vec::new();
                             let mut capturing = false;
+                            // Check for bash syntax errors and annotate with the offending line
+                            let mut syntax_line_num: Option<usize> = None;
+                            for line in output.lines() {
+                                if let Some(rest) = line.strip_prefix("bash: -c: line ") {
+                                    if let Some(colon_pos) = rest.find(':') {
+                                        if let Ok(n) = rest[..colon_pos].parse::<usize>() {
+                                            syntax_line_num = Some(n);
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(line_num) = syntax_line_num {
+                                let _ = tx.send(InstallUpdate::Log(format!(
+                                    "  ⚠ Bash syntax error at line {line_num} of prereq script"
+                                )));
+                                let script_lines: Vec<&str> = prereq_script.lines().collect();
+                                let start = line_num.saturating_sub(4);
+                                let end = (line_num + 3).min(script_lines.len());
+                                for i in start..end {
+                                    let marker = if i + 1 == line_num { ">>>" } else { "   " };
+                                    let _ = tx.send(InstallUpdate::Log(format!(
+                                        "  {marker} {:>4}: {}", i + 1, script_lines[i]
+                                    )));
+                                }
+                                let _ = tx.send(InstallUpdate::Log(format!(
+                                    "  Full script saved to: {}",
+                                    prereq_debug_path.display()
+                                )));
+                            }
                             for line in output.lines() {
                                 let trimmed = line.trim();
                                 if !trimmed.is_empty() {

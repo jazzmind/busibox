@@ -408,7 +408,7 @@ async def get_storage_stats(request: Request):
     """Get file storage statistics from MinIO (total size, file count, bucket count)."""
     try:
         config = Config()
-        minio_service = MinIOService(config.as_dict())
+        minio_service = MinIOService(config.to_dict())
         stats = await minio_service.get_storage_stats()
         return JSONResponse(status_code=200, content=stats)
     except Exception as e:

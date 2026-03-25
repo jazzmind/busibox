@@ -137,7 +137,7 @@ backend_service_action() {
         logs)
             info "Showing logs for ${service} (Ctrl+C to exit)..."
             echo ""
-            _kctl logs -n "$K8S_NAMESPACE" -l "app=${deployment}" -f --tail=100 2>/dev/null || error "No logs available"
+            _kctl logs -n "$K8S_NAMESPACE" -l "app=${deployment}" -f --tail=100 2>&1 || echo "No logs available for ${service}"
             ;;
 
         restart)

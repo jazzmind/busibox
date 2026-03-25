@@ -201,6 +201,7 @@ class UpdateDocumentRolesRequest(BaseModel):
     """Request to replace role assignments for a data document."""
     roleIds: List[str] = Field(default_factory=list, description="Role IDs assigned to the document")
     visibility: Optional[str] = Field(None, description="Optional visibility override: personal or shared")
+    roleNames: Optional[Dict[str, str]] = Field(None, description="Optional map of role_id -> role_name for storage")
 
 
 # =============================================================================
@@ -758,6 +759,7 @@ async def update_data_document_roles(
             document_id=document_id,
             role_ids=body.roleIds,
             visibility=body.visibility,
+            role_names=body.roleNames,
         )
         return result
     except PermissionError as e:

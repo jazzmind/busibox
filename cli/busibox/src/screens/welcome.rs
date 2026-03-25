@@ -77,9 +77,9 @@ pub fn render(f: &mut Frame, app: &App) {
                 .map(|(_, p)| p.backend == "k8s")
                 .unwrap_or(false);
             let hint = if is_k8s {
-                " ↑/↓ Navigate  Enter Select  r Refresh  p Profiles  q Quit"
+                " ↑/↓ Navigate  Enter Select  r Refresh  x Export  p Profiles  q Quit"
             } else {
-                " ↑/↓ Navigate  Enter Select  t Tunnel  s Sync  r Refresh  m Models  p Profiles  q Quit"
+                " ↑/↓ Navigate  Enter Select  t Tunnel  s Sync  r Refresh  x Export  m Models  p Profiles  q Quit"
             };
             Span::styled(hint, theme::muted())
         };
@@ -854,12 +854,24 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
             app.menu_selected = 0;
         }
         KeyCode::Char('x') => {
+            if app.active_profile().is_some() {
+                if app.vault_password.is_some() {
+                    app.pending_local_export = true;
+                } else {
+                    app.set_message(
+                        "Unlock vault first (select profile)",
+                        crate::app::MessageKind::Info,
+                    );
+                }
+            }
+        }
+        KeyCode::Char('X') => {
             if let Some((_, profile)) = app.active_profile() {
                 if profile.remote && app.vault_password.is_some() {
                     app.pending_profile_export = true;
                 } else if !profile.remote {
                     app.set_message(
-                        "Export is only for remote profiles",
+                        "Export to host is only for remote profiles",
                         crate::app::MessageKind::Info,
                     );
                 } else {

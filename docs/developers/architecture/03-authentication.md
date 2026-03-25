@@ -9,14 +9,15 @@ published: true
 # Authentication & Authorization
 
 **Created**: 2025-12-09  
-**Last Updated**: 2026-02-12  
+**Last Updated**: 2026-03-25  
 **Status**: Active  
 **Category**: Architecture  
 **Related Docs**:  
 - `architecture/01-containers.md`  
 - `architecture/04-ingestion.md`  
 - `architecture/05-search.md`  
-- `architecture/07-apps.md`
+- `architecture/07-apps.md`  
+- `architecture/11-document-sharing.md`
 
 ---
 
@@ -124,8 +125,24 @@ Access control has two orthogonal dimensions:
 
 | Dimension | Controlled By | Question Answered |
 |-----------|---------------|-------------------|
-| **Data Access** | Role membership | "Which data can I see?" |
+| **Data Access** | Role membership + RLS | "Which data can I see?" |
 | **Operations** | OAuth2 scopes | "What can I do with it?" |
+
+### Role Categories
+
+There are three categories of roles in the system:
+
+| Category | Pattern | Created By | Purpose |
+|----------|---------|------------|---------|
+| **User Roles** | No `app:` prefix (e.g., `Admin`, `Finance`) | Admin API (`/admin/roles`) | Organization-wide access, scopes |
+| **App Roles** | `app:<name>` (e.g., `app:busibox-workforce`) | Admin API (auto-created on deploy) | Own app document collections |
+| **Team/Sub-Roles** | `app:<name>:<entity>` (e.g., `app:busibox-workforce:team-a`) | Self-service API (`POST /roles`) | Fine-grained per-entity access |
+
+User roles carry OAuth2 scopes. The `Admin` role has the wildcard scope `*`, which grants all permissions including `data.admin`.
+
+App roles and team roles are primarily used for data access control via RLS. They do not carry OAuth2 scopes by default.
+
+See `architecture/11-document-sharing.md` for the full document sharing and data access control model.
 
 ### Example: Finance Department
 
@@ -318,6 +335,7 @@ Response:
 - AuthZ verifies the session JWT signature cryptographically
 - User's roles and scopes are looked up in the database
 - Issued token is bound to the requested audience
+- **All user roles** are included in the token (app roles, team roles, user roles)
 
 ### App-Scoped Token Exchange (External Apps)
 
@@ -349,8 +367,10 @@ Response:
 - AuthZ checks user has access to the app via RBAC bindings: `user → role → app binding`
 - If user doesn't have access, returns 403 `user_does_not_have_app_access`
 - Issued token includes `app_id` claim for the app to verify
-- Token contains only roles that grant access to the specific app
+- Token contains **only roles bound to the specific app** (not all user roles)
 - External app validates token via JWKS: `GET /.well-known/jwks.json`
+
+> **Critical distinction**: Non-app-scoped exchange (no `resource_id`) includes ALL user roles. App-scoped exchange (with `resource_id`) includes only roles bound to that app. This affects which `document_roles` entries the RLS policies can match.
 
 **Flow:**
 ```mermaid
@@ -519,7 +539,8 @@ Issued via token exchange for downstream services:
 - Short TTL (15 minutes default)
 - Audience-bound to specific service
 - Contains user's aggregated scopes from all roles
-- Contains role IDs for data access filtering (RLS)
+- Contains `roles` array with `{ id, name }` objects for RLS filtering
+- Role set depends on exchange type: all roles (non-app-scoped) or only bound roles (app-scoped)
 
 ### Delegation Token (typ: delegation)
 
@@ -680,9 +701,10 @@ Downstream services validate tokens by:
 
 ### Data API (`srv/data`)
 - Validates JWT (RS256, audience `data-api`)
-- **Scope enforcement**: Routes require appropriate scopes (`ingest.read`, `ingest.write`, `ingest.delete`)
-- Uses `roles[].id` for PostgreSQL RLS session variables
-- Documents are tagged with role IDs at upload time
+- **Scope enforcement**: Routes require appropriate scopes (`ingest.read`, `ingest.write`, `ingest.delete`, `data.admin`)
+- Extracts `roles[].id` from JWT into `UserContext`, maps to PostgreSQL session variables (`app.user_id`, `app.user_role_ids_*`)
+- Documents are tagged with role IDs via `document_roles` table at upload or setup time
+- Admin routes use `acquire_admin` context manager to set `app.is_admin = 'true'` for RLS bypass
 - MinIO storage paths organized by visibility: `personal/{user_id}/...` or `role/{role_id}/...`
 
 ### Search API (`srv/search`)
@@ -700,11 +722,51 @@ Downstream services validate tokens by:
 ## RLS Enforcement
 
 ### PostgreSQL
-Session variables set per request enable row-level security:
-- `app.user_id` - Current user UUID
-- `app.user_role_ids` - JSON array of role IDs user has membership in
 
-RLS policies filter data based on role membership, not scopes. Scopes control operations; role membership controls data visibility.
+Session variables set per request enable row-level security:
+
+| Variable | Format | Source |
+|----------|--------|--------|
+| `app.user_id` | UUID string | JWT `sub` claim |
+| `app.user_role_ids_read` | CSV of UUID strings | JWT `roles[].id` |
+| `app.user_role_ids_create` | CSV of UUID strings | JWT `roles[].id` |
+| `app.user_role_ids_update` | CSV of UUID strings | JWT `roles[].id` |
+| `app.user_role_ids_delete` | CSV of UUID strings | JWT `roles[].id` |
+| `app.is_admin` | `'true'` or unset | Set by application code (not from JWT) |
+
+> All four `role_ids_*` variables currently contain the same CSV. They are separated to support future granular CRUD permissions per role.
+
+RLS policies filter data based on role membership, not scopes. Scopes control operations; role membership controls data visibility. `FORCE ROW LEVEL SECURITY` is applied on all data tables, meaning even the table owner (`busibox_user`) is subject to RLS.
+
+### Admin Bypass
+
+Admin operations require the `data.admin` scope (the `Admin` role's wildcard `*` scope matches this). When verified, the application sets `app.is_admin = 'true'` as a PostgreSQL session variable. Dedicated admin RLS policies on each table check this variable:
+
+```sql
+CREATE POLICY admin_docs_select ON data_files FOR SELECT USING (
+    current_setting('app.is_admin', true) = 'true'
+)
+```
+
+The bypass is activated via two mechanisms:
+1. **`acquire_admin` context manager** — sets `app.is_admin` for the entire connection (used for admin list endpoints, admin document views)
+2. **`SET LOCAL app.is_admin = 'true'`** — sets it within a transaction (used for owners and admins managing roles on specific documents)
+
+Admin bypass policies exist on: `data_files` (SELECT, UPDATE, DELETE), `document_roles` (SELECT, INSERT, UPDATE, DELETE), `data_records` (SELECT, DELETE).
+
+### Tables with RLS
+
+| Table | `FORCE RLS` | Policies |
+|-------|-------------|----------|
+| `data_files` | Yes | personal, shared, authenticated + admin bypass |
+| `document_roles` | Yes | role-based + admin bypass |
+| `data_records` | Yes | inherit, personal, shared + admin bypass |
+| `record_roles` | Yes | role-based |
+| `data_chunks` | Yes | personal, shared, authenticated |
+| `data_status` | Yes | personal, shared, authenticated |
+| `processing_history` | Yes | personal, shared, authenticated |
+
+See `architecture/11-document-sharing.md` for the complete RLS policy reference.
 
 ### Milvus
 Partition naming aligns with role IDs:

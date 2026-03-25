@@ -52,8 +52,17 @@ class DataService:
         self.cache_manager = cache_manager
 
     @staticmethod
-    def _resolve_role_name(request, role_id: str) -> str:
-        """Resolve a human-readable role name from the JWT context, falling back to truncated ID."""
+    def _resolve_role_name(request, role_id: str, explicit_names: Optional[Dict[str, str]] = None) -> str:
+        """Resolve a human-readable role name.
+
+        Priority:
+        1. explicit_names map (client-supplied, e.g. from admin UI)
+        2. JWT roles on the request (works when caller holds the role)
+        3. Fallback placeholder Role-{id[:8]}
+        """
+        if explicit_names and role_id in explicit_names:
+            return explicit_names[role_id]
+
         user_context = getattr(request.state, "user_context", None)
         roles = getattr(user_context, "roles", []) if user_context else []
         for role in roles:
@@ -69,22 +78,36 @@ class DataService:
         """
         Get a connection with RLS session variables set.
         
+        If the caller has data.admin scope, also sets app.is_admin='true'
+        so admin RLS bypass policies activate automatically.  This ensures
+        admin users (e.g. from busibox-admin) can see all documents
+        regardless of which app-specific roles they hold.
+        
         Args:
             request: FastAPI Request object with user_id in state
         """
         user_id = getattr(request.state, "user_id", None)
         role_ids = getattr(request.state, "role_ids", [])
+        user_context = getattr(request.state, "user_context", None)
+        is_admin = user_context and user_context.has_scope("data.admin")
         
         logger.debug(
             "[RLS] Acquiring connection with RLS context",
             user_id=user_id,
             role_ids=role_ids,
             role_count=len(role_ids) if role_ids else 0,
+            is_admin=bool(is_admin),
         )
         
         async with self.pool.acquire() as conn:
             await set_rls_session_vars(conn, request)
-            yield conn
+            if is_admin:
+                await conn.execute("SET app.is_admin = 'true'")
+            try:
+                yield conn
+            finally:
+                if is_admin:
+                    await conn.execute("SET app.is_admin = 'false'")
     
     # ========================================================================
     # Document CRUD Operations
@@ -1089,30 +1112,59 @@ class DataService:
         document_id: str,
         role_ids: List[str],
         visibility: Optional[str] = None,
+        role_names: Optional[Dict[str, str]] = None,
     ) -> Dict:
         """
         Replace role assignments for a document and optionally update visibility.
 
         Safety: prevents the requesting user from removing their own access when
-        the resulting visibility is "shared".
+        the resulting visibility is "shared" — unless the caller is an admin or
+        the document owner.
 
         To avoid the ``ensure_document_has_roles`` trigger blocking bulk deletes
         on shared documents, we temporarily set visibility to ``personal`` before
         clearing the old roles, then re-insert the new roles and set the final
         visibility.
+
+        Args:
+            role_names: Optional mapping of role_id -> human-readable name.
+                        Used when the caller's JWT may not include the role
+                        (e.g. admin assigning an app role they don't hold).
         """
         request_role_ids = {str(role_id) for role_id in (getattr(request.state, "role_ids", []) or [])}
         request_user_id = getattr(request.state, "user_id", None)
         normalized_role_ids = list(dict.fromkeys([str(role_id) for role_id in role_ids]))
 
+        user_context = getattr(request.state, "user_context", None)
+        caller_is_admin = user_context and user_context.has_scope("data.admin")
+
+        logger.info(
+            "set_document_roles called",
+            document_id=document_id,
+            caller_is_admin=bool(caller_is_admin),
+            has_user_context=user_context is not None,
+            scopes=list(user_context.scopes) if user_context else [],
+            role_ids=normalized_role_ids,
+            visibility=visibility,
+        )
+
         if visibility is not None and visibility not in ("personal", "shared"):
             raise ValueError("visibility must be either 'personal' or 'shared'")
 
-        async with self.acquire_with_rls(request) as conn:
+        # Admins use acquire_admin (sets app.is_admin at session level) so
+        # the SELECT ... FOR UPDATE can see documents they don't own.
+        acquire = self.acquire_admin if caller_is_admin else self.acquire_with_rls
+        async with acquire(request) as conn:
             async with conn.transaction():
+                # Reinforce admin flag inside the transaction to guarantee
+                # it applies to all statements including INSERT into
+                # document_roles (which has its own RLS policies).
+                if caller_is_admin:
+                    await conn.execute("SET LOCAL app.is_admin = 'true'")
+
                 document_row = await conn.fetchrow(
                     """
-                    SELECT visibility
+                    SELECT visibility, user_id
                     FROM data_files
                     WHERE file_id = $1 AND doc_type = 'data'
                     FOR UPDATE
@@ -1123,17 +1175,27 @@ class DataService:
                 if not document_row:
                     raise ValueError(f"Document {document_id} not found")
 
+                caller_is_owner = (
+                    request_user_id
+                    and document_row["user_id"]
+                    and str(document_row["user_id"]) == str(request_user_id)
+                )
+
                 effective_visibility = visibility or document_row["visibility"]
 
                 if effective_visibility == "shared":
                     if len(normalized_role_ids) == 0:
                         raise ValueError("Shared visibility requires at least one role ID")
 
-                    # Prevent removing all of the caller's roles from this document.
-                    if request_role_ids and request_role_ids.isdisjoint(set(normalized_role_ids)):
-                        raise PermissionError(
-                            "Role update would remove your own access to this document"
-                        )
+                    if not caller_is_admin and not caller_is_owner:
+                        if request_role_ids and request_role_ids.isdisjoint(set(normalized_role_ids)):
+                            raise PermissionError(
+                                "Role update would remove your own access to this document"
+                            )
+
+                # Owners may need to manipulate roles they don't hold.
+                if not caller_is_admin and caller_is_owner:
+                    await conn.execute("SET LOCAL app.is_admin = 'true'")
 
                 # Temporarily set visibility to 'personal' so the
                 # ensure_document_has_roles trigger won't block role deletion.
@@ -1163,7 +1225,7 @@ class DataService:
                             """,
                             uuid.UUID(document_id),
                             uuid.UUID(role_id),
-                            self._resolve_role_name(request, role_id),
+                            self._resolve_role_name(request, role_id, role_names),
                             uuid.UUID(request_user_id) if request_user_id else None,
                         )
 
@@ -1467,15 +1529,22 @@ class DataService:
         """
         Get a connection with both RLS session variables and admin flag set.
         
-        The app.is_admin='true' session variable activates admin_docs_select
-        and admin_docs_delete RLS policies, allowing access to all documents.
+        The app.is_admin='true' session variable activates admin_docs_select,
+        admin_docs_delete, admin_docs_update, and admin_document_roles_*
+        RLS policies, allowing full access to all documents and roles.
+        
+        Uses SET (not SET LOCAL) so the variable persists across nested
+        transaction blocks opened by callers.
         
         Callers MUST verify the user has data.admin scope before using this.
         """
         async with self.pool.acquire() as conn:
             await set_rls_session_vars(conn, request)
-            await conn.execute("SET LOCAL app.is_admin = 'true'")
-            yield conn
+            await conn.execute("SET app.is_admin = 'true'")
+            try:
+                yield conn
+            finally:
+                await conn.execute("SET app.is_admin = 'false'")
 
     async def admin_list_all_documents(
         self,

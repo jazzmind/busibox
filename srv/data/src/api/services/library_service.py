@@ -88,6 +88,9 @@ class LibraryService:
         """
         Get a connection with RLS session variables set.
         
+        If the caller has data.admin scope, also sets app.is_admin='true'
+        so admin RLS bypass policies activate automatically.
+        
         Use this for any queries against tables with RLS enabled
         (e.g., data_files, data_status).
         
@@ -97,11 +100,25 @@ class LibraryService:
         """
         user_id = getattr(request.state, "user_id", None)
         role_ids = getattr(request.state, "role_ids", [])
-        print(f"[acquire_with_rls] Setting RLS for user_id={user_id}, role_ids={role_ids}")
+        user_context = getattr(request.state, "user_context", None)
+        is_admin = user_context and user_context.has_scope("data.admin")
+        
+        logger.debug(
+            "[RLS] Acquiring connection with RLS context",
+            user_id=user_id,
+            role_count=len(role_ids) if role_ids else 0,
+            is_admin=bool(is_admin),
+        )
         
         async with self.pool.acquire() as conn:
             await set_rls_session_vars(conn, request)
-            yield conn
+            if is_admin:
+                await conn.execute("SET app.is_admin = 'true'")
+            try:
+                yield conn
+            finally:
+                if is_admin:
+                    await conn.execute("SET app.is_admin = 'false'")
     
     async def get_or_create_personal_library(
         self,

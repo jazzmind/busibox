@@ -97,6 +97,9 @@ dev-apps/*
 !dev-apps/.gitkeep
 !dev-apps/README.md
 
+# Profile export bundles (contain encrypted secrets)
+*.busibox-export
+
 # Rust build artifacts
 cli/busibox/target/
 

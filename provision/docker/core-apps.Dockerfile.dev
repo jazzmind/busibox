@@ -34,7 +34,7 @@ RUN npm install -g pnpm turbo
 
 # Create directories for apps
 RUN mkdir -p /srv/busibox-frontend \
-    /var/log
+    /var/log/supervisor
 
 # @jazzmind/busibox-app is public on npmjs.org - no auth needed for install
 

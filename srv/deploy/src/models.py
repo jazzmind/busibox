@@ -17,23 +17,56 @@ class DatabaseConfig(BaseModel):
     seedCommand: Optional[str] = None
 
 
+class ServiceEndpoint(BaseModel):
+    """A service endpoint exposed by a custom service"""
+    name: str
+    port: int = Field(..., ge=1, le=65535)
+    path: str = Field(..., pattern=r'^/[a-z0-9-_/]+$')
+    stripPath: bool = True
+    healthEndpoint: str = "/health"
+
+
+class RuntimeConfig(BaseModel):
+    """Runtime configuration for custom services"""
+    type: Literal['docker-compose', 'lxc'] = 'docker-compose'
+    composeFile: str = 'docker-compose.yml'
+    buildContext: str = '.'
+
+
+class AuthConfig(BaseModel):
+    """Authentication configuration for custom services"""
+    audience: str = Field(..., pattern=r'^[a-z0-9-]+$')
+    scopes: List[str] = []
+
+
 class BusiboxManifest(BaseModel):
-    """App manifest from busibox.json"""
+    """App manifest from busibox.json
+
+    Supports three app modes:
+    - frontend: Next.js app proxying to backend APIs (no direct DB)
+    - prisma: Next.js app with direct Prisma/PostgreSQL access
+    - custom: Multi-service stack with its own Docker Compose or LXC runtime
+    """
     name: str
     id: str = Field(..., pattern=r'^[a-z0-9-]+$')
     version: str
     description: str
     icon: str
     defaultPath: str = Field(..., pattern=r'^/[a-z0-9-_]+$')
-    defaultPort: int = Field(..., ge=1000, le=65535)
-    healthEndpoint: str
-    buildCommand: str
-    startCommand: str
-    appMode: Literal['frontend', 'prisma']
+    # Required for frontend/prisma, not needed for custom (services[] defines ports)
+    defaultPort: Optional[int] = Field(None, ge=1000, le=65535)
+    healthEndpoint: Optional[str] = None
+    buildCommand: Optional[str] = None
+    startCommand: Optional[str] = None
+    appMode: Literal['frontend', 'prisma', 'custom']
     database: Optional[DatabaseConfig] = None
     requiredEnvVars: List[str] = []
     optionalEnvVars: List[str] = []
     busiboxAppVersion: Optional[str] = None
+    # Custom service fields (required when appMode == "custom")
+    runtime: Optional[RuntimeConfig] = None
+    services: Optional[List[ServiceEndpoint]] = None
+    auth: Optional[AuthConfig] = None
 
 
 class DeploymentConfig(BaseModel):

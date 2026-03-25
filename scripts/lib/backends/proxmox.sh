@@ -51,11 +51,12 @@ _proxmox_get_service_ip() {
         authz|authz-api|deploy|deploy-api|docs|docs-api) echo "${network_base}.210" ;;
         search|search-api) echo "${network_base}.204" ;;
         embedding|embedding-api) echo "${network_base}.206" ;;
-        core-apps|apps|busibox-portal|busibox-agents|busibox-appbuilder) echo "${network_base}.201" ;;
+        core-apps|apps|busibox-portal|busibox-admin|busibox-agents|busibox-chat|busibox-appbuilder|busibox-media|busibox-documents) echo "${network_base}.201" ;;
         nginx|proxy) echo "${network_base}.200" ;;
         litellm) echo "${network_base}.207" ;;
         vllm) echo "${network_base}.208" ;;
         user-apps) echo "${network_base}.212" ;;
+        custom-services) echo "${network_base}.212" ;;
         *) echo "" ;;
     esac
 }
@@ -75,8 +76,12 @@ _proxmox_get_systemd_name() {
         embedding|embedding-api) echo "embedding-api" ;;
         nginx|proxy) echo "nginx" ;;
         busibox-portal) echo "busibox-portal" ;;
+        busibox-admin) echo "busibox-admin" ;;
         busibox-agents) echo "busibox-agents" ;;
+        busibox-chat) echo "busibox-chat" ;;
         busibox-appbuilder) echo "busibox-appbuilder" ;;
+        busibox-media) echo "busibox-media" ;;
+        busibox-documents) echo "busibox-documents" ;;
         postgres|pg) echo "postgresql" ;;
         minio|files) echo "minio" ;;
         milvus) echo "milvus" ;;
@@ -177,6 +182,63 @@ backend_get_service_status() {
 }
 
 # ============================================================================
+# Custom Service Actions (Proxmox / LXC)
+# ============================================================================
+
+# Execute action on a custom service deployed to an LXC container via SSH.
+# Custom services run as docker compose projects inside the user-apps LXC.
+_proxmox_custom_service_action() {
+    local service="$1"
+    local action="$2"
+    local ip="$3"
+    local app_dir="/srv/custom-services/${service}"
+    local compose_file="${app_dir}/docker-compose.yml"
+
+    if [[ -z "$ip" ]]; then
+        error "No IP for custom services container"
+        return 1
+    fi
+
+    case "$action" in
+        start)
+            info "Starting custom service ${service} on ${ip}..."
+            ssh "root@${ip}" "docker compose -f ${compose_file} up -d" 2>&1
+            success "Custom service ${service} started"
+            ;;
+        stop)
+            info "Stopping custom service ${service} on ${ip}..."
+            ssh "root@${ip}" "docker compose -f ${compose_file} stop" 2>&1
+            success "Custom service ${service} stopped"
+            ;;
+        restart)
+            info "Restarting custom service ${service} on ${ip}..."
+            ssh "root@${ip}" "docker compose -f ${compose_file} restart" 2>&1
+            success "Custom service ${service} restarted"
+            ;;
+        logs)
+            info "Showing logs for custom service ${service} on ${ip} (Ctrl+C to exit)..."
+            echo ""
+            ssh "root@${ip}" "docker compose -f ${compose_file} logs -f" 2>&1
+            ;;
+        status)
+            echo "  ${BOLD}${service}${NC} (custom service on ${ip}):"
+            ssh "root@${ip}" "docker compose -f ${compose_file} ps" 2>&1 | while IFS= read -r line; do
+                echo "    $line"
+            done
+            ;;
+        redeploy)
+            info "Redeploying custom service ${service} on ${ip}..."
+            ssh "root@${ip}" "cd ${app_dir} && docker compose -f ${compose_file} build --no-cache && docker compose -f ${compose_file} up -d" 2>&1
+            success "Custom service ${service} redeployed"
+            ;;
+        *)
+            error "Unknown action '${action}' for custom service ${service}"
+            return 1
+            ;;
+    esac
+}
+
+# ============================================================================
 # Actions
 # ============================================================================
 
@@ -198,6 +260,17 @@ backend_service_action() {
     inventory=$(_proxmox_get_inventory "$env")
     local container_ip
     container_ip=$(_proxmox_get_service_ip "$service" "$env")
+
+    # Custom service handling -- managed via docker compose on user-apps LXC
+    local svc_map
+    svc_map=$(get_container_for_service "$service")
+    if [[ "$svc_map" == custom:* ]]; then
+        local custom_ip
+        custom_ip=$(_proxmox_get_service_ip "custom-services" "$env")
+        _proxmox_custom_service_action "$service" "$action" "$custom_ip"
+        return $?
+    fi
+
     local systemd_service
     systemd_service=$(_proxmox_get_systemd_name "$service")
 
@@ -236,9 +309,9 @@ backend_service_action() {
             info "Showing logs for ${service} (Ctrl+C to exit)..."
             echo ""
             if [[ -n "$container_ip" ]]; then
-                ssh "root@${container_ip}" "journalctl -u ${systemd_service} -f --no-pager -n 100" 2>/dev/null || error "Could not get logs"
+                ssh "root@${container_ip}" "journalctl -u ${systemd_service} -f --no-pager -n 100" 2>&1 || echo "Could not get logs for ${service}"
             else
-                error "Unknown service IP for ${service}"
+                echo "ERROR: Unknown service IP for ${service}"
             fi
             ;;
 

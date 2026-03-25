@@ -1621,6 +1621,25 @@ fn spawn_log_tail_worker(app: &mut App) {
                 return;
             }
         };
+
+        let stderr_tx = tx.clone();
+        let stderr_handle = child.stderr.take().map(|stderr| {
+            std::thread::spawn(move || {
+                let reader = std::io::BufReader::new(stderr);
+                for line in reader.lines() {
+                    match line {
+                        Ok(l) => {
+                            let cleaned = remote::strip_ansi(&l);
+                            if !cleaned.is_empty() {
+                                let _ = stderr_tx.send(ManageUpdate::Log(cleaned));
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            })
+        });
+
         let reader = std::io::BufReader::new(stdout);
         for line in reader.lines() {
             match line {
@@ -1630,6 +1649,10 @@ fn spawn_log_tail_worker(app: &mut App) {
                 }
                 Err(_) => break,
             }
+        }
+
+        if let Some(handle) = stderr_handle {
+            let _ = handle.join();
         }
 
         let _ = child.wait();

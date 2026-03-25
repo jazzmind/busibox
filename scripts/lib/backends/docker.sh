@@ -28,7 +28,28 @@ _BACKEND_DOCKER_LOADED=1
 backend_get_service_status() {
     local service="$1"
     local prefix="${CONTAINER_PREFIX:-dev}"
-    local container_name="${prefix}-$(get_container_for_service "$service")"
+    local svc_map
+    svc_map=$(get_container_for_service "$service")
+
+    # Custom services: check via docker compose
+    if [[ "$svc_map" == custom:* ]]; then
+        local project="${prefix}-custom-${service}"
+        local app_dir="/srv/custom-services/${service}"
+        if [[ ! -d "$app_dir" ]]; then
+            echo "missing"
+            return
+        fi
+        local running_count
+        running_count=$(docker compose -p "$project" -f "${app_dir}/docker-compose.yml" ps --status running -q 2>/dev/null | wc -l | tr -d ' ')
+        if [[ "$running_count" -gt 0 ]]; then
+            echo "running"
+        else
+            echo "stopped"
+        fi
+        return
+    fi
+
+    local container_name="${prefix}-${svc_map}"
 
     # Special case: MLX runs on host (not in Docker).
     # From inside a container, reach the host via host.docker.internal.
@@ -91,7 +112,28 @@ backend_get_service_status() {
 backend_get_service_status_colored() {
     local service="$1"
     local prefix="${CONTAINER_PREFIX:-dev}"
-    local container="${prefix}-$(get_container_for_service "$service")"
+    local svc_map
+    svc_map=$(get_container_for_service "$service")
+
+    # Custom services
+    if [[ "$svc_map" == custom:* ]]; then
+        local project="${prefix}-custom-${service}"
+        local app_dir="/srv/custom-services/${service}"
+        if [[ ! -d "$app_dir" ]]; then
+            echo "missing"
+            return
+        fi
+        local running_count
+        running_count=$(docker compose -p "$project" -f "${app_dir}/docker-compose.yml" ps --status running -q 2>/dev/null | wc -l | tr -d ' ')
+        if [[ "$running_count" -gt 0 ]]; then
+            echo "${GREEN}running${NC}"
+        else
+            echo "${RED}stopped${NC}"
+        fi
+        return
+    fi
+
+    local container="${prefix}-${svc_map}"
 
     if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
         echo "missing"
@@ -114,6 +156,65 @@ backend_get_service_status_colored() {
 }
 
 # ============================================================================
+# Custom Service Actions
+# ============================================================================
+
+# Execute action on a custom Docker Compose service.
+# Custom services are managed as standalone compose projects
+# under /srv/custom-services/<app_id>/.
+_custom_service_action() {
+    local service="$1"
+    local action="$2"
+    local prefix="${3:-dev}"
+    local project="${prefix}-custom-${service}"
+    local app_dir="/srv/custom-services/${service}"
+
+    if [[ ! -d "$app_dir" ]]; then
+        error "Custom service directory not found: ${app_dir}"
+        return 1
+    fi
+
+    case "$action" in
+        start)
+            info "Starting custom service ${service}..."
+            docker compose -p "$project" -f "${app_dir}/docker-compose.yml" up -d 2>&1
+            success "Custom service ${service} started"
+            ;;
+        stop)
+            info "Stopping custom service ${service}..."
+            docker compose -p "$project" -f "${app_dir}/docker-compose.yml" stop 2>&1
+            success "Custom service ${service} stopped"
+            ;;
+        restart)
+            info "Restarting custom service ${service}..."
+            docker compose -p "$project" -f "${app_dir}/docker-compose.yml" restart 2>&1
+            success "Custom service ${service} restarted"
+            ;;
+        logs)
+            info "Showing logs for custom service ${service} (Ctrl+C to exit)..."
+            echo ""
+            docker compose -p "$project" -f "${app_dir}/docker-compose.yml" logs -f 2>&1
+            ;;
+        status)
+            echo "  ${BOLD}${service}${NC} (custom service):"
+            docker compose -p "$project" -f "${app_dir}/docker-compose.yml" ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}" 2>&1 | while IFS= read -r line; do
+                echo "    $line"
+            done
+            ;;
+        redeploy)
+            info "Redeploying custom service ${service}..."
+            docker compose -p "$project" -f "${app_dir}/docker-compose.yml" build --no-cache 2>&1
+            docker compose -p "$project" -f "${app_dir}/docker-compose.yml" up -d 2>&1
+            success "Custom service ${service} redeployed"
+            ;;
+        *)
+            error "Unknown action '${action}' for custom service ${service}"
+            return 1
+            ;;
+    esac
+}
+
+# ============================================================================
 # Actions
 # ============================================================================
 
@@ -128,6 +229,12 @@ backend_service_action() {
     local svc_container
     svc_container=$(get_container_for_service "$service")
     local container="${prefix}-${svc_container}"
+
+    # Custom service handling -- delegate to docker compose with project name
+    if [[ "$svc_container" == custom:* ]]; then
+        _custom_service_action "$service" "$action" "$prefix"
+        return $?
+    fi
 
     case "$action" in
         start)
@@ -190,11 +297,14 @@ backend_service_action() {
                 local app_short="${service#busibox-}"
                 info "Showing logs for ${app_short} inside core-apps (Ctrl+C to exit)..."
                 echo ""
-                docker exec "$container" supervisorctl tail -f "busibox-${app_short}" 2>/dev/null || error "No logs available"
+                docker exec "$container" supervisorctl tail -f "busibox-${app_short}" 2>&1 || {
+                    warn "supervisorctl tail failed, falling back to log file..."
+                    docker exec "$container" tail -f "/var/log/supervisor/busibox-${app_short}-stdout.log" 2>&1 || echo "No logs available for ${app_short}"
+                }
             else
                 info "Showing logs for ${service} (Ctrl+C to exit)..."
                 echo ""
-                docker logs -f "$container" 2>/dev/null || error "No logs available"
+                docker logs -f "$container" 2>&1 || echo "No logs available for ${service}"
             fi
             ;;
 

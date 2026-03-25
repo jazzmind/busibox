@@ -1080,6 +1080,7 @@ def get_data_schema() -> SchemaManager:
     schema.add_rls("DROP POLICY IF EXISTS shared_docs_select ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS authenticated_docs_select ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS admin_docs_select ON data_files")
+    schema.add_rls("DROP POLICY IF EXISTS admin_docs_update ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS data_files_insert ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS personal_docs_update ON data_files")
     schema.add_rls("DROP POLICY IF EXISTS shared_docs_update ON data_files")
@@ -1127,6 +1128,12 @@ def get_data_schema() -> SchemaManager:
         CREATE POLICY admin_docs_select ON data_files FOR SELECT USING (
             current_setting('app.is_admin', true) = 'true'
         )
+    """)
+    
+    schema.add_rls("""
+        CREATE POLICY admin_docs_update ON data_files FOR UPDATE USING (
+            current_setting('app.is_admin', true) = 'true'
+        ) WITH CHECK (true)
     """)
     
     schema.add_rls("""
@@ -1317,6 +1324,13 @@ def get_data_schema() -> SchemaManager:
     schema.add_rls("DROP POLICY IF EXISTS document_roles_insert ON document_roles")
     schema.add_rls("DROP POLICY IF EXISTS document_roles_update ON document_roles")
     schema.add_rls("DROP POLICY IF EXISTS document_roles_delete ON document_roles")
+    schema.add_rls("DROP POLICY IF EXISTS admin_document_roles_select ON document_roles")
+    schema.add_rls("DROP POLICY IF EXISTS admin_document_roles_insert ON document_roles")
+    schema.add_rls("DROP POLICY IF EXISTS admin_document_roles_update ON document_roles")
+    schema.add_rls("DROP POLICY IF EXISTS admin_document_roles_delete ON document_roles")
+    schema.add_rls("DROP POLICY IF EXISTS owner_document_roles_select ON document_roles")
+    schema.add_rls("DROP POLICY IF EXISTS owner_document_roles_insert ON document_roles")
+    schema.add_rls("DROP POLICY IF EXISTS owner_document_roles_delete ON document_roles")
     
     schema.add_rls("""
         CREATE POLICY document_roles_select ON document_roles FOR SELECT USING (
@@ -1359,6 +1373,28 @@ def get_data_schema() -> SchemaManager:
                     ARRAY[]::uuid[]
                 )
             )
+        )
+    """)
+    
+    # Admin bypass: full CRUD on document_roles when app.is_admin is set
+    schema.add_rls("""
+        CREATE POLICY admin_document_roles_select ON document_roles FOR SELECT USING (
+            current_setting('app.is_admin', true) = 'true'
+        )
+    """)
+    schema.add_rls("""
+        CREATE POLICY admin_document_roles_insert ON document_roles FOR INSERT WITH CHECK (
+            current_setting('app.is_admin', true) = 'true'
+        )
+    """)
+    schema.add_rls("""
+        CREATE POLICY admin_document_roles_update ON document_roles FOR UPDATE USING (
+            current_setting('app.is_admin', true) = 'true'
+        )
+    """)
+    schema.add_rls("""
+        CREATE POLICY admin_document_roles_delete ON document_roles FOR DELETE USING (
+            current_setting('app.is_admin', true) = 'true'
         )
     """)
     

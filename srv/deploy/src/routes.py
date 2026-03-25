@@ -45,6 +45,17 @@ from .core_app_executor import (
     reload_nginx,
     check_core_app_health
 )
+from .custom_service_executor import (
+    deploy_custom_service,
+    deploy_custom_service_lxc,
+    stop_custom_service,
+    stop_custom_service_lxc,
+    restart_custom_service,
+    undeploy_custom_service,
+    undeploy_custom_service_lxc,
+    is_custom_service,
+    is_docker_environment as custom_is_docker,
+)
 from .env_generator import generate_env_vars
 from .nginx_config import NginxConfigurator
 from .config import config
@@ -149,9 +160,16 @@ async def execute_deployment(
     
     # Determine deployment path
     app_is_core = is_core_app(manifest.id)
+    app_is_custom = manifest.appMode == "custom"
     
     try:
-        status.logs.append(f"[{datetime.utcnow().isoformat()}] App type: {'Core (trusted)' if app_is_core else 'User (sandboxed)'}")
+        if app_is_custom:
+            app_type_label = "Custom service"
+        elif app_is_core:
+            app_type_label = "Core (trusted)"
+        else:
+            app_type_label = "User (sandboxed)"
+        status.logs.append(f"[{datetime.utcnow().isoformat()}] App type: {app_type_label}")
         await broadcast_status(deployment_id)
         
         # Step 1: Provision database if required
@@ -183,7 +201,31 @@ async def execute_deployment(
         
         deploy_logs = []
         
-        if app_is_core:
+        if app_is_custom:
+            # Custom service: Deploy via custom_service_executor
+            logger.info(f"Deploying custom service {manifest.name} via custom_service_executor")
+            status.logs.append(f"[{datetime.utcnow().isoformat()}] Using custom_service_executor")
+            await broadcast_status(deployment_id)
+
+            if custom_is_docker():
+                success = await deploy_custom_service(manifest, deploy_config, deploy_logs)
+            else:
+                success = await deploy_custom_service_lxc(manifest, deploy_config, deploy_logs)
+
+            for log in deploy_logs:
+                status.logs.append(f"[{datetime.utcnow().isoformat()}] {log}")
+            await broadcast_status(deployment_id)
+
+            if not success:
+                error_logs = [l for l in deploy_logs if "failed" in l.lower() or "error" in l.lower()]
+                error_detail = error_logs[-1] if error_logs else (deploy_logs[-1] if deploy_logs else "Unknown error")
+                raise Exception(f"Custom service deployment failed: {error_detail}")
+
+            # Register audience with authz if configured
+            if manifest.auth and manifest.auth.audience:
+                await _register_authz_audience(manifest, deploy_config, status, deployment_id)
+
+        elif app_is_core:
             # Core app: Deploy via docker exec into core-apps container (runtime installation)
             logger.info(f"Deploying core app {manifest.name} via core_app_executor")
             status.logs.append(f"[{datetime.utcnow().isoformat()}] Using core_app_executor for runtime deployment")
@@ -262,7 +304,7 @@ async def execute_deployment(
                 )
                 raise Exception(f"Deployment failed: {error_detail}")
         
-        # Add logs to status (core app path - user app logs are attached above)
+        # Add logs to status (core app path -- custom & user app logs are already attached)
         if app_is_core:
             for log in deploy_logs:
                 status.logs.append(f"[{datetime.utcnow().isoformat()}] {log}")
@@ -271,7 +313,8 @@ async def execute_deployment(
         status.progress = 80
         await broadcast_status(deployment_id)
         
-        # Step 3: Configure nginx routing (only for user apps - core apps handle their own nginx)
+        # Step 3: Configure nginx routing
+        # Core apps handle their own nginx via Ansible.
         if not app_is_core:
             status.status = 'configuring_nginx'
             status.currentStep = 'Configuring nginx'
@@ -318,6 +361,55 @@ async def execute_deployment(
         status.completedAt = datetime.utcnow()
         status.logs.append(f"[{datetime.utcnow().isoformat()}] ❌ Error: {str(e)}")
         await broadcast_status(deployment_id)
+
+
+async def _register_authz_audience(
+    manifest: BusiboxManifest,
+    deploy_config: DeploymentConfig,
+    status: DeploymentStatus,
+    deployment_id: str,
+) -> None:
+    """Register the custom service's audience with the authz service.
+
+    Uses the authz POST /api/v1/apps endpoint which is idempotent --
+    if the app is already registered, this is a no-op.
+    """
+    import httpx
+
+    audience = manifest.auth.audience
+    status.logs.append(f"[{datetime.utcnow().isoformat()}] Registering audience '{audience}' with authz...")
+    await broadcast_status(deployment_id)
+
+    authz_url = config.authz_url
+    app_data = {
+        "app_id": manifest.id,
+        "name": manifest.name,
+        "description": manifest.description,
+        "default_path": manifest.defaultPath,
+        "audiences": [audience],
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{authz_url}/api/v1/apps",
+                json=app_data,
+                timeout=15.0,
+            )
+            if response.status_code in (200, 201, 409):
+                status.logs.append(
+                    f"[{datetime.utcnow().isoformat()}] Audience '{audience}' registered with authz"
+                )
+            else:
+                status.logs.append(
+                    f"[{datetime.utcnow().isoformat()}] Warning: authz registration returned {response.status_code}: {response.text[:200]}"
+                )
+    except Exception as e:
+        status.logs.append(
+            f"[{datetime.utcnow().isoformat()}] Warning: Could not register audience with authz: {e}"
+        )
+
+    await broadcast_status(deployment_id)
 
 
 async def broadcast_status(deployment_id: str):
@@ -645,7 +737,10 @@ async def list_local_dev_apps(
                     manifest = json.load(f)
                 
                 # Basic validation - must have required fields
-                required_fields = ['name', 'id', 'version', 'defaultPath', 'defaultPort']
+                if manifest.get('appMode') == 'custom':
+                    required_fields = ['name', 'id', 'version', 'defaultPath']
+                else:
+                    required_fields = ['name', 'id', 'version', 'defaultPath', 'defaultPort']
                 if all(f in manifest for f in required_fields):
                     apps.append(LocalDevApp(
                         dirName=entry,
@@ -757,7 +852,11 @@ async def validate_local_dev(
         )
     
     # Basic manifest validation
-    required_fields = ['name', 'id', 'version', 'defaultPath', 'defaultPort', 'healthEndpoint']
+    app_mode = manifest.get('appMode', 'frontend')
+    if app_mode == 'custom':
+        required_fields = ['name', 'id', 'version', 'defaultPath', 'services', 'auth']
+    else:
+        required_fields = ['name', 'id', 'version', 'defaultPath', 'defaultPort', 'healthEndpoint']
     missing = [f for f in required_fields if f not in manifest]
     if missing:
         return LocalDevValidateResponse(
@@ -909,12 +1008,36 @@ async def undeploy_app(
     
     logger.info(f"Starting undeploy for {app_id} by user {token_payload.get('user_id')}")
     
-    # Determine if core app or user app
+    # Determine if core app, custom service, or user app
     app_is_core = is_core_app(app_id)
-    logs.append(f"App type: {'Core (trusted)' if app_is_core else 'User (sandboxed)'}")
+    app_is_custom = is_custom_service(app_id)
+
+    if app_is_custom:
+        app_type_label = "Custom service"
+    elif app_is_core:
+        app_type_label = "Core (trusted)"
+    else:
+        app_type_label = "User (sandboxed)"
+    logs.append(f"App type: {app_type_label}")
     
     try:
-        if app_is_core:
+        if app_is_custom:
+            logger.info(f"Undeploying custom service {app_id}")
+            logs.append("Using custom_service_executor")
+            
+            if custom_is_docker():
+                success = await undeploy_custom_service(app_id, logs)
+            else:
+                success = await undeploy_custom_service_lxc(app_id, logs)
+            
+            return UndeployResponse(
+                success=success,
+                appId=app_id,
+                logs=logs,
+                error=None if success else "Undeploy failed. Check logs."
+            )
+
+        elif app_is_core:
             # Core apps: Use core_app_executor
             logger.info(f"Undeploying core app {app_id} via core_app_executor")
             logs.append("Using core_app_executor for core app")
@@ -994,7 +1117,13 @@ async def stop_app_endpoint(
     logger.info(f"Stopping app {app_id} by user {token_payload.get('user_id')}")
     
     try:
-        success = await container_stop_app(app_id, logs)
+        if is_custom_service(app_id):
+            if custom_is_docker():
+                success = await stop_custom_service(app_id, logs)
+            else:
+                success = await stop_custom_service_lxc(app_id, logs)
+        else:
+            success = await container_stop_app(app_id, logs)
         
         return {
             "success": success,

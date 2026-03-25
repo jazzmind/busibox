@@ -22,6 +22,18 @@ struct Cli {
     /// Path to the busibox repository root
     #[arg(short, long)]
     root: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(clap::Subcommand)]
+enum Command {
+    /// Import a profile from a .busibox-export file
+    Import {
+        /// Path to the .busibox-export file
+        file: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -39,6 +51,11 @@ fn main() -> Result<()> {
         .root
         .or_else(|| modules::profile::find_repo_root().ok())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    // Handle subcommands that run without the TUI
+    if let Some(Command::Import { file }) = cli.command {
+        return handle_import_profile(&repo_root, &file);
+    }
 
     let mut app = App::new(repo_root.clone());
 
@@ -436,11 +453,21 @@ fn main() -> Result<()> {
             }
         }
 
-        // Handle profile export (needs TUI suspended for password prompts)
+        // Handle profile export to remote host (needs TUI suspended for password prompts)
         if app.pending_profile_export {
             app.pending_profile_export = false;
             tui::suspend()?;
             handle_profile_export(&app);
+            eprintln!("\nPress Enter to continue...");
+            let _ = std::io::stdin().read_line(&mut String::new());
+            terminal = tui::resume()?;
+        }
+
+        // Handle profile export to local file (needs TUI suspended for password prompts)
+        if app.pending_local_export {
+            app.pending_local_export = false;
+            tui::suspend()?;
+            handle_local_profile_export(&app);
             eprintln!("\nPress Enter to continue...");
             let _ = std::io::stdin().read_line(&mut String::new());
             terminal = tui::resume()?;
@@ -1616,6 +1643,293 @@ fn create_ansible_vault(app: &App, vault_pw: &str, vault_prefix: &str) {
             }
         }
     }
+}
+
+/// A portable profile export bundle saved as a local file.
+/// Contains the profile config and secrets, all protected by a transfer password.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ProfileExportBundle {
+    version: u32,
+    profile_id: String,
+    profile: modules::profile::Profile,
+    /// The Ansible vault password, re-encrypted with the transfer password.
+    vault_key: modules::vault::EncryptedVault,
+    /// The Ansible vault file contents (already ansible-vault encrypted),
+    /// additionally AES-encrypted with the transfer password for transport security.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ansible_vault: Option<modules::vault::EncryptedVault>,
+}
+
+/// Export the active profile + encrypted vault to a local file protected by a transfer password.
+fn handle_local_profile_export(app: &App) {
+    use modules::vault;
+
+    let (profile_id, profile) = match app.active_profile() {
+        Some((id, p)) => (id.to_string(), p.clone()),
+        None => {
+            eprintln!("No active profile.");
+            return;
+        }
+    };
+
+    let vault_pw = match &app.vault_password {
+        Some(pw) => pw.clone(),
+        None => {
+            eprintln!("Vault is not unlocked. Select the profile first to unlock.");
+            return;
+        }
+    };
+
+    eprintln!("\n╔══════════════════════════════════════════════════════╗");
+    eprintln!("║            Export Profile to File                     ║");
+    eprintln!("╚══════════════════════════════════════════════════════╝\n");
+    eprintln!("Profile: {} ({})", profile.label, profile_id);
+    eprintln!("This creates a password-protected export file you can");
+    eprintln!("transfer to another busibox installation.\n");
+
+    let transfer_pw = match vault::prompt_new_password("Transfer password: ") {
+        Ok(pw) => pw,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return;
+        }
+    };
+
+    // Re-encrypt the vault password with the transfer password
+    let vault_key_enc = match vault::encrypt_vault_password(&vault_pw, &transfer_pw) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Error encrypting vault key: {e}");
+            return;
+        }
+    };
+
+    // Bundle the Ansible vault file if it exists
+    let vault_prefix = profile
+        .vault_prefix
+        .clone()
+        .unwrap_or_else(|| profile_id.clone());
+    let vault_file_path = app
+        .repo_root
+        .join("provision/ansible/roles/secrets/vars")
+        .join(format!("vault.{vault_prefix}.yml"));
+
+    let ansible_vault_enc = if vault_file_path.exists() {
+        match std::fs::read_to_string(&vault_file_path) {
+            Ok(contents) => match vault::encrypt_vault_password(&contents, &transfer_pw) {
+                Ok(enc) => {
+                    eprintln!("✓ Including Ansible vault file");
+                    Some(enc)
+                }
+                Err(e) => {
+                    eprintln!("Warning: could not encrypt vault file: {e}");
+                    None
+                }
+            },
+            Err(e) => {
+                eprintln!(
+                    "Warning: could not read vault file {}: {e}",
+                    vault_file_path.display()
+                );
+                None
+            }
+        }
+    } else {
+        eprintln!("Note: no Ansible vault file found at {}", vault_file_path.display());
+        None
+    };
+
+    let bundle = ProfileExportBundle {
+        version: 1,
+        profile_id: profile_id.clone(),
+        profile,
+        vault_key: vault_key_enc,
+        ansible_vault: ansible_vault_enc,
+    };
+
+    let json = match serde_json::to_string_pretty(&bundle) {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("Error serializing export bundle: {e}");
+            return;
+        }
+    };
+
+    let filename = format!("{profile_id}.busibox-export");
+    let export_path = app.repo_root.join(&filename);
+
+    match std::fs::write(&export_path, format!("{json}\n")) {
+        Ok(()) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(
+                    &export_path,
+                    std::fs::Permissions::from_mode(0o600),
+                );
+            }
+            eprintln!("\n✓ Profile exported to: {}", export_path.display());
+            eprintln!("  Share this file and the transfer password with the recipient.");
+            eprintln!("  They can import it with: busibox import {filename}");
+        }
+        Err(e) => {
+            eprintln!("Error writing export file: {e}");
+        }
+    }
+}
+
+/// Import a profile from a .busibox-export file.
+/// Runs as a CLI subcommand (no TUI needed).
+fn handle_import_profile(repo_root: &std::path::Path, file: &std::path::Path) -> Result<()> {
+    use modules::{profile, vault};
+
+    eprintln!("\n╔══════════════════════════════════════════════════════╗");
+    eprintln!("║            Import Profile from File                   ║");
+    eprintln!("╚══════════════════════════════════════════════════════╝\n");
+
+    // Read and parse the bundle
+    let contents = std::fs::read_to_string(file)
+        .map_err(|e| color_eyre::eyre::eyre!("Cannot read {}: {e}", file.display()))?;
+    let bundle: ProfileExportBundle = serde_json::from_str(&contents)
+        .map_err(|e| color_eyre::eyre::eyre!("Invalid export file: {e}"))?;
+
+    if bundle.version != 1 {
+        return Err(color_eyre::eyre::eyre!(
+            "Unsupported export version: {}",
+            bundle.version
+        ));
+    }
+
+    eprintln!("Profile:     {} ({})", bundle.profile.label, bundle.profile_id);
+    eprintln!("Environment: {}", bundle.profile.environment);
+    eprintln!("Backend:     {}", bundle.profile.backend);
+    if bundle.profile.remote {
+        if let Some(ref host) = bundle.profile.remote_host {
+            eprintln!("Remote host: {}", host);
+        }
+    }
+    eprintln!(
+        "Vault file:  {}",
+        if bundle.ansible_vault.is_some() {
+            "included"
+        } else {
+            "not included"
+        }
+    );
+    eprintln!();
+
+    // Check for existing profile
+    let profiles = profile::load_profiles(repo_root)?;
+    if profiles.profiles.contains_key(&bundle.profile_id) {
+        eprint!(
+            "Profile '{}' already exists. Overwrite? (y/N) ",
+            bundle.profile_id
+        );
+        let mut answer = String::new();
+        let _ = std::io::stdin().read_line(&mut answer);
+        if !answer.trim().eq_ignore_ascii_case("y") {
+            eprintln!("Import cancelled.");
+            return Ok(());
+        }
+        eprintln!();
+    }
+
+    // Prompt for the transfer password to decrypt the bundle
+    let transfer_pw = vault::prompt_password("Transfer password: ")
+        .map_err(|e| color_eyre::eyre::eyre!("Failed to read password: {e}"))?;
+
+    // Decrypt the vault password
+    let vault_pw = vault::decrypt_vault_password(&bundle.vault_key, &transfer_pw)
+        .map_err(|_| color_eyre::eyre::eyre!("Decryption failed — wrong transfer password?"))?;
+
+    eprintln!("✓ Transfer password accepted\n");
+
+    // Prompt for a new local master password
+    eprintln!("Choose a master password for this profile on your machine.");
+    eprintln!("You'll need this password each time you deploy.\n");
+
+    let master_pw = vault::prompt_new_password("New master password: ")
+        .map_err(|e| color_eyre::eyre::eyre!("Failed to read password: {e}"))?;
+
+    // Re-encrypt the vault password with the local master password
+    let local_enc = vault::encrypt_vault_password(&vault_pw, &master_pw)
+        .map_err(|e| color_eyre::eyre::eyre!("Encryption failed: {e}"))?;
+
+    let key_path = vault::vault_key_path(&bundle.profile_id)?;
+    vault::save_encrypted_vault(&key_path, &local_enc)?;
+    eprintln!("✓ Vault key saved: {}\n", key_path.display());
+
+    // Write the Ansible vault file if included
+    if let Some(ref ansible_enc) = bundle.ansible_vault {
+        let vault_prefix = bundle
+            .profile
+            .vault_prefix
+            .as_deref()
+            .unwrap_or(&bundle.profile_id);
+        let vault_dir = repo_root.join("provision/ansible/roles/secrets/vars");
+        let vault_path = vault_dir.join(format!("vault.{vault_prefix}.yml"));
+
+        if vault_path.exists() {
+            eprint!(
+                "Ansible vault file already exists at {}. Overwrite? (y/N) ",
+                vault_path.display()
+            );
+            let mut answer = String::new();
+            let _ = std::io::stdin().read_line(&mut answer);
+            if !answer.trim().eq_ignore_ascii_case("y") {
+                eprintln!("  Skipping vault file (keeping existing).");
+            } else {
+                write_ansible_vault_from_bundle(ansible_enc, &transfer_pw, &vault_path)?;
+            }
+        } else {
+            std::fs::create_dir_all(&vault_dir)?;
+            write_ansible_vault_from_bundle(ansible_enc, &transfer_pw, &vault_path)?;
+        }
+    } else {
+        eprintln!("Note: no Ansible vault file in export bundle.");
+        eprintln!("  You may need to set up secrets manually or run a fresh install.\n");
+    }
+
+    // Register the profile
+    let set_active = if profiles.profiles.is_empty() {
+        true
+    } else {
+        eprint!("Set as active profile? (Y/n) ");
+        let mut answer = String::new();
+        let _ = std::io::stdin().read_line(&mut answer);
+        !answer.trim().eq_ignore_ascii_case("n")
+    };
+
+    profile::upsert_profile(repo_root, &bundle.profile_id, bundle.profile, set_active)?;
+
+    eprintln!("✓ Profile '{}' imported successfully!", bundle.profile_id);
+    if set_active {
+        eprintln!("  Set as active profile.");
+    }
+    eprintln!("\nRun `busibox` to start using this profile.\n");
+
+    Ok(())
+}
+
+/// Decrypt the AES-wrapped Ansible vault file contents from an export bundle and write to disk.
+fn write_ansible_vault_from_bundle(
+    ansible_enc: &modules::vault::EncryptedVault,
+    transfer_pw: &str,
+    dest: &std::path::Path,
+) -> Result<()> {
+    let vault_contents = modules::vault::decrypt_vault_password(ansible_enc, transfer_pw)
+        .map_err(|e| color_eyre::eyre::eyre!("Failed to decrypt Ansible vault from bundle: {e}"))?;
+
+    modules::profile::atomic_write(dest, &vault_contents)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o600));
+    }
+
+    eprintln!("✓ Ansible vault file written: {}\n", dest.display());
+    Ok(())
 }
 
 /// Export the active profile's vault key to a remote host with a new master password.

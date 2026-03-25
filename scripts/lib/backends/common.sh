@@ -154,9 +154,36 @@ get_container_for_service() {
         build-server) echo "build-server" ;;
         registry) echo "registry" ;;
 
-        # Unknown
-        *) echo "" ;;
+        # Unknown -- check if it's a custom service (compose project exists)
+        *)
+            if _is_custom_service "$service"; then
+                echo "custom:${service}"
+            else
+                echo ""
+            fi
+            ;;
     esac
+}
+
+# Check if a service name corresponds to a deployed custom service.
+# Custom services are Docker Compose projects under /srv/custom-services/
+# or registered in the deploy-api custom services registry.
+_is_custom_service() {
+    local service="$1"
+    local prefix="${CONTAINER_PREFIX:-dev}"
+    local project="${prefix}-custom-${service}"
+
+    # Check for a local custom service directory
+    if [[ -d "/srv/custom-services/${service}" ]]; then
+        return 0
+    fi
+
+    # Check if any Docker containers exist for this compose project
+    if docker ps -a --filter "label=com.docker.compose.project=${project}" --format '{{.Names}}' 2>/dev/null | head -1 | grep -q .; then
+        return 0
+    fi
+
+    return 1
 }
 
 # Check if service name is valid
