@@ -1003,7 +1003,7 @@ configure_github_token() {
             ;;
         3)
             # Clear from vault (source of truth for secrets)
-            if command -v yq &>/dev/null && [[ -f "$VAULT_FILE" ]]; then
+            if [[ -f "$VAULT_FILE" ]]; then
                 write_vault_secret "secrets.github.personal_access_token" "" 2>/dev/null || true
             fi
             

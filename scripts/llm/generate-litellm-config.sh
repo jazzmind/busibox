@@ -34,40 +34,28 @@ OUTPUT_FILE="${REPO_ROOT}/config/litellm-config.yaml"
 BACKEND="${1:-${LLM_BACKEND:-$(bash "${SCRIPT_DIR}/detect-backend.sh" 2>/dev/null || echo "mlx")}}"
 ENVIRONMENT="${ENVIRONMENT:-${NODE_ENV:-development}}"
 
-# Check if yq is available, fall back to Python if not
+# Parse YAML using Python (PyYAML is bundled with Ansible)
 parse_yaml() {
     local file="$1"
     local query="$2"
     
-    if command -v yq &>/dev/null; then
-        yq -r "$query" "$file" 2>/dev/null || echo ""
-    else
-        # Use Python as fallback
-        python3 -c "
-import yaml
-import sys
-
-with open('$file', 'r') as f:
+    python3 -c "
+import yaml, sys
+with open(sys.argv[1]) as f:
     data = yaml.safe_load(f)
-
-# Navigate the query path
-query = '''$query'''.strip('.')
-parts = query.split('.')
+parts = sys.argv[2].strip('.').split('.')
 result = data
 for part in parts:
     if result is None:
         break
     if part.startswith('[') and part.endswith(']'):
-        # Array index
         idx = int(part[1:-1])
         result = result[idx] if isinstance(result, list) and len(result) > idx else None
     else:
         result = result.get(part) if isinstance(result, dict) else None
-
 if result is not None:
     print(result)
-" 2>/dev/null || echo ""
-    fi
+" "$file" "$query" 2>/dev/null || echo ""
 }
 
 # Get model_name from available_models for a given key

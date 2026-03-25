@@ -266,11 +266,7 @@ success "SSL certificates merged into vault"
 # Show preview (with redacted private key)
 info "Preview of ssl_certificates section (private key redacted):"
 echo "---"
-if command -v yq &> /dev/null; then
-    yq '.secrets.ssl_certificates' "$WORKING_VAULT" 2>/dev/null | sed '/private_key:/,/^[a-z]/ { /private_key:/!{ /^[a-z]/!{ s/.*/      [REDACTED]/; }; }; }' || cat "$WORKING_VAULT" | grep -A 20 "ssl_certificates:" | head -25
-else
-    cat "$WORKING_VAULT" | grep -A 20 "ssl_certificates:" | head -25 | sed '/private_key:/,/^  [a-z]/ { /private_key:/!{ /^  [a-z]/!{ s/.*/      [REDACTED]/; }; }; }'
-fi
+grep -A 20 "ssl_certificates:" "$WORKING_VAULT" | head -25 | sed '/private_key:/,/^  [a-z]/ { /private_key:/!{ /^  [a-z]/!{ s/.*/      [REDACTED]/; }; }; }'
 echo "---"
 
 # Confirm

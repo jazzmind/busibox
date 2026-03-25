@@ -17,7 +17,6 @@ FROM python:3.11-slim
 
 # Pinned dependency versions
 ARG ANSIBLE_VERSION=10.7.0
-ARG YQ_VERSION=4.44.3
 ARG TARGETARCH
 
 # Install system dependencies
@@ -46,12 +45,7 @@ RUN install -m 0755 -d /etc/apt/keyrings \
         docker-compose-plugin \
     && rm -rf /var/lib/apt/lists/*
 
-# Install yq (YAML processor)
-RUN ARCH=$(case ${TARGETARCH} in amd64) echo "amd64" ;; arm64) echo "arm64" ;; *) echo "amd64" ;; esac) \
-    && curl -fsSL "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_${ARCH}" -o /usr/local/bin/yq \
-    && chmod +x /usr/local/bin/yq
-
-# Install Ansible and Python dependencies
+# Install Ansible and Python dependencies (PyYAML is bundled with Ansible)
 RUN pip install --no-cache-dir \
     ansible==${ANSIBLE_VERSION} \
     jmespath

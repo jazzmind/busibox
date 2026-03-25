@@ -20,7 +20,7 @@
 #   ensure_vault_access
 #   get_vault_secret "secrets.postgresql.password"
 #
-# Dependencies: ansible-vault, yq (optional, for structured reading)
+# Dependencies: ansible-vault, python3 + PyYAML (bundled with Ansible)
 
 # Base paths (relative to REPO_ROOT)
 _VAULT_BASE_DIR="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}/provision/ansible/roles/secrets/vars"
@@ -205,84 +205,91 @@ _vault_success() {
     fi
 }
 
-# Auto-install yq if not present (Linux only)
-ensure_yq_installed() {
-    # Check if yq is already available
-    if command -v yq &>/dev/null; then
-        return 0
-    fi
-    
-    _vault_info "yq not found, attempting to install..."
-    
-    # Detect OS
-    local os_type=$(uname -s)
-    
-    if [[ "$os_type" == "Linux" ]]; then
-        # Linux - use wget/curl to install from GitHub releases
-        local yq_version="v4.35.2"
-        local yq_binary="yq_linux_amd64"
-        local install_dir="/usr/local/bin"
-        
-        # Check if we have root access
-        if [[ $EUID -ne 0 ]]; then
-            _vault_error "Root access required to install yq to /usr/local/bin"
-            _vault_error "Please run: sudo wget https://github.com/mikefarah/yq/releases/download/${yq_version}/${yq_binary} -O /usr/local/bin/yq && sudo chmod +x /usr/local/bin/yq"
-            return 1
-        fi
-        
-        # Try to download and install
-        if command -v wget &>/dev/null; then
-            if wget -q "https://github.com/mikefarah/yq/releases/download/${yq_version}/${yq_binary}" -O "${install_dir}/yq" 2>/dev/null; then
-                chmod +x "${install_dir}/yq"
-                _vault_success "yq installed successfully to ${install_dir}/yq"
-                return 0
-            fi
-        elif command -v curl &>/dev/null; then
-            if curl -sL "https://github.com/mikefarah/yq/releases/download/${yq_version}/${yq_binary}" -o "${install_dir}/yq" 2>/dev/null; then
-                chmod +x "${install_dir}/yq"
-                _vault_success "yq installed successfully to ${install_dir}/yq"
-                return 0
-            fi
-        else
-            _vault_error "Neither wget nor curl found. Cannot auto-install yq."
-            _vault_error "Please install manually: wget https://github.com/mikefarah/yq/releases/download/${yq_version}/${yq_binary} -O /usr/local/bin/yq && chmod +x /usr/local/bin/yq"
-            return 1
-        fi
-        
-        _vault_error "Failed to download yq from GitHub"
-        _vault_error "Please install manually: wget https://github.com/mikefarah/yq/releases/download/${yq_version}/${yq_binary} -O /usr/local/bin/yq && chmod +x /usr/local/bin/yq"
-        return 1
-        
-    elif [[ "$os_type" == "Darwin" ]]; then
-        # macOS - try homebrew first, then direct download
-        if command -v brew &>/dev/null; then
-            _vault_info "Installing yq via Homebrew..."
-            if brew install --quiet yq 2>/dev/null; then
-                _vault_success "yq installed successfully via Homebrew"
-                return 0
-            fi
-        fi
-        # Direct download fallback for macOS
-        local yq_version="v4.35.2"
-        local arch="amd64"
-        [[ "$(uname -m)" == "arm64" ]] && arch="arm64"
-        local yq_binary="yq_darwin_${arch}"
-        local install_dir="/usr/local/bin"
-        if command -v curl &>/dev/null; then
-            if curl -sL "https://github.com/mikefarah/yq/releases/download/${yq_version}/${yq_binary}" -o "${install_dir}/yq" 2>/dev/null; then
-                chmod +x "${install_dir}/yq"
-                _vault_success "yq installed successfully to ${install_dir}/yq"
-                return 0
-            fi
-        fi
-        _vault_error "yq is required for writing vault secrets."
-        _vault_error "Install with: brew install yq"
-        return 1
-    else
-        _vault_error "yq is required for writing vault secrets."
-        _vault_error "Please install from: https://github.com/mikefarah/yq/releases"
-        return 1
-    fi
+# Python-based YAML helpers (replaces yq dependency)
+# PyYAML is bundled with Ansible, so it's always available.
+
+# Read a value from a YAML file using a dot-notation path.
+# Usage: _yaml_read <file> <dot.path>  → prints the value or "null"
+_yaml_read() {
+    local file="$1"
+    local dot_path="$2"
+    python3 -c "
+import yaml, sys, os
+fpath = sys.argv[1]
+if not os.path.exists(fpath):
+    print('null')
+    sys.exit(0)
+with open(fpath) as f:
+    data = yaml.safe_load(f)
+keys = sys.argv[2].strip('.').split('.')
+for k in keys:
+    if isinstance(data, dict) and k in data:
+        data = data[k]
+    else:
+        print('null')
+        sys.exit(0)
+print(data if data is not None else 'null')
+" "$file" "$dot_path" 2>/dev/null || echo "null"
+}
+
+# Write one or more key=value pairs into a YAML file (in-place).
+# Creates the file if it doesn't exist. Pairs are passed via stdin
+# (one per line) to avoid shell quoting issues.
+# Usage: _yaml_write <file> "dot.path=value" ["dot.path2=value2" ...]
+_yaml_write() {
+    local file="$1"
+    shift
+    printf '%s\n' "$@" | python3 -c "
+import yaml, sys, os
+
+fpath = sys.argv[1]
+try:
+    if os.path.exists(fpath):
+        with open(fpath) as f:
+            data = yaml.safe_load(f) or {}
+    else:
+        os.makedirs(os.path.dirname(fpath) or '.', exist_ok=True)
+        data = {}
+
+    for line in sys.stdin:
+        line = line.rstrip('\n')
+        if not line:
+            continue
+        key_path, _, value = line.partition('=')
+        keys = key_path.strip('.').split('.')
+        node = data
+        for k in keys[:-1]:
+            if k not in node or not isinstance(node[k], dict):
+                node[k] = {}
+            node = node[k]
+        node[keys[-1]] = value
+
+    with open(fpath, 'w') as f:
+        yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False, width=200)
+except Exception as e:
+    print(f'_yaml_write error: {e}', file=sys.stderr)
+    sys.exit(1)
+" "$file"
+}
+
+# List all leaf key paths in a YAML file (dot-notation).
+# Usage: _yaml_keys <file>  → prints one key per line
+_yaml_keys() {
+    local file="$1"
+    python3 -c "
+import yaml, sys
+def walk(data, prefix=''):
+    if isinstance(data, dict):
+        for k, v in data.items():
+            path = f'{prefix}.{k}' if prefix else k
+            yield from walk(v, path)
+    else:
+        yield prefix
+with open(sys.argv[1]) as f:
+    data = yaml.safe_load(f) or {}
+for key in sorted(walk(data)):
+    print(key)
+" "$file" 2>/dev/null
 }
 
 # Check if ansible-vault is available (activate busibox venv or probe common locations)
@@ -573,29 +580,20 @@ get_vault_secret() {
         return 1
     fi
     
-    # Convert dot notation to yq path (e.g., secrets.postgresql.password -> .secrets.postgresql.password)
-    local yq_path=".$key_path"
     local _result=""
     
-    # Check if yq is available
-    if command -v yq &>/dev/null; then
-        if is_vault_encrypted; then
-            _result=$(ansible-vault view "$VAULT_FILE" 2>/dev/null | yq -r "$yq_path" 2>/dev/null)
-        else
-            _result=$(yq -r "$yq_path" "$VAULT_FILE" 2>/dev/null)
+    if is_vault_encrypted; then
+        # Decrypt to temp file, read with Python, clean up
+        local _tmpf
+        _tmpf=$(mktemp)
+        if ansible-vault decrypt --vault-password-file="${ANSIBLE_VAULT_PASSWORD_FILE}" --output="$_tmpf" "$VAULT_FILE" 2>/dev/null; then
+            _result=$(_yaml_read "$_tmpf" "$key_path")
         fi
+        rm -f "$_tmpf"
     else
-        # Fallback: use grep/sed for simple key extraction
-        # This only works for simple keys, not nested structures
-        local simple_key="${key_path##*.}"
-        if is_vault_encrypted; then
-            _result=$(ansible-vault view "$VAULT_FILE" 2>/dev/null | grep -E "^[[:space:]]*${simple_key}:" | head -1 | sed 's/.*:[[:space:]]*//' | tr -d '"'"'")
-        else
-            _result=$(grep -E "^[[:space:]]*${simple_key}:" "$VAULT_FILE" | head -1 | sed 's/.*:[[:space:]]*//' | tr -d '"'"'")
-        fi
+        _result=$(_yaml_read "$VAULT_FILE" "$key_path")
     fi
 
-    # yq returns "null" for missing keys or when ansible-vault fails; treat as empty
     if [[ "$_result" == "null" || -z "$_result" ]]; then
         return 1
     fi
@@ -760,7 +758,6 @@ generate_secret() {
 
 # Write a secret to the vault
 # Usage: write_vault_secret "secrets.postgresql.password" "my-password"
-# Note: Requires yq to be installed
 write_vault_secret() {
     local key_path="$1"
     local value="$2"
@@ -771,15 +768,9 @@ write_vault_secret() {
         return 1
     fi
     
-    # Check if yq is available (required for writing)
-    if ! ensure_yq_installed; then
-        return 1
-    fi
-    
     local was_encrypted=false
     local tmp_file=""
     
-    # Check if vault is encrypted
     if is_vault_encrypted; then
         was_encrypted=true
         
@@ -788,7 +779,6 @@ write_vault_secret() {
             return 1
         fi
         
-        # Decrypt to temp file
         tmp_file=$(mktemp)
         if ! ansible-vault decrypt --vault-password-file="$vault_pass_file" --output="$tmp_file" "$VAULT_FILE" 2>/dev/null; then
             _vault_error "Failed to decrypt vault"
@@ -799,19 +789,13 @@ write_vault_secret() {
         tmp_file="$VAULT_FILE"
     fi
     
-    # Convert dot notation to yq path (e.g., secrets.postgresql.password -> .secrets.postgresql.password)
-    local yq_path=".$key_path"
-    
-    # Update the value using yq
-    if ! yq -i "$yq_path = \"$value\"" "$tmp_file" 2>/dev/null; then
+    if ! _yaml_write "$tmp_file" "${key_path}=${value}"; then
         _vault_error "Failed to update vault secret: $key_path"
         [[ "$was_encrypted" == "true" ]] && rm -f "$tmp_file"
         return 1
     fi
     
-    # Re-encrypt if it was encrypted
     if [[ "$was_encrypted" == "true" ]]; then
-        # Copy back and encrypt in place to avoid vault-id conflicts
         cp "$tmp_file" "$VAULT_FILE"
         rm -f "$tmp_file"
         if ! ansible-vault encrypt --vault-password-file="$vault_pass_file" --encrypt-vault-id default "$VAULT_FILE" 2>/dev/null; then
@@ -835,12 +819,6 @@ update_vault_secrets() {
         return 1
     fi
     
-    # Check if yq is available (required for writing)
-    if ! ensure_yq_installed; then
-        return 1
-    fi
-    
-    # Check if vault is encrypted
     if is_vault_encrypted; then
         was_encrypted=true
         
@@ -849,7 +827,6 @@ update_vault_secrets() {
             return 1
         fi
         
-        # Decrypt to temp file
         tmp_file=$(mktemp)
         if ! ansible-vault decrypt --vault-password-file="$vault_pass_file" --output="$tmp_file" "$VAULT_FILE" 2>/dev/null; then
             _vault_error "Failed to decrypt vault"
@@ -860,22 +837,13 @@ update_vault_secrets() {
         tmp_file="$VAULT_FILE"
     fi
     
-    # Process each key=value pair
-    for pair in "$@"; do
-        local key_path="${pair%%=*}"
-        local value="${pair#*=}"
-        local yq_path=".$key_path"
-        
-        if ! yq -i "$yq_path = \"$value\"" "$tmp_file" 2>/dev/null; then
-            _vault_error "Failed to update vault secret: $key_path"
-            [[ "$was_encrypted" == "true" ]] && rm -f "$tmp_file"
-            return 1
-        fi
-    done
+    if ! _yaml_write "$tmp_file" "$@"; then
+        _vault_error "Failed to update vault secrets"
+        [[ "$was_encrypted" == "true" ]] && rm -f "$tmp_file"
+        return 1
+    fi
     
-    # Re-encrypt if it was encrypted, OR encrypt if password file is available
     if [[ "$was_encrypted" == "true" ]]; then
-        # Copy back and encrypt in place to avoid vault-id conflicts
         cp "$tmp_file" "$VAULT_FILE"
         rm -f "$tmp_file"
         if ! ansible-vault encrypt --vault-password-file="$vault_pass_file" --encrypt-vault-id default "$VAULT_FILE" 2>/dev/null; then
@@ -883,7 +851,6 @@ update_vault_secrets() {
             return 1
         fi
     elif [[ -n "$vault_pass_file" ]] && [[ -f "$vault_pass_file" ]]; then
-        # Vault wasn't encrypted but we have a password file - encrypt it now
         if ! ansible-vault encrypt --vault-password-file="$vault_pass_file" --encrypt-vault-id default "$VAULT_FILE" 2>/dev/null; then
             _vault_error "Failed to encrypt vault"
             return 1

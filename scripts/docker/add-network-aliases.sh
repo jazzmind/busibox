@@ -52,7 +52,7 @@ add_aliases() {
     fi
     
     # Find the networks section for this service and add aliases
-    # This is a simplified approach - for production, use yq or similar tool
+    # Uses Python's yaml module for safe YAML manipulation
     python3 <<EOF
 import yaml
 import sys

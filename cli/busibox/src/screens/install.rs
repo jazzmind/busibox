@@ -2360,27 +2360,17 @@ fi
                         echo "WARNING: jq not available — health checks may not work correctly"
                     fi
 
-                    # Ensure yq is available (needed by vault secret management)
-                    if ! command -v yq &>/dev/null; then
-                        echo "Installing yq..."
-                        if command -v brew &>/dev/null; then
-                            brew install --quiet yq 2>&1
-                        elif [ "$(uname -s)" = "Linux" ]; then
-                            YQ_VERSION="v4.35.2"
-                            YQ_ARCH="amd64"
-                            [ "$(uname -m)" = "aarch64" ] && YQ_ARCH="arm64"
-                            YQ_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${YQ_ARCH}"
-                            if command -v curl &>/dev/null; then
-                                curl -sL "$YQ_URL" -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq 2>&1
-                            elif command -v wget &>/dev/null; then
-                                wget -q "$YQ_URL" -O /usr/local/bin/yq && chmod +x /usr/local/bin/yq 2>&1
-                            fi
-                        fi
-                    fi
-                    if command -v yq &>/dev/null; then
-                        echo "✓ yq: $(yq --version 2>&1 | head -1)"
+                    # Verify PyYAML is available (used by vault YAML operations)
+                    if python3 -c "import yaml" 2>/dev/null; then
+                        echo "✓ PyYAML: available"
                     else
-                        echo "WARNING: yq not available — vault secret auto-generation may not work"
+                        echo "Installing PyYAML..."
+                        "$BUSIBOX_VENV/bin/pip" install --quiet pyyaml 2>&1 || pip3 install --quiet pyyaml 2>&1 || true
+                        if python3 -c "import yaml" 2>/dev/null; then
+                            echo "✓ PyYAML: installed"
+                        else
+                            echo "WARNING: PyYAML not available — vault operations may not work"
+                        fi
                     fi
 
                     echo "✓ Prerequisites installed"

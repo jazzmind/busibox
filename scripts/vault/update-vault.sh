@@ -17,7 +17,7 @@
 #
 # REQUIREMENTS:
 #   - ansible-vault command
-#   - yq (YAML processor) - install with: brew install yq
+#   - python3 + PyYAML (bundled with Ansible)
 #   - Vault password (prompted or via --vault-password-file)
 #
 # EXAMPLES:
@@ -108,12 +108,12 @@ check_dependencies() {
     missing_deps+=("ansible-vault")
   fi
   
-  if ! command -v yq &> /dev/null; then
-    missing_deps+=("yq")
-  fi
-  
   if ! command -v python3 &> /dev/null; then
     missing_deps+=("python3")
+  fi
+  
+  if ! python3 -c "import yaml" 2>/dev/null; then
+    missing_deps+=("PyYAML")
   fi
   
   if [[ ${#missing_deps[@]} -gt 0 ]]; then
@@ -121,11 +121,8 @@ check_dependencies() {
     log_info "Install with:"
     for dep in "${missing_deps[@]}"; do
       case $dep in
-        yq)
-          echo "  brew install yq"
-          ;;
-        ansible-vault)
-          echo "  pip3 install ansible"
+        ansible-vault|PyYAML)
+          echo "  pip3 install ansible  (includes PyYAML)"
           ;;
         python3)
           echo "  brew install python3"
@@ -150,22 +147,45 @@ needs_change() {
   [[ "$value" =~ ^CHANGE_ME ]]
 }
 
-# Function: Get YAML value
+# Function: Get YAML value (dot-notation key, e.g. ".secrets.postgresql.password")
 get_yaml_value() {
   local file="$1"
   local key="$2"
-  yq eval "$key" "$file" 2>/dev/null || echo "null"
+  python3 -c "
+import yaml, sys
+with open(sys.argv[1]) as f:
+    data = yaml.safe_load(f)
+keys = sys.argv[2].strip('.').split('.')
+for k in keys:
+    if isinstance(data, dict) and k in data:
+        data = data[k]
+    else:
+        print('null')
+        sys.exit(0)
+print(data if data is not None else 'null')
+" "$file" "$key" 2>/dev/null || echo "null"
 }
 
-# Function: Set YAML value
+# Function: Set YAML value (dot-notation key, e.g. ".secrets.postgresql.password")
 set_yaml_value() {
   local file="$1"
   local key="$2"
   local value="$3"
   
-  # Escape special characters for yq
-  # Use yq to properly set the value with correct quoting
-  yq eval -i "${key} = \"${value}\"" "$file"
+  python3 -c "
+import yaml, sys
+with open(sys.argv[1]) as f:
+    data = yaml.safe_load(f) or {}
+keys = sys.argv[2].strip('.').split('.')
+node = data
+for k in keys[:-1]:
+    if k not in node or not isinstance(node[k], dict):
+        node[k] = {}
+    node = node[k]
+node[keys[-1]] = sys.argv[3]
+with open(sys.argv[1], 'w') as f:
+    yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False, width=200)
+" "$file" "$key" "$value"
 }
 
 # Function: Prompt for value
@@ -202,46 +222,51 @@ prompt_for_value() {
 # Function: Extract keys from YAML file recursively
 extract_keys() {
   local file="$1"
-  local prefix="${2:-}"
   
-  # Use yq to get all keys with their paths
-  yq eval '.. | select(tag != "!!map" and tag != "!!seq") | (path | join("."))' "$file" | sort -u
+  python3 -c "
+import yaml, sys
+def walk(data, prefix=''):
+    if isinstance(data, dict):
+        for k, v in data.items():
+            path = f'{prefix}.{k}' if prefix else k
+            yield from walk(v, path)
+    else:
+        yield prefix
+with open(sys.argv[1]) as f:
+    data = yaml.safe_load(f) or {}
+for key in sorted(walk(data)):
+    print(key)
+" "$file"
 }
 
 # Function: Get description for key from example file
+# Looks for YAML comments immediately above the key line
 get_key_description() {
   local key="$1"
-  local line_num
+  local leaf_key="${key##*.}"
   
-  # Find the line number where this key is defined
-  line_num=$(yq eval --unwrapScalar "path(${key}) | @sh" "$EXAMPLE_FILE" 2>/dev/null | head -1 || echo "")
-  
-  if [[ -z "$line_num" ]]; then
-    echo ""
-    return
-  fi
-  
-  # Look for comments above this line
-  local desc=""
-  local search_line=$((line_num - 1))
-  while [[ $search_line -gt 0 ]]; do
-    local line
-    line=$(sed -n "${search_line}p" "$EXAMPLE_FILE")
-    if [[ "$line" =~ ^[[:space:]]*# ]]; then
-      local comment
-      comment=$(echo "$line" | sed 's/^[[:space:]]*#[[:space:]]*//')
-      if [[ -z "$desc" ]]; then
-        desc="$comment"
-      else
-        desc="$comment $desc"
-      fi
-      ((search_line--))
-    else
-      break
-    fi
-  done
-  
-  echo "$desc"
+  python3 -c "
+import re, sys
+lines = open(sys.argv[1]).readlines()
+leaf = sys.argv[2]
+target = None
+for i, line in enumerate(lines):
+    if re.match(r'\s*' + re.escape(leaf) + r'\s*:', line):
+        target = i
+        break
+if target is None:
+    sys.exit(0)
+comments = []
+j = target - 1
+while j >= 0:
+    stripped = lines[j].strip()
+    if stripped.startswith('#'):
+        comments.insert(0, stripped.lstrip('#').strip())
+        j -= 1
+    else:
+        break
+print(' '.join(comments))
+" "$EXAMPLE_FILE" "$leaf_key" 2>/dev/null || echo ""
 }
 
 # Main script
