@@ -126,18 +126,40 @@ def get_memory_tier(backend: str = None) -> str:
         return "minimal"
 
 
+def detect_deployment_backend() -> str:
+    """
+    Detect the deployment backend (how services are deployed).
+    
+    Returns:
+        "docker" if running in Docker
+        "proxmox" if running on Proxmox/LXC
+        "k8s" if running on Kubernetes
+    """
+    import os
+    
+    explicit = os.getenv('DEPLOYMENT_BACKEND', '').lower()
+    if explicit in ('docker', 'proxmox', 'k8s'):
+        return explicit
+    
+    if os.path.exists('/.dockerenv'):
+        return 'docker'
+    
+    return 'proxmox'
+
+
 def get_platform_info() -> dict:
     """
     Get complete platform information.
     
     Returns:
-        Dictionary with backend, tier, ram_gb, environment, use_production_vllm, 
-        and other platform details
+        Dictionary with backend (LLM), deployment_backend (docker/proxmox),
+        tier, ram_gb, environment, use_production_vllm, and other platform details
     """
     import os
     
     backend = detect_backend()
     tier = get_memory_tier(backend)
+    deployment_backend = detect_deployment_backend()
     
     # Get environment from config
     environment = os.getenv('BUSIBOX_ENV', os.getenv('ENVIRONMENT', 'production'))
@@ -147,6 +169,7 @@ def get_platform_info() -> dict:
     
     info = {
         "backend": backend,
+        "deployment_backend": deployment_backend,
         "tier": tier,
         "os": platform.system(),
         "arch": platform.machine(),
