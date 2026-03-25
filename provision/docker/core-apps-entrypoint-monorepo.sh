@@ -33,7 +33,30 @@ run() {
   exec node /usr/local/bin/app-manager.js
 }
 
+validate_monorepo() {
+  if [ ! -f "${ROOT_DIR}/package.json" ] || [ ! -f "${ROOT_DIR}/pnpm-workspace.yaml" ]; then
+    echo "================================================================="
+    echo "ERROR: busibox-frontend monorepo is missing or incomplete."
+    echo ""
+    echo "  Expected: ${ROOT_DIR}/package.json"
+    echo "  Expected: ${ROOT_DIR}/pnpm-workspace.yaml"
+    echo ""
+    echo "  Contents of ${ROOT_DIR}:"
+    ls -la "${ROOT_DIR}" 2>/dev/null || echo "  (directory does not exist)"
+    echo ""
+    echo "  This container uses local-dev mode which volume-mounts the"
+    echo "  busibox-frontend repo from the host. The host directory is"
+    echo "  either empty or not a valid monorepo."
+    echo ""
+    echo "  Fix: ensure busibox-frontend is cloned on the host, then"
+    echo "  re-run the installer."
+    echo "================================================================="
+    exit 1
+  fi
+}
+
 setup_npm_auth
+validate_monorepo
 install_workspace_deps
 
 case "${MODE}" in

@@ -1311,6 +1311,58 @@ wizard_github_token() {
 # now live inside the busibox-frontend monorepo.
 # If not found locally, auto-clones it as a sibling of busibox using the available
 # GitHub token.
+# Validate that a busibox-frontend directory is a complete monorepo.
+# Checks for key files that must exist for the frontend to build.
+is_valid_frontend_repo() {
+    local dir="$1"
+    [[ -f "${dir}/package.json" ]] && \
+    [[ -f "${dir}/pnpm-workspace.yaml" ]] && \
+    [[ -d "${dir}/packages/app" ]] && \
+    [[ -d "${dir}/apps/portal" ]]
+}
+
+# Clone (or re-clone) busibox-frontend into the given target directory.
+# Returns 0 on success, 1 on failure.
+clone_frontend_repo() {
+    local clone_target="$1"
+    local parent_dir
+    parent_dir=$(dirname "$REPO_ROOT")
+
+    # Determine which ref (branch/tag) to clone
+    local ref="${DEPLOY_REF:-}"
+    if [[ -z "$ref" ]]; then
+        ref=$(select_github_ref "jazzmind/busibox-frontend" "main")
+        info "Selected ref: ${ref}"
+    fi
+
+    local clone_url="https://github.com/jazzmind/busibox-frontend.git"
+    local token="${GITHUB_AUTH_TOKEN:-${GITHUB_TOKEN:-}}"
+    if [[ -n "$token" ]]; then
+        clone_url="https://${token}@github.com/jazzmind/busibox-frontend.git"
+    fi
+
+    info "Cloning busibox-frontend (ref: ${ref}) to ${clone_target}..."
+    if git clone --branch "$ref" "$clone_url" "$clone_target" 2>&1; then
+        success "Cloned busibox-frontend (${ref}) to ${clone_target}"
+        return 0
+    else
+        warn "Failed to clone busibox-frontend"
+        echo ""
+        echo -e "┌──────────────────────────────────────────────────────────────────────────────┐"
+        box_line "  ${BOLD}MISSING REPOSITORY${NC}" "single"
+        echo -e "├──────────────────────────────────────────────────────────────────────────────┤"
+        box_line "  Could not find or clone busibox-frontend." "single"
+        box_line "" "single"
+        box_line "  Clone it manually to the same parent directory as busibox:" "single"
+        box_line "    git clone https://github.com/jazzmind/busibox-frontend.git ${parent_dir}/busibox-frontend" "single"
+        box_line "" "single"
+        box_line "  Or set this environment variable before running install:" "single"
+        box_line "    export BUSIBOX_FRONTEND_DIR=/path/to/busibox-frontend" "single"
+        echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
+        return 1
+    fi
+}
+
 detect_app_directories() {
     show_stage 35 "Detecting App Directories" "Looking for the busibox-frontend monorepo."
     
@@ -1335,46 +1387,36 @@ detect_app_directories() {
         fi
     fi
     
-    # If still not found, clone from GitHub as a sibling of busibox
+    # Validate that a detected directory is actually a complete repo.
+    # An empty or partial directory (e.g. created by Docker volume mount
+    # or an interrupted clone) will fail the volume mount in local-dev mode.
+    if [[ -n "${BUSIBOX_FRONTEND_DIR:-}" ]] && ! is_valid_frontend_repo "$BUSIBOX_FRONTEND_DIR"; then
+        warn "Directory exists but is not a valid busibox-frontend repo: ${BUSIBOX_FRONTEND_DIR}"
+        warn "Missing expected files (package.json, pnpm-workspace.yaml, packages/app, apps/portal)"
+        
+        # If the directory is empty or nearly empty, remove it and re-clone
+        local file_count
+        file_count=$(find "$BUSIBOX_FRONTEND_DIR" -maxdepth 1 -not -name '.' | wc -l | tr -d ' ')
+        if [[ "$file_count" -le 2 ]]; then
+            info "Directory appears empty/stub ($file_count items) — removing and re-cloning..."
+            rm -rf "$BUSIBOX_FRONTEND_DIR"
+            unset BUSIBOX_FRONTEND_DIR
+        else
+            error "Directory has $file_count items but is incomplete."
+            error "Please fix or remove it manually: rm -rf ${BUSIBOX_FRONTEND_DIR}"
+            error "Then re-run the installer."
+            return 1
+        fi
+    fi
+    
+    # If not found (or was cleared above), clone from GitHub
     if [[ -z "${BUSIBOX_FRONTEND_DIR:-}" ]]; then
         local clone_target="${parent_dir}/busibox-frontend"
         info "busibox-frontend not found locally — will clone to ${clone_target}"
         
-        # Determine which ref (branch/tag) to clone
-        local ref="${DEPLOY_REF:-}"
-        if [[ -z "$ref" ]]; then
-            # Interactive: let user pick a release or branch
-            ref=$(select_github_ref "jazzmind/busibox-frontend" "main")
-            info "Selected ref: ${ref}"
-        fi
-        
-        # Build the clone URL, injecting the token for private repo access
-        local clone_url="https://github.com/jazzmind/busibox-frontend.git"
-        local token="${GITHUB_AUTH_TOKEN:-${GITHUB_TOKEN:-}}"
-        if [[ -n "$token" ]]; then
-            clone_url="https://${token}@github.com/jazzmind/busibox-frontend.git"
-        fi
-        
-        # Full clone (no --depth 1) to ensure all files are present, then
-        # checkout the selected ref.
-        info "Cloning busibox-frontend (ref: ${ref})..."
-        if git clone --branch "$ref" "$clone_url" "$clone_target" 2>&1; then
+        if clone_frontend_repo "$clone_target"; then
             export BUSIBOX_FRONTEND_DIR="$clone_target"
-            success "Cloned busibox-frontend (${ref}) to ${clone_target}"
         else
-            warn "Failed to clone busibox-frontend"
-            echo ""
-            echo -e "┌──────────────────────────────────────────────────────────────────────────────┐"
-            box_line "  ${BOLD}MISSING REPOSITORY${NC}" "single"
-            echo -e "├──────────────────────────────────────────────────────────────────────────────┤"
-            box_line "  Could not find or clone busibox-frontend." "single"
-            box_line "" "single"
-            box_line "  Clone it manually to the same parent directory as busibox:" "single"
-            box_line "    git clone https://github.com/jazzmind/busibox-frontend.git ${parent_dir}/busibox-frontend" "single"
-            box_line "" "single"
-            box_line "  Or set this environment variable before running install:" "single"
-            box_line "    export BUSIBOX_FRONTEND_DIR=/path/to/busibox-frontend" "single"
-            echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
             return 1
         fi
     fi
@@ -4935,12 +4977,17 @@ main() {
             APPS_BASE_DIR=$(get_state "APPS_BASE_DIR" "")
             DEV_APPS_DIR=$(get_dev_apps_dir)
             
-            # If not in state, detect them
-            if [[ -z "$BUSIBOX_FRONTEND_DIR" ]]; then
+            # If not in state, or saved path is no longer valid, (re-)detect
+            if [[ -z "$BUSIBOX_FRONTEND_DIR" ]] || ! is_valid_frontend_repo "$BUSIBOX_FRONTEND_DIR"; then
+                if [[ -n "$BUSIBOX_FRONTEND_DIR" ]]; then
+                    warn "Saved frontend path is no longer valid: $BUSIBOX_FRONTEND_DIR"
+                fi
                 if ! detect_app_directories; then
                     error "Cannot proceed without busibox-frontend"
                     exit 1
                 fi
+                set_state "BUSIBOX_FRONTEND_DIR" "$BUSIBOX_FRONTEND_DIR"
+                set_state "APPS_BASE_DIR" "$APPS_BASE_DIR"
             else
                 export BUSIBOX_APP_DIR="${BUSIBOX_FRONTEND_DIR}/packages/app"
             fi
