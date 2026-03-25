@@ -2493,6 +2493,38 @@ fi
                                 });
                             }
                             let _ = tx.send(InstallUpdate::Log("✓ Prerequisites ready".into()));
+
+                            // After prereqs install ansible, discover its location
+                            // and update this process's PATH so subsequent Command::new()
+                            // calls (vault setup, make install) can find ansible-vault.
+                            if !is_remote {
+                                let discovery_script = r#"
+for d in "$HOME/.local/bin" /usr/local/bin /opt/homebrew/bin; do
+    [ -x "$d/ansible-vault" ] && echo "$d" && exit 0
+done
+for d in $(find "$HOME/Library/Python" -maxdepth 2 -name bin -type d 2>/dev/null); do
+    [ -x "$d/ansible-vault" ] && echo "$d" && exit 0
+done
+"#;
+                                if let Ok(out) = std::process::Command::new("bash")
+                                    .arg("-c")
+                                    .arg(discovery_script)
+                                    .output()
+                                {
+                                    let discovered = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                                    if !discovered.is_empty() {
+                                        let current_path = std::env::var("PATH").unwrap_or_default();
+                                        if !current_path.split(':').any(|p| p == discovered) {
+                                            let new_path = format!("{discovered}:{current_path}");
+                                            std::env::set_var("PATH", &new_path);
+                                            let _ = tx.send(InstallUpdate::Log(format!(
+                                                "  (added {discovered} to PATH for ansible-vault)"
+                                            )));
+                                        }
+                                    }
+                                }
+                            }
+
                             break true;
                         }
                         Ok((_code, output)) => {
@@ -2715,6 +2747,15 @@ fi
 
                         let secrets_script = format!(
                             r#"set -euo pipefail
+# Expand PATH for pip-installed ansible on macOS
+if ! command -v ansible-vault &>/dev/null; then
+    for _d in "$HOME/.local/bin" /usr/local/bin /opt/homebrew/bin; do
+        [ -x "$_d/ansible-vault" ] && export PATH="$_d:$PATH" && break
+    done
+    for _d in $(find "$HOME/Library/Python" -maxdepth 2 -name bin -type d 2>/dev/null); do
+        [ -x "$_d/ansible-vault" ] && export PATH="$_d:$PATH" && break
+    done
+fi
 VAULT_FILE="{vault_rel}"
 # Use ANSIBLE_VAULT_PASSWORD_FILE env var only (not also --vault-password-file)
 # to avoid "vault-ids default,default" duplicate error in ansible-vault
@@ -2865,6 +2906,15 @@ echo "✓ Generated 11 bootstrap secrets ($REMAINING optional placeholders remai
                         // Debug: dump vault contents
                         let dump_script = format!(
                             r#"set -euo pipefail
+# Expand PATH for pip-installed ansible on macOS
+if ! command -v ansible-vault &>/dev/null; then
+    for _d in "$HOME/.local/bin" /usr/local/bin /opt/homebrew/bin; do
+        [ -x "$_d/ansible-vault" ] && export PATH="$_d:$PATH" && break
+    done
+    for _d in $(find "$HOME/Library/Python" -maxdepth 2 -name bin -type d 2>/dev/null); do
+        [ -x "$_d/ansible-vault" ] && export PATH="$_d:$PATH" && break
+    done
+fi
 VAULT_FILE="{vault_rel}"
 VPF="$ANSIBLE_VAULT_PASSWORD_FILE"
 unset ANSIBLE_VAULT_PASSWORD_FILE

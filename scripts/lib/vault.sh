@@ -285,8 +285,16 @@ ensure_yq_installed() {
     fi
 }
 
-# Check if ansible-vault is available
+# Check if ansible-vault is available (expand PATH for pip installs on macOS)
 check_ansible_vault() {
+    if ! command -v ansible-vault &>/dev/null; then
+        for _pydir in "$HOME/.local/bin" /usr/local/bin /opt/homebrew/bin; do
+            [ -x "$_pydir/ansible-vault" ] && export PATH="$_pydir:$PATH" && break
+        done
+        for _pydir in $(find "$HOME/Library/Python" -maxdepth 2 -name bin -type d 2>/dev/null); do
+            [ -x "$_pydir/ansible-vault" ] && export PATH="$_pydir:$PATH" && break
+        done
+    fi
     if ! command -v ansible-vault &>/dev/null; then
         _vault_error "ansible-vault not found. Please install Ansible:"
         echo "  pip install ansible"
