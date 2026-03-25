@@ -703,36 +703,34 @@ async def token(request: Request):
                     detail="user_does_not_have_app_access"
                 )
             
-            # Get all roles bound to this app resource.
-            # Role bindings fall into two categories:
-            #   1) Access-gate roles (e.g. Admin, HR) — used to decide WHO can
-            #      access the app.  The user must hold one of these in
-            #      authz_user_roles (already verified by user_can_access_resource).
-            #   2) Auto-granted app role (e.g. app:busibox-workforce) — bound
-            #      to the app but NOT in authz_user_roles.  Every user who
-            #      passes the access check receives this role automatically.
+            # Get all roles bound to this app resource and build the
+            # app-scoped role set for the issued token.
             #
-            # For least-privilege, the issued token carries ONLY the
-            # auto-granted app role(s).  Access-gate roles are not included
-            # because they are broader org-level roles that would let the app
-            # see data from other apps/contexts.
+            # The token carries:
+            #   - User's roles that are bound to this app (e.g. Admin, HR,
+            #     app:busibox-workforce:dashboard-editors)
+            #   - Auto-granted app roles — roles bound to the app that the
+            #     user does NOT directly hold (e.g. app:busibox-workforce).
+            #     These are automatically granted to every user who passes
+            #     the access check.
+            #
+            # The caller (ensureDocuments) is responsible for picking which
+            # role(s) to assign to documents — typically only app:<appname>.
             app_role_bindings = await db.get_roles_for_resource("app", token_req.resource_id)
+            app_role_binding_ids = {b["id"] for b in app_role_bindings}
             user_role_ids = {r["id"] for r in roles}
+
+            # User's roles that are also bound to this app
+            user_app_roles = [r for r in roles if r["id"] in app_role_binding_ids]
 
             # Auto-granted: app-bound roles the user does NOT directly hold
             auto_granted = [
-                {"id": b["id"], "name": b["name"]}
+                {"id": b["id"], "name": b["name"], "scopes": b.get("scopes")}
                 for b in app_role_bindings
                 if b["id"] not in user_role_ids
             ]
 
-            # If there are no auto-granted roles (legacy app without an app
-            # role), fall back to the intersection so existing apps don't break.
-            if auto_granted:
-                app_roles = auto_granted
-            else:
-                app_role_ids = {b["id"] for b in app_role_bindings}
-                app_roles = [r for r in roles if r["id"] in app_role_ids]
+            app_roles = user_app_roles + auto_granted
 
             logger.info(
                 "App access verified",
@@ -742,17 +740,23 @@ async def token(request: Request):
                 auto_granted=[r["name"] for r in auto_granted],
             )
 
-        # Build role claims (id + name only, for data access filtering)
-        # Use app_roles if this is an app-scoped exchange, otherwise all user roles
+        # Build role claims (id + name only, for data access filtering).
+        # For app-scoped exchanges this includes user's app-bound roles plus
+        # auto-granted app roles. The app's ensureDocuments picks which
+        # role(s) to assign to documents (typically only app:<appname>).
         effective_roles = app_roles if app_roles is not None else roles
         role_claims = [
             {"id": r["id"], "name": r["name"]}
             for r in effective_roles
         ]
 
-        # Aggregate scopes from effective roles (union of role scopes)
+        # Aggregate scopes from ALL user roles (not just effective_roles).
+        # Scopes determine API-level permissions (data.read, data.write, etc.)
+        # and must come from the access-gate roles (Admin, HR) that granted the
+        # user access to the app. The auto-granted app role typically has no
+        # scopes — it exists only for data partitioning.
         all_scopes: set[str] = set()
-        for r in effective_roles:
+        for r in roles:
             role_scopes = r.get("scopes") or []
             all_scopes.update(role_scopes)
         aggregated_scope = " ".join(sorted(all_scopes))

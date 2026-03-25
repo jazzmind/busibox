@@ -2111,39 +2111,34 @@ fi
                         echo "✓ Python: $($PY_PATH --version)"
                     fi
 
-                    # Ensure pip is available
-                    if ! command -v pip3 &>/dev/null && ! command -v pip &>/dev/null; then
-                        echo "Installing pip..."
-                        if command -v apt-get &>/dev/null; then
-                            apt-get update -qq && apt-get install -y -qq python3-pip 2>&1
-                        elif command -v yum &>/dev/null; then
-                            yum install -y python3-pip 2>&1
-                        elif command -v brew &>/dev/null; then
-                            brew install python3 2>&1
+                    BUSIBOX_VENV="$HOME/.busibox/venv"
+
+                    # Activate busibox venv if it exists
+                    if [ -x "$BUSIBOX_VENV/bin/ansible-vault" ]; then
+                        export PATH="$BUSIBOX_VENV/bin:$PATH"
+                    fi
+
+                    if ! command -v ansible-playbook &>/dev/null || ! command -v ansible-vault &>/dev/null; then
+                        echo "Installing Ansible into $BUSIBOX_VENV..."
+                        mkdir -p "$HOME/.busibox"
+
+                        # Ensure python3-venv is available (Debian/Ubuntu need it separately)
+                        if ! "$PY_PATH" -m venv --help &>/dev/null 2>&1; then
+                            if command -v apt-get &>/dev/null; then
+                                PY_VER=$("$PY_PATH" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)
+                                echo "  Installing python${PY_VER}-venv..."
+                                apt-get update -qq 2>/dev/null && apt-get install -y -qq "python${PY_VER}-venv" 2>&1 || \
+                                    apt-get install -y -qq python3-venv 2>&1 || true
+                            fi
                         fi
-                    fi
-                    PIP=$(command -v pip3 2>/dev/null || command -v pip 2>/dev/null || echo pip3)
-                    # Install ansible if not present
-                    if ! command -v ansible-playbook &>/dev/null; then
-                        echo "Installing Ansible..."
-                        $PIP install --quiet ansible 2>&1
-                        # Re-expand PATH after install (pip may have created new dirs)
-                        for pydir in "$HOME/.local/bin" /usr/local/bin /opt/homebrew/bin; do
-                            [ -d "$pydir" ] && export PATH="$pydir:$PATH"
-                        done
-                        for pydir in $(find "$HOME/Library/Python" -maxdepth 2 -name bin -type d 2>/dev/null); do
-                            [ -d "$pydir" ] && export PATH="$pydir:$PATH"
-                        done
-                    fi
-                    if ! command -v ansible-vault &>/dev/null; then
-                        echo "Installing Ansible (vault missing)..."
-                        $PIP install --quiet ansible 2>&1
-                        for pydir in "$HOME/.local/bin" /usr/local/bin /opt/homebrew/bin; do
-                            [ -d "$pydir" ] && export PATH="$pydir:$PATH"
-                        done
-                        for pydir in $(find "$HOME/Library/Python" -maxdepth 2 -name bin -type d 2>/dev/null); do
-                            [ -d "$pydir" ] && export PATH="$pydir:$PATH"
-                        done
+
+                        if [ ! -d "$BUSIBOX_VENV" ]; then
+                            "$PY_PATH" -m venv "$BUSIBOX_VENV" 2>&1
+                        fi
+
+                        "$BUSIBOX_VENV/bin/pip" install --quiet --upgrade pip 2>&1
+                        "$BUSIBOX_VENV/bin/pip" install --quiet ansible 2>&1
+                        export PATH="$BUSIBOX_VENV/bin:$PATH"
                     fi
                     # Verify Ansible
                     if command -v ansible-playbook &>/dev/null; then
@@ -2499,6 +2494,9 @@ fi
                             // calls (vault setup, make install) can find ansible-vault.
                             if !is_remote {
                                 let discovery_script = r#"
+# Check busibox venv first
+d="$HOME/.busibox/venv/bin"
+[ -x "$d/ansible-vault" ] && echo "$d" && exit 0
 for d in "$HOME/.local/bin" /usr/local/bin /opt/homebrew/bin; do
     [ -x "$d/ansible-vault" ] && echo "$d" && exit 0
 done
@@ -2747,12 +2745,10 @@ done
 
                         let secrets_script = format!(
                             r#"set -euo pipefail
-# Expand PATH for pip-installed ansible on macOS
+# Activate busibox venv or probe common ansible locations
+[ -x "$HOME/.busibox/venv/bin/ansible-vault" ] && export PATH="$HOME/.busibox/venv/bin:$PATH"
 if ! command -v ansible-vault &>/dev/null; then
     for _d in "$HOME/.local/bin" /usr/local/bin /opt/homebrew/bin; do
-        [ -x "$_d/ansible-vault" ] && export PATH="$_d:$PATH" && break
-    done
-    for _d in $(find "$HOME/Library/Python" -maxdepth 2 -name bin -type d 2>/dev/null); do
         [ -x "$_d/ansible-vault" ] && export PATH="$_d:$PATH" && break
     done
 fi
@@ -2906,12 +2902,10 @@ echo "✓ Generated 11 bootstrap secrets ($REMAINING optional placeholders remai
                         // Debug: dump vault contents
                         let dump_script = format!(
                             r#"set -euo pipefail
-# Expand PATH for pip-installed ansible on macOS
+# Activate busibox venv or probe common ansible locations
+[ -x "$HOME/.busibox/venv/bin/ansible-vault" ] && export PATH="$HOME/.busibox/venv/bin:$PATH"
 if ! command -v ansible-vault &>/dev/null; then
     for _d in "$HOME/.local/bin" /usr/local/bin /opt/homebrew/bin; do
-        [ -x "$_d/ansible-vault" ] && export PATH="$_d:$PATH" && break
-    done
-    for _d in $(find "$HOME/Library/Python" -maxdepth 2 -name bin -type d 2>/dev/null); do
         [ -x "$_d/ansible-vault" ] && export PATH="$_d:$PATH" && break
     done
 fi

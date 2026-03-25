@@ -285,8 +285,10 @@ ensure_yq_installed() {
     fi
 }
 
-# Check if ansible-vault is available (expand PATH for pip installs on macOS)
+# Check if ansible-vault is available (activate busibox venv or probe common locations)
 check_ansible_vault() {
+    # Busibox venv is the preferred location
+    [ -x "$HOME/.busibox/venv/bin/ansible-vault" ] && export PATH="$HOME/.busibox/venv/bin:$PATH"
     if ! command -v ansible-vault &>/dev/null; then
         for _pydir in "$HOME/.local/bin" /usr/local/bin /opt/homebrew/bin; do
             [ -x "$_pydir/ansible-vault" ] && export PATH="$_pydir:$PATH" && break
@@ -297,7 +299,7 @@ check_ansible_vault() {
     fi
     if ! command -v ansible-vault &>/dev/null; then
         _vault_error "ansible-vault not found. Please install Ansible:"
-        echo "  pip install ansible"
+        echo "  pip install ansible  (or run busibox installer to set up venv)"
         return 1
     fi
     return 0
