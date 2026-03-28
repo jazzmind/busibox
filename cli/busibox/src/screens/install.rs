@@ -1343,8 +1343,9 @@ fn spawn_install_worker(app: &mut App) {
             }
         }
 
-        // Propagate DEV_APPS_DIR to state/env files so Docker Compose picks it up
-        if !is_remote && profile_backend == "docker" {
+        // Propagate DEV_APPS_DIR to state/env files so Docker Compose picks it up.
+        // For remote installs these files are rsync'd to the remote host.
+        if profile_backend == "docker" {
             propagate_dev_apps_dir_to_state(
                 &repo_root,
                 &container_prefix,

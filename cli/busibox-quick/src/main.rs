@@ -121,6 +121,7 @@ fn main() -> Result<()> {
         spot_token: None,
         dev_apps_dir: None,
         huggingface_token: None,
+        direct_access: None,
     };
 
     profile::upsert_profile(&repo_root, PROFILE_ID, prof.clone(), true)?;

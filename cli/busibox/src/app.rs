@@ -974,8 +974,12 @@ impl App {
             actions.push("Validate Secrets");
         }
 
-        if !actions.is_empty() && !crate::modules::mkcert::is_installed() {
-            actions.push("Setup mkcert (TLS certs)");
+        if !actions.is_empty() && crate::modules::mkcert::is_installed() {
+            if let Some((_, p)) = self.active_profile() {
+                if p.remote {
+                    actions.push("Generate TLS Certs");
+                }
+            }
         }
 
         actions

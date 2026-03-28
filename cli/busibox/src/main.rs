@@ -1114,45 +1114,62 @@ fn perform_code_sync(app: &mut App) {
     }
 }
 
-/// Install mkcert and its root CA for trusted local TLS certificates.
+/// Generate trusted TLS certificates for the active remote profile using mkcert.
+/// Certs are written as `ssl/localhost.crt` / `ssl/localhost.key` (matching nginx
+/// default.conf) with SANs covering the remote hostname, site_domain, and localhost.
 fn perform_mkcert_setup(app: &mut App) {
     use crate::app::MessageKind;
 
-    if modules::mkcert::is_installed() {
-        if modules::mkcert::is_ca_installed() {
-            app.set_message("mkcert is already installed and CA is trusted", MessageKind::Success);
-            return;
-        }
-        match modules::mkcert::install_ca() {
-            Ok(()) => {
-                app.set_message("✓ mkcert CA installed into system trust store", MessageKind::Success);
-            }
-            Err(e) => {
-                app.set_message(&format!("mkcert CA install failed: {e}"), MessageKind::Error);
-            }
-        }
+    if !modules::mkcert::is_installed() {
+        app.set_message(
+            "mkcert is not installed. Install it first: https://github.com/FiloSottile/mkcert#installation",
+            MessageKind::Error,
+        );
         return;
     }
 
-    match modules::mkcert::install() {
-        Ok(()) => {
-            match modules::mkcert::install_ca() {
-                Ok(()) => {
-                    app.set_message(
-                        "✓ mkcert installed and CA trusted — TLS certs will be auto-generated during install",
-                        MessageKind::Success,
-                    );
-                }
-                Err(e) => {
-                    app.set_message(
-                        &format!("mkcert installed but CA setup failed: {e}"),
-                        MessageKind::Warning,
-                    );
-                }
+    if !modules::mkcert::is_ca_installed() {
+        match modules::mkcert::install_ca() {
+            Ok(()) => {}
+            Err(e) => {
+                app.set_message(&format!("mkcert CA install failed: {e}"), MessageKind::Error);
+                return;
             }
         }
+    }
+
+    let (remote_host, site_domain) = match app.active_profile() {
+        Some((_, p)) if p.remote => {
+            let host = p.effective_host().unwrap_or("localhost").to_string();
+            let domain = p.site_domain.clone().unwrap_or_else(|| "localhost".to_string());
+            (host, domain)
+        }
+        _ => {
+            app.set_message("Generate TLS Certs requires a remote profile", MessageKind::Warning);
+            return;
+        }
+    };
+
+    let ssl_dir = app.repo_root.join("ssl");
+    let mut domains: Vec<String> = vec![remote_host.clone()];
+    if site_domain != remote_host && site_domain != "localhost" {
+        domains.push(site_domain);
+    }
+    if !domains.iter().any(|d| d == "localhost") {
+        domains.push("localhost".to_string());
+    }
+
+    let domain_refs: Vec<&str> = domains.iter().map(|s| s.as_str()).collect();
+    match modules::mkcert::generate_certs(&domain_refs, &ssl_dir, "localhost") {
+        Ok(()) => {
+            let domain_list = domains.join(", ");
+            app.set_message(
+                &format!("✓ TLS certs generated for {domain_list} — redeploy proxy to apply"),
+                MessageKind::Success,
+            );
+        }
         Err(e) => {
-            app.set_message(&format!("mkcert installation failed: {e}"), MessageKind::Error);
+            app.set_message(&format!("Certificate generation failed: {e}"), MessageKind::Error);
         }
     }
 }

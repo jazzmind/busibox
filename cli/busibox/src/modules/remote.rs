@@ -14,7 +14,6 @@ const RSYNC_EXTRA_EXCLUDES: &[&str] = &[
     ".cursor/",
     ".vscode/",
     ".idea/",
-    "ssl/",
 ];
 
 /// Files that are gitignored but must still be synced to the remote because
@@ -23,6 +22,10 @@ const RSYNC_EXTRA_EXCLUDES: &[&str] = &[
 /// `--filter=':- .gitignore'` directive.
 const RSYNC_FORCE_INCLUDE: &[&str] = &[
     "provision/ansible/group_vars/all/model_config.yml",
+    ".busibox-state-*",
+    ".env.*",
+    "ssl",
+    "ssl/**",
 ];
 
 /// Sync the local busibox repo to a remote host using rsync.
