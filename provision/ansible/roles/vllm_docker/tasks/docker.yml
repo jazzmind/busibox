@@ -152,32 +152,12 @@
     msg: "{{ _vllm_up_result.stdout_lines | default([]) + _vllm_up_result.stderr_lines | default([]) }}"
   when: _vllm_up_result is defined and _vllm_up_result is not skipped
 
-- name: Wait for vLLM health endpoint
-  ansible.builtin.shell:
-    cmd: |
-      timeout=300
-      elapsed=0
-      url="http://localhost:{{ _vllm_model.port | default(8000) }}/health"
-      while [ $elapsed -lt $timeout ]; do
-        if curl -sf --max-time 5 "$url" >/dev/null 2>&1; then
-          echo "vLLM healthy after ${elapsed}s"
-          exit 0
-        fi
-        sleep 10
-        elapsed=$((elapsed + 10))
-      done
-      echo "vLLM not ready after ${timeout}s — model may still be loading"
-      exit 0
-    executable: /bin/bash
-  register: _vllm_health
-  changed_when: false
-  when: _vllm_model is defined and _vllm_model | length > 0
-
-- name: Display vLLM status
+- name: Display vLLM startup info
   ansible.builtin.debug:
     msg: |
-      vLLM Status: {{ 'HEALTHY' if 'healthy' in (_vllm_health.stdout | default('')) else 'STARTING (model may still be loading — check: docker logs ' ~ _vllm_prefix ~ '-vllm)' }}
+      vLLM container started. Health polling handled by the CLI.
       Model: {{ _vllm_model.model_name | default('unknown') }}
       Container endpoint: http://vllm:{{ _vllm_model.port | default(8000) }}/v1
       Host endpoint: http://localhost:{{ _vllm_model.port | default(8000) }}/v1
+      Check logs: docker logs {{ _vllm_prefix }}-vllm
   when: _vllm_model is defined and _vllm_model | length > 0

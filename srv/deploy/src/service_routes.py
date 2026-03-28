@@ -32,6 +32,7 @@ import logging
 import asyncio
 import os
 import json
+import pathlib
 import re
 import uuid
 import yaml
@@ -1349,10 +1350,19 @@ async def start_service_sse(
                 # 3. Relative paths in compose files resolve correctly
                 compose_cmd = get_docker_compose_base_cmd(busibox_host_path)
                 
-                # vllm requires the demo-vllm profile
+                # vllm requires the demo-vllm profile and host cache bind mount
                 if service == 'vllm':
                     compose_cmd.extend(['--profile', 'demo-vllm'])
                     yield f"data: {json.dumps({'type': 'info', 'message': 'Note: vLLM requires NVIDIA GPU. On Apple Silicon, use MLX instead (runs on host).'})}\n\n"
+                    
+                    # Ensure HF_HOST_CACHE points to the host's HuggingFace cache
+                    # so docker compose uses a bind mount instead of a named volume.
+                    if not env.get('HF_HOST_CACHE'):
+                        host_home = str(pathlib.Path(busibox_host_path).parent)
+                        env['HF_HOST_CACHE'] = f"{host_home}/.cache/huggingface"
+                        yield f"data: {json.dumps({'type': 'info', 'message': f'Using host model cache: {env[\"HF_HOST_CACHE\"]}'})}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'type': 'info', 'message': f'Using host model cache: {env[\"HF_HOST_CACHE\"]}'})}\n\n"
                 
                 # Services that have critical infrastructure dependencies that must be started
                 # (etcd for milvus; minio for files and milvus; etc.)

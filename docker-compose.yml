@@ -1050,6 +1050,10 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
       GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
+      # Model cache paths (host paths, relayed to spawned containers via docker compose)
+      HF_HOST_CACHE: ${HF_HOST_CACHE:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      FASTEMBED_HOST_CACHE: ${FASTEMBED_HOST_CACHE:-}
       # Host Agent (for MLX control on Apple Silicon)
       # The host-agent runs on the host machine and is accessible via host.docker.internal
       HOST_AGENT_URL: http://host.docker.internal:8089
