@@ -994,6 +994,13 @@ fn handle_action_select(app: &mut App, action: &str) {
             );
             app.pending_compare_secrets = true;
         }
+        "Setup mkcert (TLS certs)" => {
+            app.set_message(
+                "⠋ Installing mkcert...",
+                crate::app::MessageKind::Info,
+            );
+            app.pending_mkcert_setup = true;
+        }
         _ => {}
     }
 }

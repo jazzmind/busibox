@@ -59,6 +59,18 @@ if [[ -n "${VLLM_EXTRA_ARGS:-}" ]]; then
     CMD_ARGS+=("${extra[@]}")
 fi
 
+# Clean up .no_exist sentinel directories that prevent offline model loading.
+# HF hub creates these when it looks up files missing from a cached snapshot;
+# on subsequent offline starts they cause LocalEntryNotFoundError even though
+# the core model files are present.
+_hf_hub="${HF_HOME:-/root/.cache/huggingface}/hub"
+if [ -d "$_hf_hub" ]; then
+  _removed=$(find "$_hf_hub" -type d -name .no_exist -print -exec rm -rf {} + 2>/dev/null || true)
+  if [ -n "$_removed" ]; then
+    echo "[vllm-entrypoint] Cleaned stale .no_exist cache entries" >&2
+  fi
+fi
+
 echo "[vllm-entrypoint] Starting vLLM with model: ${VLLM_MODEL}" >&2
 echo "[vllm-entrypoint] Args: ${CMD_ARGS[*]}" >&2
 

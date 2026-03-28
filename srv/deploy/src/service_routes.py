@@ -501,9 +501,8 @@ async def start_service(
             # Use explicit file paths with host path - busibox is mounted at BUSIBOX_HOST_PATH
             cmd = get_docker_compose_base_cmd(busibox_host_path)
             
-            # vllm requires the demo-vllm profile
             if service == 'vllm':
-                cmd.extend(['--profile', 'demo-vllm'])
+                cmd.extend(['--profile', 'vllm'])
             
             # Some services require multiple containers to be started together
             # Map logical service names to actual container(s) to start
@@ -1339,6 +1338,17 @@ async def start_service_sse(
                 # Get host path - busibox is mounted at this same path inside the container
                 # This allows buildx to find files and Docker to mount volumes correctly
                 busibox_host_path = os.getenv('BUSIBOX_HOST_PATH')
+                
+                # Ensure model cache env vars point to host paths (bind mounts)
+                # instead of defaulting to Docker named volumes.
+                if busibox_host_path:
+                    host_home = str(pathlib.Path(busibox_host_path).parent)
+                    if not env.get('HF_HOST_CACHE'):
+                        env['HF_HOST_CACHE'] = f"{host_home}/.cache/huggingface"
+                    if not env.get('MODEL_HOST_CACHE'):
+                        env['MODEL_HOST_CACHE'] = f"{host_home}/.cache"
+                    if not env.get('FASTEMBED_HOST_CACHE'):
+                        env['FASTEMBED_HOST_CACHE'] = f"{host_home}/.cache/fastembed"
                 if not busibox_host_path:
                     yield f"data: {json.dumps({'type': 'error', 'message': 'BUSIBOX_HOST_PATH not set. Restart deploy-api with make manage SERVICE=deploy ACTION=restart.', 'done': True})}\n\n"
                     return
@@ -1350,19 +1360,11 @@ async def start_service_sse(
                 # 3. Relative paths in compose files resolve correctly
                 compose_cmd = get_docker_compose_base_cmd(busibox_host_path)
                 
-                # vllm requires the demo-vllm profile and host cache bind mount
                 if service == 'vllm':
-                    compose_cmd.extend(['--profile', 'demo-vllm'])
+                    compose_cmd.extend(['--profile', 'vllm'])
                     yield f"data: {json.dumps({'type': 'info', 'message': 'Note: vLLM requires NVIDIA GPU. On Apple Silicon, use MLX instead (runs on host).'})}\n\n"
-                    
-                    # Ensure HF_HOST_CACHE points to the host's HuggingFace cache
-                    # so docker compose uses a bind mount instead of a named volume.
-                    if not env.get('HF_HOST_CACHE'):
-                        host_home = str(pathlib.Path(busibox_host_path).parent)
-                        env['HF_HOST_CACHE'] = f"{host_home}/.cache/huggingface"
-                        yield f"data: {json.dumps({'type': 'info', 'message': f'Using host model cache: {env[\"HF_HOST_CACHE\"]}'})}\n\n"
-                    else:
-                        yield f"data: {json.dumps({'type': 'info', 'message': f'Using host model cache: {env[\"HF_HOST_CACHE\"]}'})}\n\n"
+                    cache_path = env.get('HF_HOST_CACHE', '')
+                    yield f"data: {json.dumps({'type': 'info', 'message': f'Using host model cache: {cache_path}'})}\n\n"
                 
                 # Services that have critical infrastructure dependencies that must be started
                 # (etcd for milvus; minio for files and milvus; etc.)

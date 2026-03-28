@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfilesFile {
@@ -100,6 +102,12 @@ pub struct Profile {
     /// HuggingFace API token for authenticated model access and higher rate limits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub huggingface_token: Option<String>,
+    /// Access method preference for remote profiles:
+    ///   None = auto-detect (try direct, fall back to SSH tunnel)
+    ///   Some(true) = always use direct HTTPS access (e.g. Tailscale/LAN)
+    ///   Some(false) = always use SSH tunnel (localhost:4443)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_access: Option<bool>,
 }
 
 impl Profile {
@@ -117,6 +125,42 @@ impl Profile {
     #[allow(dead_code)]
     pub fn effective_ssh_key(&self) -> &str {
         self.remote_ssh_key.as_deref().unwrap_or("~/.ssh/id_ed25519")
+    }
+
+    /// Determine whether this remote profile should use direct HTTPS access.
+    /// Returns true if `direct_access` is explicitly set to true, or if
+    /// auto-detect determines the host is directly reachable on port 443.
+    pub fn use_direct_access(&self) -> bool {
+        if !self.remote {
+            return false;
+        }
+        match self.direct_access {
+            Some(val) => val,
+            None => {
+                if let Some(host) = self.effective_host() {
+                    is_host_reachable(host, 443, 2000)
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    /// Build the base URL for accessing this profile's web services.
+    /// For direct access: `https://{effective_host}`
+    /// For tunnel access: `https://localhost:4443`
+    /// For local profiles: `https://{site_domain}`
+    pub fn portal_base_url(&self) -> String {
+        if !self.remote {
+            let domain = self.site_domain.as_deref().unwrap_or("localhost");
+            return format!("https://{domain}");
+        }
+        if self.use_direct_access() {
+            if let Some(host) = self.effective_host() {
+                return format!("https://{host}");
+            }
+        }
+        "https://localhost:4443".to_string()
     }
 
     pub fn effective_remote_path(&self) -> &str {
@@ -646,4 +690,18 @@ pub fn try_lock_profile(_repo_root: &Path, _profile_id: &str) -> Result<Option<F
 #[cfg(not(unix))]
 pub fn is_profile_locked(_repo_root: &Path, _profile_id: &str) -> bool {
     false
+}
+
+/// Test whether a host is reachable by attempting a TCP connection.
+/// Returns true if the connection succeeds within `timeout_ms` milliseconds.
+pub fn is_host_reachable(host: &str, port: u16, timeout_ms: u64) -> bool {
+    let addr_str = format!("{host}:{port}");
+    let addrs: Vec<_> = match addr_str.to_socket_addrs() {
+        Ok(a) => a.collect(),
+        Err(_) => return false,
+    };
+    let timeout = Duration::from_millis(timeout_ms);
+    addrs
+        .iter()
+        .any(|addr| TcpStream::connect_timeout(addr, timeout).is_ok())
 }

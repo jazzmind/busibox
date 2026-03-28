@@ -335,6 +335,7 @@ pub struct App {
     pub pending_code_sync: bool,
     // Pending compare secrets between local and remote.
     pub pending_compare_secrets: bool,
+    pub pending_mkcert_setup: bool,
 
     pub ssh_tunnel_process: Option<std::process::Child>,
 
@@ -807,6 +808,7 @@ impl App {
             pending_sync_admin_login: false,
             pending_code_sync: false,
             pending_compare_secrets: false,
+            pending_mkcert_setup: false,
             ssh_tunnel_process: None,
             ssh_tunnel_active: false,
             ssh_tunnel_child: None,
@@ -970,6 +972,10 @@ impl App {
 
         if self.vault_password.is_some() && !actions.is_empty() {
             actions.push("Validate Secrets");
+        }
+
+        if !actions.is_empty() && !crate::modules::mkcert::is_installed() {
+            actions.push("Setup mkcert (TLS certs)");
         }
 
         actions

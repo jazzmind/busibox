@@ -60,9 +60,9 @@
     # Docker-specific config (not secrets)
     BUSIBOX_PORTAL_GITHUB_REF: "{{ lookup('env', 'BUSIBOX_PORTAL_GITHUB_REF') | default('main', true) }}"
     BUSIBOX_ADMIN_GITHUB_REF: "{{ lookup('env', 'BUSIBOX_ADMIN_GITHUB_REF') | default('main', true) }}"
-    MODEL_HOST_CACHE: "{{ lookup('env', 'MODEL_HOST_CACHE') | default('model_cache', true) }}"
-    HF_HOST_CACHE: "{{ lookup('env', 'HF_HOST_CACHE') | default('model_cache', true) }}"
-    FASTEMBED_HOST_CACHE: "{{ lookup('env', 'FASTEMBED_HOST_CACHE') | default('fastembed_cache', true) }}"
+    MODEL_HOST_CACHE: "{{ lookup('env', 'MODEL_HOST_CACHE') | default(docker_compose_dir | dirname ~ '/.cache', true) }}"
+    HF_HOST_CACHE: "{{ lookup('env', 'HF_HOST_CACHE') | default(docker_compose_dir | dirname ~ '/.cache/huggingface', true) }}"
+    FASTEMBED_HOST_CACHE: "{{ lookup('env', 'FASTEMBED_HOST_CACHE') | default(docker_compose_dir | dirname ~ '/.cache/fastembed', true) }}"
     LLM_BACKEND: "{{ lookup('env', 'LLM_BACKEND') | default('', true) }}"
     HOST_AGENT_TOKEN: "{{ lookup('env', 'HOST_AGENT_TOKEN') | default('', true) }}"
   when: docker_pull_images | default(false)

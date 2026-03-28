@@ -5,6 +5,7 @@ pub mod hardware {
 pub mod health {
     pub use busibox_core::health::*;
 }
+pub mod mkcert;
 pub mod models;
 pub mod profile {
     pub use busibox_core::profile::*;

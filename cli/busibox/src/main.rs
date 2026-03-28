@@ -491,6 +491,12 @@ fn main() -> Result<()> {
             perform_validate_secrets(&mut app);
         }
 
+        // Handle mkcert setup from welcome menu.
+        if app.pending_mkcert_setup {
+            app.pending_mkcert_setup = false;
+            perform_mkcert_setup(&mut app);
+        }
+
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
@@ -1108,6 +1114,49 @@ fn perform_code_sync(app: &mut App) {
     }
 }
 
+/// Install mkcert and its root CA for trusted local TLS certificates.
+fn perform_mkcert_setup(app: &mut App) {
+    use crate::app::MessageKind;
+
+    if modules::mkcert::is_installed() {
+        if modules::mkcert::is_ca_installed() {
+            app.set_message("mkcert is already installed and CA is trusted", MessageKind::Success);
+            return;
+        }
+        match modules::mkcert::install_ca() {
+            Ok(()) => {
+                app.set_message("✓ mkcert CA installed into system trust store", MessageKind::Success);
+            }
+            Err(e) => {
+                app.set_message(&format!("mkcert CA install failed: {e}"), MessageKind::Error);
+            }
+        }
+        return;
+    }
+
+    match modules::mkcert::install() {
+        Ok(()) => {
+            match modules::mkcert::install_ca() {
+                Ok(()) => {
+                    app.set_message(
+                        "✓ mkcert installed and CA trusted — TLS certs will be auto-generated during install",
+                        MessageKind::Success,
+                    );
+                }
+                Err(e) => {
+                    app.set_message(
+                        &format!("mkcert installed but CA setup failed: {e}"),
+                        MessageKind::Warning,
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            app.set_message(&format!("mkcert installation failed: {e}"), MessageKind::Error);
+        }
+    }
+}
+
 /// Switch to the ValidateSecrets screen and spawn a background worker to
 /// decrypt + parse the local (and optionally remote) vault file.
 fn perform_validate_secrets(app: &mut App) {
@@ -1438,12 +1487,21 @@ fn handle_admin_login(app: &mut App) {
                     verify_url = verify_url.replace("/portal/verify", "/portal/setup");
                 }
 
-                // For remote profiles, rewrite URLs to use localhost:4443 (SSH tunnel)
+                // For remote profiles, rewrite URLs to use direct access or SSH tunnel
                 if is_remote {
-                    // Replace https://localhost/ or https://DOMAIN/ with https://localhost:4443/
+                    let use_direct = app
+                        .active_profile()
+                        .map(|(_, p)| p.use_direct_access())
+                        .unwrap_or(false);
+
+                    let base_url = app
+                        .active_profile()
+                        .map(|(_, p)| p.portal_base_url())
+                        .unwrap_or_else(|| "https://localhost:4443".to_string());
+
                     let re_domain = |url: &str| -> String {
                         if let Some(path_start) = url.find("/portal/") {
-                            format!("https://localhost:4443{}", &url[path_start..])
+                            format!("{}{}", base_url, &url[path_start..])
                         } else {
                             url.to_string()
                         }
@@ -1451,31 +1509,33 @@ fn handle_admin_login(app: &mut App) {
                     magic_link = re_domain(&magic_link);
                     verify_url = re_domain(&verify_url);
 
-                    // Start SSH tunnel if not already running (skip if persistent tunnel is active)
-                    if app.ssh_tunnel_process.is_none() && !app.ssh_tunnel_active {
-                        if let Some(ssh) = &app.ssh_connection {
-                            let key = crate::modules::ssh::shellexpand_path(&ssh.key_path);
-                            let mut tunnel_args: Vec<String> = vec![
-                                "-N".into(),
-                                "-L".into(),
-                                "4443:localhost:443".into(),
-                                "-o".into(),
-                                "StrictHostKeyChecking=accept-new".into(),
-                                "-o".into(),
-                                "ExitOnForwardFailure=yes".into(),
-                            ];
-                            if !key.is_empty() && std::path::Path::new(&key).exists() {
-                                tunnel_args.push("-i".into());
-                                tunnel_args.push(key);
-                            }
-                            tunnel_args.push(ssh.ssh_target());
-
-                            match Command::new("ssh").args(&tunnel_args).spawn() {
-                                Ok(child) => {
-                                    app.ssh_tunnel_process = Some(child);
+                    // Only start SSH tunnel if we're NOT using direct access
+                    if !use_direct {
+                        if app.ssh_tunnel_process.is_none() && !app.ssh_tunnel_active {
+                            if let Some(ssh) = &app.ssh_connection {
+                                let key = crate::modules::ssh::shellexpand_path(&ssh.key_path);
+                                let mut tunnel_args: Vec<String> = vec![
+                                    "-N".into(),
+                                    "-L".into(),
+                                    "4443:localhost:443".into(),
+                                    "-o".into(),
+                                    "StrictHostKeyChecking=accept-new".into(),
+                                    "-o".into(),
+                                    "ExitOnForwardFailure=yes".into(),
+                                ];
+                                if !key.is_empty() && std::path::Path::new(&key).exists() {
+                                    tunnel_args.push("-i".into());
+                                    tunnel_args.push(key);
                                 }
-                                Err(_e) => {
-                                    // Non-fatal: tunnel failed but links are still shown
+                                tunnel_args.push(ssh.ssh_target());
+
+                                match Command::new("ssh").args(&tunnel_args).spawn() {
+                                    Ok(child) => {
+                                        app.ssh_tunnel_process = Some(child);
+                                    }
+                                    Err(_e) => {
+                                        // Non-fatal: tunnel failed but links are still shown
+                                    }
                                 }
                             }
                         }

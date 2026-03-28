@@ -734,6 +734,7 @@ fn default_profile() -> profile::Profile {
         spot_token: None,
         dev_apps_dir: None,
         huggingface_token: None,
+        direct_access: None,
     }
 }
 

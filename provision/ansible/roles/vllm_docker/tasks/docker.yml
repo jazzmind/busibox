@@ -110,7 +110,7 @@
     BUSIBOX_HOST_PATH: "{{ _vllm_compose_dir }}"
     BUSIBOX_REPO_ROOT: "{{ _vllm_compose_dir }}"
     LLM_BACKEND: "vllm"
-    HF_HOST_CACHE: "{{ lookup('env', 'HF_HOST_CACHE') | default('vllm_cache', true) }}"
+    HF_HOST_CACHE: "{{ lookup('env', 'HF_HOST_CACHE') | default(_vllm_compose_dir | dirname ~ '/.cache/huggingface', true) }}"
     HF_TOKEN: "{{ lookup('env', 'HF_TOKEN') | default('', true) }}"
     HF_HUB_OFFLINE: "{{ lookup('env', 'HF_HUB_OFFLINE') | default('1', true) }}"
     # Vault secrets required by docker compose even for unrelated services

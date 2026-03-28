@@ -17,6 +17,14 @@ const RSYNC_EXTRA_EXCLUDES: &[&str] = &[
     "ssl/",
 ];
 
+/// Files that are gitignored but must still be synced to the remote because
+/// they are deployment-critical generated config.  Rsync applies the first
+/// matching rule, so these `--include` entries are added *before* the
+/// `--filter=':- .gitignore'` directive.
+const RSYNC_FORCE_INCLUDE: &[&str] = &[
+    "provision/ansible/group_vars/all/model_config.yml",
+];
+
 /// Sync the local busibox repo to a remote host using rsync.
 /// Output is captured so it doesn't bleed into the TUI.
 pub fn sync(
@@ -29,11 +37,18 @@ pub fn sync(
     let mut args: Vec<String> = vec![
         "-az".into(),
         "--delete".into(),
-        // Honour .gitignore (and nested .gitignore files) as exclude rules.
-        // This is the dir-merge syntax: rsync reads each directory's
-        // .gitignore and applies it as exclusions for that subtree.
-        "--filter=:- .gitignore".into(),
     ];
+
+    for pattern in RSYNC_FORCE_INCLUDE {
+        args.push("--include".into());
+        args.push((*pattern).into());
+    }
+
+    // Honour .gitignore (and nested .gitignore files) as exclude rules.
+    // This is the dir-merge syntax: rsync reads each directory's
+    // .gitignore and applies it as exclusions for that subtree.
+    // Force-included files above take precedence.
+    args.push("--filter=:- .gitignore".into());
 
     for pattern in RSYNC_EXTRA_EXCLUDES {
         args.push("--exclude".into());
