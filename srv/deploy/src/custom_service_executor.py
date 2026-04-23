@@ -805,6 +805,21 @@ async def deploy_custom_service_lxc(
 
     logs.append(f"Deploying custom service {manifest.name} to {host} via SSH")
 
+    # Step 0: Tear down any existing deployment so ports/names are freed.
+    # Use docker directly to find/kill containers by compose project label --
+    # this works even if the compose file is missing, changed, or the /tmp
+    # registry was wiped by a deploy-api restart.
+    logs.append("Stopping any existing deployment on remote host...")
+    teardown_cmd = (
+        f'CIDS=$(docker ps -aq --filter "label=com.docker.compose.project={project}"); '
+        f'if [ -n "$CIDS" ]; then docker rm -f $CIDS; fi; '
+        f'docker network rm {project}_default 2>/dev/null; '
+        f'true'
+    )
+    stdout, stderr, _ = await _ssh(host, teardown_cmd, timeout=120)
+    if stdout.strip():
+        logs.append(f"Removed existing containers: {stdout.strip()}")
+
     # Step 1: Ensure base directory exists
     _, _, code = await _ssh(host, f"mkdir -p {remote_base}")
     if code != 0:
@@ -889,19 +904,18 @@ async def deploy_custom_service_lxc(
 
 async def stop_custom_service_lxc(app_id: str, logs: List[str], target_host: Optional[str] = None) -> bool:
     """Stop a custom service on a remote LXC host."""
-    info = get_custom_service_info(app_id)
-    if not info:
-        logs.append(f"No custom service found for {app_id}")
-        return True
-
     host = target_host or os.environ.get("CUSTOM_SERVICES_HOST", "")
     if not host:
         logs.append("CUSTOM_SERVICES_HOST not configured")
         return False
 
-    project = info["project_name"]
-    remote_path = info["app_path"]
-    compose_file = info.get("manifest", {}).get("runtime", {}).get("composeFile", "docker-compose.yml")
+    info = get_custom_service_info(app_id)
+    project = info["project_name"] if info else _project_name(app_id)
+    remote_path = info["app_path"] if info else f"/srv/custom-services/{app_id}"
+    compose_file = (
+        info.get("manifest", {}).get("runtime", {}).get("composeFile", "docker-compose.yml")
+        if info else "docker-compose.yml"
+    )
 
     cmd = f"cd {remote_path} && docker compose -p {project} -f {compose_file} stop"
     _, stderr, code = await _ssh(host, cmd, timeout=60)
@@ -914,22 +928,23 @@ async def stop_custom_service_lxc(app_id: str, logs: List[str], target_host: Opt
 
 async def undeploy_custom_service_lxc(app_id: str, logs: List[str], target_host: Optional[str] = None) -> bool:
     """Undeploy a custom service from a remote LXC host."""
-    info = get_custom_service_info(app_id)
-    if not info:
-        logs.append(f"No custom service found for {app_id}")
-        return True
-
     host = target_host or os.environ.get("CUSTOM_SERVICES_HOST", "")
     if not host:
         logs.append("CUSTOM_SERVICES_HOST not configured")
         return False
 
-    project = info["project_name"]
-    remote_path = info["app_path"]
-    compose_file = info.get("manifest", {}).get("runtime", {}).get("composeFile", "docker-compose.yml")
+    info = get_custom_service_info(app_id)
+    project = info["project_name"] if info else _project_name(app_id)
+    remote_path = info["app_path"] if info else f"/srv/custom-services/{app_id}"
+    compose_file = (
+        info.get("manifest", {}).get("runtime", {}).get("composeFile", "docker-compose.yml")
+        if info else "docker-compose.yml"
+    )
 
     cmd = f"cd {remote_path} && docker compose -p {project} -f {compose_file} down --remove-orphans"
-    await _ssh(host, cmd, timeout=120)
+    _, stderr, code = await _ssh(host, cmd, timeout=120)
+    if code != 0:
+        logs.append(f"Warning: remote down had issues: {stderr.strip()}")
 
     unregister_custom_service(app_id)
     logs.append(f"Custom service {app_id} undeployed from remote")

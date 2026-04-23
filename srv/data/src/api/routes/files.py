@@ -70,6 +70,7 @@ def _build_pass_details(status_row) -> dict:
 require_data_read = ScopeChecker("data.read")
 require_data_write = ScopeChecker("data.write")
 require_data_delete = ScopeChecker("data.delete")
+require_data_admin = ScopeChecker("data.admin")
 
 
 def _extract_bearer_token_from_request(request: Request) -> Optional[str]:
@@ -416,6 +417,144 @@ async def get_storage_stats(request: Request):
         return JSONResponse(
             status_code=500,
             content={"error": "Failed to get storage stats", "details": str(e)}
+        )
+
+
+# =============================================================================
+# Admin File Listing (bypasses RLS via app.is_admin session variable)
+# =============================================================================
+
+@router.get("/admin/list", dependencies=[Depends(require_data_admin)])
+async def admin_list_files(
+    request: Request,
+    library_id: Optional[str] = Query(None, alias="libraryId"),
+    visibility: Optional[str] = Query(None),
+    mime_type: Optional[str] = Query(None, alias="mimeType"),
+    search: Optional[str] = Query(None),
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    sort_by: str = Query("createdAt", alias="sortBy"),
+    sort_order: str = Query("desc", alias="sortOrder"),
+):
+    """
+    List all files across libraries and users (admin view).
+
+    Bypasses RLS using app.is_admin='true'. Returns safe file metadata only;
+    no content is exposed. Requires data.admin scope.
+    """
+    postgres_service = _get_postgres_service()
+    if not postgres_service.pool:
+        await postgres_service.connect()
+
+    sort_column_map = {
+        "createdAt": "f.created_at",
+        "updatedAt": "f.updated_at",
+        "name": "f.filename",
+        "size": "f.size_bytes",
+    }
+    sort_column = sort_column_map.get(sort_by, "f.created_at")
+    order = "DESC" if sort_order.lower() == "desc" else "ASC"
+
+    where_parts = ["f.doc_type = 'file'"]
+    params: List = []
+    idx = 1
+
+    if library_id:
+        where_parts.append(f"f.library_id = ${idx}")
+        try:
+            params.append(uuid.UUID(library_id))
+        except ValueError:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Invalid libraryId format"},
+            )
+        idx += 1
+
+    if visibility:
+        where_parts.append(f"f.visibility = ${idx}")
+        params.append(visibility)
+        idx += 1
+
+    if mime_type:
+        where_parts.append(f"f.mime_type = ${idx}")
+        params.append(mime_type)
+        idx += 1
+
+    if search:
+        where_parts.append(
+            f"(f.filename ILIKE ${idx} OR f.original_filename ILIKE ${idx})"
+        )
+        params.append(f"%{search}%")
+        idx += 1
+
+    where_clause = " AND ".join(where_parts)
+
+    try:
+        async with postgres_service.pool.acquire() as conn:
+            await conn.execute("SET app.is_admin = 'true'")
+            try:
+                total = await conn.fetchval(
+                    f"SELECT COUNT(*) FROM data_files f WHERE {where_clause}",
+                    *params,
+                )
+
+                rows = await conn.fetch(
+                    f"""
+                    SELECT
+                        f.file_id AS id,
+                        f.filename AS name,
+                        f.original_filename AS "originalFilename",
+                        f.mime_type AS "mimeType",
+                        f.size_bytes AS "sizeBytes",
+                        f.visibility,
+                        f.library_id AS "libraryId",
+                        f.owner_id AS "ownerId",
+                        f.content_hash AS "contentHash",
+                        f.chunk_count AS "chunkCount",
+                        f.vector_count AS "vectorCount",
+                        f.created_at AS "createdAt",
+                        f.updated_at AS "updatedAt",
+                        s.stage AS status
+                    FROM data_files f
+                    LEFT JOIN data_status s ON f.file_id = s.file_id
+                    WHERE {where_clause}
+                    ORDER BY {sort_column} {order}
+                    LIMIT ${idx} OFFSET ${idx + 1}
+                    """,
+                    *params, limit, offset,
+                )
+            finally:
+                await conn.execute("SET app.is_admin = 'false'")
+
+        files = []
+        for row in rows:
+            rec = dict(row)
+            if rec.get("id") is not None:
+                rec["id"] = str(rec["id"])
+            if rec.get("libraryId") is not None:
+                rec["libraryId"] = str(rec["libraryId"])
+            if rec.get("ownerId") is not None:
+                rec["ownerId"] = str(rec["ownerId"])
+            if rec.get("createdAt") is not None:
+                rec["createdAt"] = rec["createdAt"].isoformat()
+            if rec.get("updatedAt") is not None:
+                rec["updatedAt"] = rec["updatedAt"].isoformat()
+            files.append(rec)
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "files": files,
+                "total": total or 0,
+                "limit": limit,
+                "offset": offset,
+            },
+        )
+    except Exception as e:
+        logger.error("Admin list files failed", error=str(e), exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to list files", "details": str(e)},
         )
 
 

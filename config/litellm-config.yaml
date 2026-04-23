@@ -1,7 +1,7 @@
 # LiteLLM Configuration - Generated from model_registry.yml
 # Environment: development
 # Backend: mlx
-# Generated: 2026-04-18T20:51:12-04:00
+# Generated: 2026-04-23T15:40:13-04:00
 # DO NOT EDIT - regenerate with: scripts/llm/generate-litellm-config.sh
 
 model_list:
@@ -29,56 +29,67 @@ model_list:
 
   - model_name: fast
     litellm_params:
-      model: openai/mlx-community/Qwen3.5-0.8B-4bit
+      model: openai/mlx-community/Qwen3.5-4B-4bit
       api_base: http://host.docker.internal:18081/v1
       api_key: local
     model_info:
       display_name: "Fast"
-      description: "Tiny multimodal model (0.8B, 262K ctx, vision+tools+thinking) — dispatch/classify"
+      description: "Compact dev agent — 262K ctx, vision+tools. Default for entry tier (24GB MacBooks)."
       multimodal: true
       tool_calling: true
 
   - model_name: classify
     litellm_params:
-      model: openai/mlx-community/Qwen3.5-0.8B-4bit
+      model: openai/mlx-community/Qwen3.5-4B-4bit
       api_base: http://host.docker.internal:18081/v1
       api_key: local
     model_info:
       display_name: "Classify"
-      description: "Tiny multimodal model (0.8B, 262K ctx, vision+tools+thinking) — dispatch/classify"
+      description: "Compact dev agent — 262K ctx, vision+tools. Default for entry tier (24GB MacBooks)."
       multimodal: true
       tool_calling: true
 
   - model_name: cleanup
     litellm_params:
-      model: openai/mlx-community/Qwen3.5-4B-4bit
+      model: openai/unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit
       api_base: http://host.docker.internal:8080/v1
       api_key: local
     model_info:
       display_name: "Cleanup"
-      description: "Compact dev agent — 262K ctx, vision+tools. Default for entry tier (24GB MacBooks)."
+      description: "Qwen3.6 MoE 35B/A3B at MLX dynamic 4-bit (~23GB) — best 4-bit quality, fits 48GB+ Macs."
       multimodal: true
       tool_calling: true
 
   - model_name: parsing
     litellm_params:
-      model: openai/mlx-community/Qwen3.5-4B-4bit
+      model: openai/unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit
       api_base: http://host.docker.internal:8080/v1
       api_key: local
     model_info:
       display_name: "Parsing"
-      description: "Compact dev agent — 262K ctx, vision+tools. Default for entry tier (24GB MacBooks)."
+      description: "Qwen3.6 MoE 35B/A3B at MLX dynamic 4-bit (~23GB) — best 4-bit quality, fits 48GB+ Macs."
+      multimodal: true
+      tool_calling: true
+
+  - model_name: vision
+    litellm_params:
+      model: openai/unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit
+      api_base: http://host.docker.internal:8080/v1
+      api_key: local
+    model_info:
+      display_name: "Vision"
+      description: "Qwen3.6 MoE 35B/A3B at MLX dynamic 4-bit (~23GB) — best 4-bit quality, fits 48GB+ Macs."
       multimodal: true
       tool_calling: true
 
   - model_name: agent
     litellm_params:
-      model: openai/mlx-community/Qwen3.5-4B-4bit
+      model: openai/unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit
       api_base: http://host.docker.internal:8080/v1
       api_key: local
     model_info:
       display_name: "Agent"
-      description: "Compact dev agent — 262K ctx, vision+tools. Default for entry tier (24GB MacBooks)."
+      description: "Qwen3.6 MoE 35B/A3B at MLX dynamic 4-bit (~23GB) — best 4-bit quality, fits 48GB+ Macs."
       multimodal: true
       tool_calling: true
 
@@ -124,12 +135,12 @@ model_list:
 
   - model_name: tool_calling
     litellm_params:
-      model: openai/mlx-community/Qwen3.5-4B-4bit
+      model: openai/unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit
       api_base: http://host.docker.internal:8080/v1
       api_key: local
     model_info:
       display_name: "Tool Calling"
-      description: "Compact dev agent — 262K ctx, vision+tools. Default for entry tier (24GB MacBooks)."
+      description: "Qwen3.6 MoE 35B/A3B at MLX dynamic 4-bit (~23GB) — best 4-bit quality, fits 48GB+ Macs."
       multimodal: true
       tool_calling: true
 
@@ -154,12 +165,12 @@ model_list:
 
   - model_name: transcribe
     litellm_params:
-      model: openai/mlx-community/whisper-tiny-mlx
+      model: openai/mlx-community/whisper-large-v3-mlx
       api_base: http://host.docker.internal:8084/v1
       api_key: local
     model_info:
       display_name: "Transcribe"
-      description: "Speech-to-text transcription (Whisper Tiny, 39M params — dev/lightweight)"
+      description: "Speech-to-text transcription (Whisper Large v3 — production)"
       mode: "audio_transcription"
 
   - model_name: voice
@@ -189,6 +200,16 @@ model_list:
       api_key: local
     model_info:
       description: "Tiny multimodal model (0.8B, 262K ctx, vision+tools+thinking) — dispatch/classify"
+      multimodal: true
+      tool_calling: true
+
+  - model_name: qwen3.6-35b-a3b-mlx-4bit
+    litellm_params:
+      model: openai/unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit
+      api_base: http://host.docker.internal:8080/v1
+      api_key: local
+    model_info:
+      description: "Qwen3.6 MoE 35B/A3B at MLX dynamic 4-bit (~23GB) — best 4-bit quality, fits 48GB+ Macs."
       multimodal: true
       tool_calling: true
 
@@ -225,13 +246,13 @@ model_list:
       description: "Lightweight image generation (FLUX.2 Klein 4B, Q4 for dev)"
       mode: "image_generation"
 
-  - model_name: whisper-tiny-mlx
+  - model_name: whisper-large-v3-mlx
     litellm_params:
-      model: openai/mlx-community/whisper-tiny-mlx
+      model: openai/mlx-community/whisper-large-v3-mlx
       api_base: http://host.docker.internal:8084/v1
       api_key: local
     model_info:
-      description: "Speech-to-text transcription (Whisper Tiny, 39M params — dev/lightweight)"
+      description: "Speech-to-text transcription (Whisper Large v3 — production)"
       mode: "audio_transcription"
 
   - model_name: kokoro-82m-mlx
