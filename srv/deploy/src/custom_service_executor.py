@@ -460,7 +460,7 @@ async def compose_build(
 ) -> bool:
     """Build the custom service compose project."""
     logs.append("Building custom service containers...")
-    cmd = ["docker", "compose", "-p", project_name, "-f", compose_file, "build"]
+    cmd = ["docker", "compose", "-p", project_name, "-f", compose_file, "build", "--no-cache"]
     stdout, stderr, code = await _run(cmd, cwd=app_path, timeout=900)
     if code != 0:
         combined = "\n".join(filter(None, [stderr.strip(), stdout.strip()]))
@@ -875,8 +875,8 @@ async def deploy_custom_service_lxc(
         logs.append(f"Fresh secrets generated ({', '.join(sorted(fresh_secrets))}), wiping volumes for clean init...")
         await _ssh(host, down_cmd, timeout=60)
 
-    # Step 5a: Build
-    build_cmd = f"cd {remote_path} && docker compose -p {project} -f {compose_file} build"
+    # Step 5a: Build (--no-cache ensures freshly-pulled code is always picked up)
+    build_cmd = f"cd {remote_path} && docker compose -p {project} -f {compose_file} build --no-cache"
     logs.append("Building containers on remote host...")
     stdout, stderr, code = await _ssh(host, build_cmd, timeout=900)
     if code != 0:
