@@ -1991,7 +1991,11 @@ class IngestWorker(PipelineMixin, TriggerMixin):
                 started_at=start_time
             )
             
-            # Build job_data dict for error handler
+            # Build job_data dict for error handler.
+            # Include visibility, role_ids, processing_config, and delegation_token so
+            # retried jobs preserve the original context. Without these, retries would
+            # default to visibility="personal" and no roles, breaking shared-file retries
+            # and leaving encrypted files inaccessible (delegation_token needed for decryption).
             job_data_for_retry = {
                 "job_id": job_id,
                 "file_id": file_id,
@@ -2000,6 +2004,10 @@ class IngestWorker(PipelineMixin, TriggerMixin):
                 "mime_type": mime_type,
                 "original_filename": original_filename,
                 "trace_id": trace_id,
+                "visibility": visibility,
+                "role_ids": role_ids_str or "",
+                "processing_config": processing_config_str or "",
+                "delegation_token": delegation_token or "",
             }
             
             # Use ErrorHandler to manage retry logic

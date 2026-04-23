@@ -222,23 +222,27 @@ async def upload_file(
                 content={"error": "role_ids required for shared visibility"}
             )
         
-        # Verify user has create permission on all specified roles
+        # Verify user has create permission on at least one of the specified roles.
+        # A shared folder may have multiple roles (e.g. [A, B]) so that users with
+        # either role can access it. The uploader only needs to hold ONE of those
+        # roles — "OR" semantics, not "AND". The uploaded document will be tagged
+        # with ALL the folder's roles so every permitted audience can read it.
         user_create_roles = getattr(request.state, "role_ids", [])
-        for role_id in parsed_role_ids:
-            if role_id not in user_create_roles:
-                logger.warning(
-                    "User lacks create permission on role",
-                    user_id=user_id,
-                    role_id=role_id,
-                    user_create_roles=user_create_roles,
-                )
-                return JSONResponse(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    content={
-                        "error": f"You don't have 'create' permission on role: {role_id}",
-                        "hint": "You can only upload documents to roles you have create permission on",
-                    }
-                )
+        user_role_set = set(str(r) for r in user_create_roles)
+        if not any(r in user_role_set for r in parsed_role_ids):
+            logger.warning(
+                "User lacks create permission on any of the specified roles",
+                user_id=user_id,
+                role_ids=parsed_role_ids,
+                user_create_roles=user_create_roles,
+            )
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content={
+                    "error": "You need at least one of the specified roles to upload to this shared folder",
+                    "hint": "You can only upload documents to shared folders where you hold at least one of the assigned roles",
+                }
+            )
     
     # Validate file
     if not file.filename:

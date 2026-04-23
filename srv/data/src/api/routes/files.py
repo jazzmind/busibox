@@ -558,6 +558,88 @@ async def admin_list_files(
         )
 
 
+@router.delete("/admin/{fileId}", dependencies=[Depends(require_data_admin)])
+async def admin_delete_file(fileId: str, request: Request):
+    """
+    Delete any file as an admin, bypassing RLS ownership checks.
+
+    Performs the same full cleanup as the regular delete endpoint:
+      - Vectors from Milvus
+      - Object from MinIO
+      - Encryption keys from AuthZ keystore
+      - Metadata from PostgreSQL (cascades to chunks, status, document_roles)
+
+    Requires data.admin scope. Does NOT require the caller to own the file.
+    """
+    config = Config().to_dict()
+    minio_service = MinIOService(config)
+    milvus_service = MilvusService(config)
+    encryption_client = EncryptionClient(config)
+
+    postgres_service = _get_postgres_service()
+    if not postgres_service.pool:
+        await postgres_service.connect()
+
+    try:
+        async with postgres_service.pool.acquire() as conn:
+            await conn.execute("SET app.is_admin = 'true'")
+            try:
+                file_row = await conn.fetchrow(
+                    "SELECT storage_path FROM data_files WHERE file_id = $1",
+                    uuid.UUID(fileId),
+                )
+            finally:
+                await conn.execute("SET app.is_admin = 'false'")
+
+        if not file_row:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"error": "File not found"},
+            )
+
+        storage_path = file_row["storage_path"]
+
+        import asyncio
+
+        try:
+            await asyncio.to_thread(milvus_service.delete_file_vectors, fileId)
+            logger.info("Admin delete: removed Milvus vectors", file_id=fileId)
+        except Exception as e:
+            logger.warning("Admin delete: failed to remove Milvus vectors", file_id=fileId, error=str(e))
+
+        try:
+            await minio_service.delete_file(storage_path)
+            logger.info("Admin delete: removed MinIO object", file_id=fileId, storage_path=storage_path)
+        except Exception as e:
+            logger.warning("Admin delete: failed to remove MinIO object", file_id=fileId, error=str(e))
+
+        try:
+            await encryption_client.delete_file_keys(fileId)
+            logger.info("Admin delete: removed encryption keys", file_id=fileId)
+        except Exception as e:
+            logger.warning("Admin delete: failed to remove encryption keys", file_id=fileId, error=str(e))
+
+        async with postgres_service.pool.acquire() as conn:
+            await conn.execute("SET app.is_admin = 'true'")
+            try:
+                await conn.execute(
+                    "DELETE FROM data_files WHERE file_id = $1",
+                    uuid.UUID(fileId),
+                )
+            finally:
+                await conn.execute("SET app.is_admin = 'false'")
+
+        logger.info("Admin delete: file record deleted", file_id=fileId)
+        return JSONResponse(status_code=200, content={"success": True, "file_id": fileId})
+
+    except Exception as e:
+        logger.error("Admin delete file failed", file_id=fileId, error=str(e), exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to delete file", "details": str(e)},
+        )
+
+
 # =============================================================================
 # Single File Operations
 # =============================================================================
@@ -1871,6 +1953,16 @@ async def move_file(fileId: str, request: Request):
             status_code=status.HTTP_400_BAD_REQUEST,
             content={"error": "roleIds required for shared visibility"},
         )
+
+    # OR semantics: actor must hold at least one of the target roles (not all of them).
+    # A shared folder may have roles [A, B] so that users with either role can access it.
+    if target_visibility == "shared" and role_ids:
+        actor_roles = set(str(r) for r in getattr(request.state, "role_ids", []))
+        if not any(r in actor_roles for r in role_ids):
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content={"error": "You need at least one of the target roles to move a file to this shared folder"},
+            )
 
     # Use the shared singleton - pool is connected on startup
     postgres_service = _get_postgres_service()

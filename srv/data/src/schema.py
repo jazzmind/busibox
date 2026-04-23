@@ -1376,6 +1376,40 @@ def get_data_schema() -> SchemaManager:
         )
     """)
     
+    # File-owner bypass: allow the document owner to manage roles on their own files,
+    # regardless of whether they personally hold those roles. This enables OR-semantic
+    # shared folders: a user with role A can upload to a folder tagged [A, B] and the
+    # system can insert both roles into document_roles so users with A OR B can read it.
+    #
+    # IMPORTANT: These policies use `added_by = current_user` rather than a subquery on
+    # data_files. A data_files subquery would create infinite recursion:
+    #   document_roles policy → data_files → shared_docs_select → document_roles → loop
+    # Using added_by avoids joining back to data_files entirely.
+    schema.add_rls("""
+        CREATE POLICY owner_document_roles_select ON document_roles FOR SELECT USING (
+            added_by = COALESCE(
+                NULLIF(current_setting('app.user_id', true), '')::uuid,
+                '00000000-0000-0000-0000-000000000000'::uuid
+            )
+        )
+    """)
+    schema.add_rls("""
+        CREATE POLICY owner_document_roles_insert ON document_roles FOR INSERT WITH CHECK (
+            added_by = COALESCE(
+                NULLIF(current_setting('app.user_id', true), '')::uuid,
+                '00000000-0000-0000-0000-000000000000'::uuid
+            )
+        )
+    """)
+    schema.add_rls("""
+        CREATE POLICY owner_document_roles_delete ON document_roles FOR DELETE USING (
+            added_by = COALESCE(
+                NULLIF(current_setting('app.user_id', true), '')::uuid,
+                '00000000-0000-0000-0000-000000000000'::uuid
+            )
+        )
+    """)
+
     # Admin bypass: full CRUD on document_roles when app.is_admin is set
     schema.add_rls("""
         CREATE POLICY admin_document_roles_select ON document_roles FOR SELECT USING (

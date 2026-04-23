@@ -209,20 +209,26 @@ class ErrorHandler:
                 request=rls_context,
             )
             
-            # Re-add to Redis stream with maxlen to prevent unbounded growth
+            # Re-add to Redis stream with maxlen to prevent unbounded growth.
+            # delegation_token is included so retried jobs can still exchange it for
+            # a user-scoped token (needed for decryption and other auth'd operations).
+            stream_fields: dict = {
+                "file_id": job_data.get("file_id"),
+                "user_id": job_data.get("user_id"),
+                "storage_path": job_data.get("storage_path"),
+                "mime_type": job_data.get("mime_type"),
+                "original_filename": job_data.get("original_filename", ""),
+                "processing_config": job_data.get("processing_config", ""),
+                "visibility": job_data.get("visibility", "personal"),
+                "role_ids": job_data.get("role_ids", ""),
+                "retry_count": str(new_retry_count),
+            }
+            delegation_token = job_data.get("delegation_token", "")
+            if delegation_token:
+                stream_fields["delegation_token"] = delegation_token
             self.redis_client.xadd(
                 self.stream_name,
-                {
-                    "file_id": job_data.get("file_id"),
-                    "user_id": job_data.get("user_id"),
-                    "storage_path": job_data.get("storage_path"),
-                    "mime_type": job_data.get("mime_type"),
-                    "original_filename": job_data.get("original_filename", ""),
-                    "processing_config": job_data.get("processing_config", ""),
-                    "visibility": job_data.get("visibility", "personal"),
-                    "role_ids": job_data.get("role_ids", ""),
-                    "retry_count": str(new_retry_count),
-                },
+                stream_fields,
                 maxlen=10000,  # Limit stream to 10k messages
             )
             
