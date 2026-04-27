@@ -24,7 +24,7 @@ import logging
 import uuid
 import json
 from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional
 from pydantic import BaseModel
 from .models import (
     DeployRequest,
@@ -129,7 +129,7 @@ async def deploy_app(
     active_connections[deployment_id] = []
     
     # Start deployment in background
-    asyncio.create_task(execute_deployment(deployment_id, manifest, deploy_config))
+    asyncio.create_task(execute_deployment(deployment_id, manifest, deploy_config, token_payload))
     
     return DeploymentResult(
         deploymentId=deployment_id,
@@ -141,7 +141,8 @@ async def deploy_app(
 async def execute_deployment(
     deployment_id: str,
     manifest: BusiboxManifest,
-    deploy_config: DeploymentConfig
+    deploy_config: DeploymentConfig,
+    token_payload: Optional[dict] = None,
 ):
     """
     Execute deployment asynchronously.
@@ -215,10 +216,15 @@ async def execute_deployment(
             await broadcast_status(deployment_id)
 
             # Auto-generate and persist secrets for unresolved requiredEnvVars
+            caller_token = (token_payload or {}).get("token", "")
+            caller_user_id = (token_payload or {}).get("user_id", "")
             fresh_secrets: set = set()
             try:
                 config_id = await deployment_db.ensure_deployment_config_for_app(manifest.id)
-                resolved, fresh_secrets = await resolve_app_secrets(config_id, manifest, deploy_config, deploy_logs)
+                resolved, fresh_secrets = await resolve_app_secrets(
+                    config_id, manifest, deploy_config, deploy_logs,
+                    caller_token=caller_token, caller_user_id=caller_user_id,
+                )
                 deploy_config.secrets.update(resolved)
             except Exception as exc:
                 logger.warning("Secret resolution failed (non-fatal): %s", exc)

@@ -136,10 +136,12 @@ async def upsert_github_connection(
     github_user_id: str,
     github_username: str,
     scopes: List[str],
+    caller_token: str = "",
+    caller_user_id: str = "",
 ) -> dict:
     """Insert or update a GitHub connection for a user."""
-    enc_access = await authz_crypto.encrypt(access_token, f"github:{user_id}:access")
-    enc_refresh = await authz_crypto.encrypt(refresh_token, f"github:{user_id}:refresh") if refresh_token else None
+    enc_access = await authz_crypto.encrypt(access_token, f"github:{user_id}:access", caller_token, caller_user_id)
+    enc_refresh = await authz_crypto.encrypt(refresh_token, f"github:{user_id}:refresh", caller_token, caller_user_id) if refresh_token else None
 
     sql = f"""
         INSERT INTO github_connections (user_id, access_token, refresh_token, token_expires_at, github_user_id, github_username, scopes)
@@ -167,12 +169,12 @@ async def delete_github_connection_by_user(user_id: str) -> bool:
     return True
 
 
-async def get_decrypted_github_token(user_id: str) -> Optional[str]:
+async def get_decrypted_github_token(user_id: str, caller_token: str = "", caller_user_id: str = "") -> Optional[str]:
     """Get the decrypted access token for a user's GitHub connection."""
     conn = await get_github_connection_by_user(user_id)
     if not conn or not conn.get('access_token'):
         return None
-    return await authz_crypto.decrypt(conn['access_token'], f"github:{user_id}:access")
+    return await authz_crypto.decrypt(conn['access_token'], f"github:{user_id}:access", caller_token, caller_user_id)
 
 
 # ============================================================================
@@ -475,8 +477,10 @@ async def upsert_secret(
     value: str,
     secret_type: str = 'CUSTOM',
     description: Optional[str] = None,
+    caller_token: str = "",
+    caller_user_id: str = "",
 ) -> dict:
-    enc_value = await authz_crypto.encrypt(value, f"secret:{config_id}:{key}")
+    enc_value = await authz_crypto.encrypt(value, f"secret:{config_id}:{key}", caller_token, caller_user_id)
     sql = f"""
         INSERT INTO app_secrets (deployment_config_id, key, encrypted_value, type, description)
         VALUES ({_escape(config_id)}, {_escape(key)}, {_escape(enc_value)}, {_escape(secret_type)}, {_escape(description)})
@@ -500,14 +504,14 @@ async def delete_secret(secret_id: str) -> bool:
     return True
 
 
-async def get_secret_decrypted(config_id: str, key: str) -> Optional[str]:
+async def get_secret_decrypted(config_id: str, key: str, caller_token: str = "", caller_user_id: str = "") -> Optional[str]:
     """Get a decrypted secret value by config ID and key."""
     sql = f"SELECT encrypted_value FROM app_secrets WHERE deployment_config_id = {_escape(config_id)} AND key = {_escape(key)}"
     result = await _query(sql)
     rows = _parse_rows(result, ['encrypted_value'])
     if not rows or not rows[0].get('encrypted_value'):
         return None
-    return await authz_crypto.decrypt(rows[0]['encrypted_value'], f"secret:{config_id}:{key}")
+    return await authz_crypto.decrypt(rows[0]['encrypted_value'], f"secret:{config_id}:{key}", caller_token, caller_user_id)
 
 
 # ============================================================================
@@ -626,8 +630,10 @@ async def create_app_database(
     password: str,
     host: str = 'postgres',
     port: int = 5432,
+    caller_token: str = "",
+    caller_user_id: str = "",
 ) -> dict:
-    enc_password = await authz_crypto.encrypt(password, f"dbpass:{config_id}")
+    enc_password = await authz_crypto.encrypt(password, f"dbpass:{config_id}", caller_token, caller_user_id)
     sql = f"""
         INSERT INTO app_databases (deployment_config_id, database_name, database_user, encrypted_password, host, port)
         VALUES ({_escape(config_id)}, {_escape(database_name)}, {_escape(database_user)}, {_escape(enc_password)}, {_escape(host)}, {_escape(port)})
@@ -640,7 +646,7 @@ async def create_app_database(
     return _row_to_appdb(rows[0])
 
 
-async def get_app_database_url(config_id: str) -> Optional[str]:
+async def get_app_database_url(config_id: str, caller_token: str = "", caller_user_id: str = "") -> Optional[str]:
     """Get the full DATABASE_URL for an app, decrypting the password."""
     sql = f"SELECT {_APPDB_SELECT} FROM app_databases WHERE deployment_config_id = {_escape(config_id)}"
     result = await _query(sql)
@@ -648,7 +654,7 @@ async def get_app_database_url(config_id: str) -> Optional[str]:
     if not rows:
         return None
     row = rows[0]
-    password = await authz_crypto.decrypt(row['encrypted_password'], f"dbpass:{config_id}")
+    password = await authz_crypto.decrypt(row['encrypted_password'], f"dbpass:{config_id}", caller_token, caller_user_id)
     return f"postgresql://{row['database_user']}:{password}@{row['host']}:{row['port']}/{row['database_name']}"
 
 

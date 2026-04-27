@@ -67,6 +67,7 @@ async def verify_admin_token(
             "email": "bootstrap@system",
             "roles": [{"id": "bootstrap", "name": "Admin"}],
             "scopes": ["deploy:*"],
+            "token": token,
         }
     
     try:
@@ -104,12 +105,12 @@ async def verify_admin_token(
         
         logger.info(f"[AUTH] Admin user {user_context.user_id} authenticated for deployment")
         
-        # Return validated user info (don't spread payload to avoid conflicts)
         return {
             "user_id": user_context.user_id,
             "email": user_context.email,
             "roles": [{"id": r.id, "name": r.name} for r in user_context.roles],
             "scopes": list(user_context.scopes),
+            "token": token,
         }
             
     except HTTPException:

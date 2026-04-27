@@ -377,6 +377,8 @@ async def resolve_app_secrets(
     manifest: BusiboxManifest,
     deploy_config: DeploymentConfig,
     logs: List[str],
+    caller_token: str = "",
+    caller_user_id: str = "",
 ) -> Tuple[Dict[str, str], set]:
     """Auto-generate and persist secrets for requiredEnvVars not provided elsewhere.
 
@@ -398,9 +400,10 @@ async def resolve_app_secrets(
             continue
 
         try:
-            existing = await deployment_db.get_secret_decrypted(config_id, var)
+            existing = await deployment_db.get_secret_decrypted(config_id, var, caller_token, caller_user_id)
         except Exception as exc:
             logger.warning("Could not read persisted secret %s: %s", var, exc)
+            logs.append(f"Warning: could not read persisted secret {var}: {exc}")
             existing = None
 
         if existing:
@@ -415,12 +418,15 @@ async def resolve_app_secrets(
                     value=value,
                     secret_type="CUSTOM",
                     description="Auto-generated on first deploy",
+                    caller_token=caller_token,
+                    caller_user_id=caller_user_id,
                 )
+                logs.append(f"Generated and persisted new secret: {var}")
             except Exception as exc:
                 logger.warning("Could not persist secret %s: %s", var, exc)
+                logs.append(f"Warning: generated secret {var} but failed to persist: {exc}")
             resolved[var] = value
             newly_generated.add(var)
-            logs.append(f"Generated new secret: {var}")
 
     return resolved, newly_generated
 
@@ -460,7 +466,7 @@ async def compose_build(
 ) -> bool:
     """Build the custom service compose project."""
     logs.append("Building custom service containers...")
-    cmd = ["docker", "compose", "-p", project_name, "-f", compose_file, "build", "--no-cache"]
+    cmd = ["docker", "compose", "-p", project_name, "-f", compose_file, "build"]
     stdout, stderr, code = await _run(cmd, cwd=app_path, timeout=900)
     if code != 0:
         combined = "\n".join(filter(None, [stderr.strip(), stdout.strip()]))
@@ -611,11 +617,7 @@ async def deploy_custom_service(
     write_env_file(app_path, env_vars)
     logs.append(f"Generated .env with {len(env_vars)} variables")
 
-    # Step 4b: Wipe volumes if secrets were freshly generated.
-    if fresh_secrets:
-        logs.append(f"Fresh secrets generated ({', '.join(sorted(fresh_secrets))}), wiping volumes for clean init...")
-        down_cmd = ["docker", "compose", "-p", project, "-f", compose_file, "down", "-v"]
-        await _run(down_cmd, cwd=app_path, timeout=60)
+    # (Password sync for PGPASSWORD happens after containers start — see Step 6b)
 
     # Step 5: Build
     if not await compose_build(app_path, compose_file, project, logs):
@@ -624,6 +626,28 @@ async def deploy_custom_service(
     # Step 6: Start
     if not await compose_up(app_path, compose_file, project, logs):
         return False
+
+    # Step 6b: Always sync PGPASSWORD with the running database.
+    if env_vars.get("PGPASSWORD"):
+        pg_password = env_vars.get("PGPASSWORD", "")
+        db_container = f"{project}-db-1"
+        if pg_password:
+            user_cmd = ["docker", "exec", db_container, "printenv", "POSTGRES_USER", "POSTGRES_DB"]
+            stdout, _, _ = await _run(user_cmd, timeout=10)
+            env_lines = stdout.strip().split("\n")
+            pg_user = env_lines[0].strip() if len(env_lines) > 0 and env_lines[0].strip() else "postgres"
+            pg_db = env_lines[1].strip() if len(env_lines) > 1 and env_lines[1].strip() else pg_user
+            logs.append(f"Syncing PGPASSWORD for user '{pg_user}' (db={pg_db})...")
+            alter_cmd = [
+                "docker", "exec", db_container,
+                "psql", "-U", pg_user, "-d", pg_db, "-c",
+                f"ALTER USER \"{pg_user}\" PASSWORD '{pg_password}';",
+            ]
+            _, stderr, code = await _run(alter_cmd, timeout=30)
+            if code != 0:
+                logs.append(f"Warning: Could not sync password for {pg_user}: {stderr.strip()}")
+            else:
+                logs.append(f"Synced password for postgres user: {pg_user}")
 
     # Step 7: Health check
     healthy = await check_custom_service_health(manifest, project, logs)
@@ -806,19 +830,19 @@ async def deploy_custom_service_lxc(
     logs.append(f"Deploying custom service {manifest.name} to {host} via SSH")
 
     # Step 0: Tear down any existing deployment so ports/names are freed.
-    # Use docker directly to find/kill containers by compose project label --
-    # this works even if the compose file is missing, changed, or the /tmp
-    # registry was wiped by a deploy-api restart.
+    # Kill containers from both the busibox-prefixed project name AND the
+    # bare app_id project name (from manual deploys or old deploy.sh scripts).
     logs.append("Stopping any existing deployment on remote host...")
-    teardown_cmd = (
-        f'CIDS=$(docker ps -aq --filter "label=com.docker.compose.project={project}"); '
-        f'if [ -n "$CIDS" ]; then docker rm -f $CIDS; fi; '
-        f'docker network rm {project}_default 2>/dev/null; '
-        f'true'
-    )
-    stdout, stderr, _ = await _ssh(host, teardown_cmd, timeout=120)
-    if stdout.strip():
-        logs.append(f"Removed existing containers: {stdout.strip()}")
+    for proj in [project, app_id]:
+        teardown_cmd = (
+            f'CIDS=$(docker ps -aq --filter "label=com.docker.compose.project={proj}"); '
+            f'if [ -n "$CIDS" ]; then docker rm -f $CIDS; fi; '
+            f'docker network rm {proj}_default 2>/dev/null; '
+            f'true'
+        )
+        stdout, stderr, _ = await _ssh(host, teardown_cmd, timeout=120)
+        if stdout.strip():
+            logs.append(f"Removed containers (project={proj}): {stdout.strip()}")
 
     # Step 1: Ensure base directory exists
     _, _, code = await _ssh(host, f"mkdir -p {remote_base}")
@@ -867,16 +891,10 @@ async def deploy_custom_service_lxc(
         return False
     logs.append(f"Generated .env with {len(env_vars)} variables on remote")
 
-    # Step 4b: Wipe volumes if secrets were freshly generated.
-    # PostgreSQL ignores POSTGRES_PASSWORD when pgdata already exists, so a
-    # password change only takes effect on a fresh volume.
-    if fresh_secrets:
-        down_cmd = f"cd {remote_path} && docker compose -p {project} -f {compose_file} down -v 2>&1 || true"
-        logs.append(f"Fresh secrets generated ({', '.join(sorted(fresh_secrets))}), wiping volumes for clean init...")
-        await _ssh(host, down_cmd, timeout=60)
+    # (Password sync for PGPASSWORD happens after containers start — see Step 5c)
 
-    # Step 5a: Build (--no-cache ensures freshly-pulled code is always picked up)
-    build_cmd = f"cd {remote_path} && docker compose -p {project} -f {compose_file} build --no-cache"
+    # Step 5a: Build
+    build_cmd = f"cd {remote_path} && docker compose -p {project} -f {compose_file} build"
     logs.append("Building containers on remote host...")
     stdout, stderr, code = await _ssh(host, build_cmd, timeout=900)
     if code != 0:
@@ -895,6 +913,45 @@ async def deploy_custom_service_lxc(
         combined = "\n".join(filter(None, [stderr.strip(), stdout.strip()]))
         logs.append(f"Failed to start containers: {combined or 'no output'}")
         return False
+
+    # Step 5c: Always sync PGPASSWORD with the running database.
+    # PostgreSQL only reads POSTGRES_PASSWORD on first init (empty pgdata).
+    # On redeploys the volume may have a stale password, so always ALTER USER.
+    if env_vars.get("PGPASSWORD"):
+        pg_password = env_vars.get("PGPASSWORD", "")
+        db_container = f"{project}-db-1"
+        if pg_password:
+            # Detect superuser and database from the running container
+            stdout, _, _ = await _ssh(
+                host,
+                f"docker exec {db_container} printenv POSTGRES_USER POSTGRES_DB",
+                timeout=10,
+            )
+            env_lines = stdout.strip().split("\n")
+            pg_user = env_lines[0].strip() if len(env_lines) > 0 and env_lines[0].strip() else "postgres"
+            pg_db = env_lines[1].strip() if len(env_lines) > 1 and env_lines[1].strip() else pg_user
+            logs.append(f"Syncing PGPASSWORD for user '{pg_user}' (db={pg_db})...")
+
+            for attempt in range(15):
+                _, _, code = await _ssh(
+                    host,
+                    f"docker exec {db_container} pg_isready -U {pg_user} -d {pg_db}",
+                    timeout=10,
+                )
+                if code == 0:
+                    break
+                await asyncio.sleep(2)
+
+            alter_cmd = (
+                f"docker exec -i {db_container} psql -U {pg_user} -d {pg_db} <<'PSQLEOF'\n"
+                f"ALTER USER \"{pg_user}\" PASSWORD '{pg_password}';\n"
+                f"PSQLEOF"
+            )
+            _, stderr, code = await _ssh(host, alter_cmd, timeout=30)
+            if code != 0:
+                logs.append(f"Warning: Could not sync password for {pg_user}: {stderr.strip()}")
+            else:
+                logs.append(f"Synced password for postgres user: {pg_user}")
 
     # Step 6: Register
     register_custom_service(app_id, remote_path, project, manifest.model_dump())

@@ -71,8 +71,14 @@ async def execute_sql(sql: str, database: str = 'postgres') -> Tuple[str, str, i
     if is_docker_environment():
         return await execute_psql_direct(sql, database)
     else:
-        # SSH to postgres host and run psql there
-        command = f"PGPASSWORD='{config.postgres_admin_password}' psql -h localhost -U {config.postgres_admin_user} -d {database} -tAc \"{sql}\""
+        # SSH to postgres host, piping SQL through stdin with a quoted heredoc
+        # to prevent shell expansion of $, \, backticks etc. in encrypted values.
+        command = (
+            f"PGPASSWORD='{config.postgres_admin_password}' "
+            f"psql -h localhost -U {config.postgres_admin_user} -d {database} -tA <<'BUSIBOX_SQL'\n"
+            f"{sql}\n"
+            f"BUSIBOX_SQL"
+        )
         return await execute_ssh_command(config.postgres_host, command)
 
 
