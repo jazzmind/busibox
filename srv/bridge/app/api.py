@@ -102,6 +102,35 @@ class SendChannelMessageRequest(BaseModel):
     metadata: Optional[dict] = None
 
 
+class SendNotificationRequest(BaseModel):
+    """Generic notification request — bridge picks the best available channel.
+
+    ``recipient`` is an email address, phone number, or channel-specific ID
+    depending on what channels are enabled.  Bridge tries: email → telegram →
+    signal → discord, stopping at the first one that succeeds.
+
+    ``notification_type`` is a free-form label for the caller (e.g.
+    ``daily_summary``, ``alert``, ``report``).  It does not change routing in
+    this MVP — it is logged and passed through in the response for tracing.
+    """
+
+    app_id: str = ""
+    notification_type: str = "generic"
+    recipient: str
+    subject: str
+    body: str
+    priority: str = "normal"  # low | normal | high
+    metadata: Optional[dict] = None
+
+
+class NotificationResponse(BaseModel):
+    success: bool
+    channel_used: str = ""
+    provider: str = ""
+    message: str = ""
+    error: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -421,5 +450,120 @@ def create_app(
         except Exception as exc:
             logger.error(f"[API] test email failed: {exc}")
             raise HTTPException(status_code=500, detail=str(exc))
+
+    # ------------------------------------------------------------------
+    # Generic notification endpoint
+    # ------------------------------------------------------------------
+
+    @app.post("/api/v1/notify", response_model=NotificationResponse)
+    async def send_notification(req: SendNotificationRequest):
+        """Send a notification via the best available channel.
+
+        Tries channels in priority order: email → telegram → signal → discord.
+        Stops at the first successful delivery and returns which channel was used.
+
+        This is the preferred endpoint for application code (e.g. cron scripts,
+        background workers) that want to notify a user without coupling to a
+        specific channel.
+        """
+        logger.info(
+            "[notify] app=%s type=%s recipient=%s priority=%s",
+            req.app_id or "-",
+            req.notification_type,
+            req.recipient,
+            req.priority,
+        )
+
+        errors: list[str] = []
+
+        # ---- 1. Email -------------------------------------------------------
+        if settings.email_enabled:
+            try:
+                html_body = (
+                    f"<h2>{req.subject}</h2>"
+                    f"<p>{req.body.replace(chr(10), '<br>')}</p>"
+                )
+                if req.app_id:
+                    html_body += (
+                        f"<p style='color:#888;font-size:12px'>"
+                        f"Source: {req.app_id} | Type: {req.notification_type}"
+                        f"</p>"
+                    )
+                result = await email_client.send(
+                    req.recipient,
+                    req.subject,
+                    html_body,
+                    req.body,
+                )
+                if result.get("success", True):
+                    return NotificationResponse(
+                        success=True,
+                        channel_used="email",
+                        provider=result.get("provider", "unknown"),
+                        message=f"Notification sent to {req.recipient} via email",
+                    )
+                errors.append(f"email: {result.get('error', 'unknown error')}")
+            except Exception as exc:
+                errors.append(f"email: {exc}")
+                logger.warning("[notify] email failed: %s", exc)
+
+        # ---- 2. Telegram ----------------------------------------------------
+        if settings.telegram_enabled and settings.telegram_bot_token:
+            try:
+                text = f"*{req.subject}*\n\n{req.body}"
+                async with TelegramClient(settings.telegram_bot_token) as tg:
+                    await tg.send_message(req.recipient, text, parse_mode="Markdown")
+                return NotificationResponse(
+                    success=True,
+                    channel_used="telegram",
+                    message=f"Notification sent to {req.recipient} via telegram",
+                )
+            except Exception as exc:
+                errors.append(f"telegram: {exc}")
+                logger.warning("[notify] telegram failed: %s", exc)
+
+        # ---- 3. Signal ------------------------------------------------------
+        if settings.signal_enabled and settings.signal_phone_number:
+            try:
+                text = f"{req.subject}\n\n{req.body}"
+                async with SignalClient(
+                    base_url=str(settings.signal_cli_url),
+                    phone_number=settings.signal_phone_number,
+                ) as sig:
+                    ok = await sig.send_message(req.recipient, text)
+                if ok:
+                    return NotificationResponse(
+                        success=True,
+                        channel_used="signal",
+                        message=f"Notification sent to {req.recipient} via signal",
+                    )
+                errors.append("signal: send returned False")
+            except Exception as exc:
+                errors.append(f"signal: {exc}")
+                logger.warning("[notify] signal failed: %s", exc)
+
+        # ---- 4. Discord -----------------------------------------------------
+        if settings.discord_enabled and settings.discord_bot_token:
+            try:
+                text = f"**{req.subject}**\n\n{req.body}"
+                async with DiscordClient(settings.discord_bot_token) as dc:
+                    await dc.send_message(req.recipient, text)
+                return NotificationResponse(
+                    success=True,
+                    channel_used="discord",
+                    message=f"Notification sent to {req.recipient} via discord",
+                )
+            except Exception as exc:
+                errors.append(f"discord: {exc}")
+                logger.warning("[notify] discord failed: %s", exc)
+
+        # ---- No channel succeeded -------------------------------------------
+        error_summary = "; ".join(errors) if errors else "no channels are enabled"
+        logger.error("[notify] all channels failed: %s", error_summary)
+        return NotificationResponse(
+            success=False,
+            error=error_summary,
+            message="Notification could not be delivered on any channel",
+        )
 
     return app

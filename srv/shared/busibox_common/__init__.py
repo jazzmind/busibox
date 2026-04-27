@@ -114,7 +114,18 @@ from .secrets import (
     warn_insecure_secrets,
 )
 
+# Notification client (no heavy dependencies — uses httpx or stdlib urllib)
+from .notifications import (
+    BridgeNotificationClient,
+    NotificationResult,
+    get_notification_client,
+)
+
 __all__ = [
+    # Notifications
+    "BridgeNotificationClient",
+    "NotificationResult",
+    "get_notification_client",
     # Secrets validation
     "KNOWN_INSECURE_DEFAULTS",
     "is_insecure_value",
