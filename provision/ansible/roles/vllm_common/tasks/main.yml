@@ -218,7 +218,7 @@
 
 - name: Set vLLM nightly wheel index based on GPU architecture
   set_fact:
-    vllm_wheel_index: "{% if gpu_compute_major.stdout | default('8') | int >= 10 %}https://wheels.vllm.ai/nightly/cu130{% else %}https://wheels.vllm.ai/6e9f21e8a2ba1e53ee4f1cff4844e11ce600f7fa{% endif %}"
+    vllm_wheel_index: "{% if gpu_compute_major.stdout | default('8') | int >= 10 %}https://wheels.vllm.ai/nightly/cu130{% else %}https://wheels.vllm.ai/nightly{% endif %}"
   tags: [vllm_install]
 
 - name: Display selected vLLM wheel index
@@ -228,10 +228,9 @@
 
 # vLLM nightly is required for the Qwen3-family MoE architectures
 # (qwen3_5 / qwen3_6 / qwen3_moe) until they ship in a stable release.
-# The /nightly/ index sometimes only has aarch64 wheels (x86_64 CI failures upstream).
-# We pin to a known-good commit that has x86_64 wheels. --index-strategy
-# unsafe-best-match lets uv consider vllm from both the commit index AND PyPI,
-# picking the highest version with a matching platform wheel.
+# --index-strategy unsafe-best-match lets uv consider vllm from both the
+# nightly index AND PyPI, picking the highest version with a matching
+# platform wheel.
 # See: https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3.5.html
 - name: Install vLLM (nightly) with uv
   shell: |
