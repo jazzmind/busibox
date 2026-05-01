@@ -2702,9 +2702,10 @@ class PostgresService:
         """
         Aggregate oauth.token.issued audit events by app_id.
 
-        Uses details->>'resource_id' as the app identifier because the
-        legacy insert_audit path stores the app id there.  We exclude
-        rows where that field is NULL or empty string.
+        Uses details->>'audience' as the app identifier (the human-readable
+        app name / audience the token was issued for), filtered to app-scoped
+        tokens only ((details->>'app_scoped')::boolean = true).  This avoids
+        displaying internal UUID resource_ids in the analytics UI.
 
         Returns a list of per-app dicts with request counts and unique
         user counts for today / 7 days / the full window, plus a daily
@@ -2723,7 +2724,7 @@ class PostgresService:
             rows = await conn.fetch(
                 """
                 SELECT
-                    details->>'resource_id' AS app_id,
+                    details->>'audience' AS app_id,
                     COUNT(*)                                                    AS requests_30d,
                     COUNT(DISTINCT actor_id)                                    AS unique_users_30d,
                     COUNT(*) FILTER (WHERE created_at >= $2)                   AS requests_7d,
@@ -2733,9 +2734,10 @@ class PostgresService:
                 FROM audit_logs
                 WHERE action = 'oauth.token.issued'
                   AND created_at >= $1
-                  AND details->>'resource_id' IS NOT NULL
-                  AND details->>'resource_id' <> ''
-                GROUP BY details->>'resource_id'
+                  AND (details->>'app_scoped')::boolean = true
+                  AND details->>'audience' IS NOT NULL
+                  AND details->>'audience' <> ''
+                GROUP BY details->>'audience'
                 ORDER BY requests_30d DESC
                 """,
                 cutoff,
@@ -2747,16 +2749,17 @@ class PostgresService:
             trend_rows = await conn.fetch(
                 """
                 SELECT
-                    details->>'resource_id'        AS app_id,
+                    details->>'audience'           AS app_id,
                     DATE(created_at)               AS day,
                     COUNT(*)                       AS requests,
                     COUNT(DISTINCT actor_id)        AS unique_users
                 FROM audit_logs
                 WHERE action = 'oauth.token.issued'
                   AND created_at >= $1
-                  AND details->>'resource_id' IS NOT NULL
-                  AND details->>'resource_id' <> ''
-                GROUP BY details->>'resource_id', DATE(created_at)
+                  AND (details->>'app_scoped')::boolean = true
+                  AND details->>'audience' IS NOT NULL
+                  AND details->>'audience' <> ''
+                GROUP BY details->>'audience', DATE(created_at)
                 ORDER BY day
                 """,
                 cutoff,
@@ -2811,7 +2814,8 @@ class PostgresService:
                 FROM audit_logs
                 WHERE action = 'oauth.token.issued'
                   AND created_at >= $1
-                  AND details->>'resource_id' = $2
+                  AND (details->>'app_scoped')::boolean = true
+                  AND details->>'audience' = $2
                 GROUP BY DATE(created_at)
                 ORDER BY day
                 """,
@@ -2827,7 +2831,8 @@ class PostgresService:
                 FROM audit_logs
                 WHERE action = 'oauth.token.issued'
                   AND created_at >= $1
-                  AND details->>'resource_id' = $2
+                  AND (details->>'app_scoped')::boolean = true
+                  AND details->>'audience' = $2
                 GROUP BY EXTRACT(HOUR FROM created_at)
                 ORDER BY hour
                 """,
@@ -2843,7 +2848,8 @@ class PostgresService:
                 FROM audit_logs
                 WHERE action = 'oauth.token.issued'
                   AND created_at >= $1
-                  AND details->>'resource_id' = $2
+                  AND (details->>'app_scoped')::boolean = true
+                  AND details->>'audience' = $2
                 GROUP BY actor_id
                 ORDER BY requests DESC
                 LIMIT 20

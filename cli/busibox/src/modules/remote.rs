@@ -328,6 +328,20 @@ where
         .spawn()?;
 
     let stdout = child.stdout.take().ok_or_else(|| eyre!("no stdout"))?;
+    let stderr = child.stderr.take();
+    let (stderr_rx, stderr_handle) = {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let handle = std::thread::spawn(move || {
+            if let Some(se) = stderr {
+                let reader = std::io::BufReader::new(se);
+                for line in reader.lines().flatten() {
+                    let _ = tx.send(line);
+                }
+            }
+        });
+        (rx, handle)
+    };
+
     let reader = std::io::BufReader::new(stdout);
     for line in reader.lines() {
         if let Ok(l) = line {
@@ -340,6 +354,14 @@ where
     }
 
     let status = child.wait()?;
+    let _ = stderr_handle.join();
+    for line in stderr_rx.try_iter() {
+        let cleaned = strip_ansi(&line);
+        let trimmed = cleaned.trim();
+        if !trimmed.is_empty() {
+            on_line(trimmed);
+        }
+    }
     Ok(status.code().unwrap_or(1))
 }
 
@@ -389,6 +411,20 @@ where
         .spawn()?;
 
     let stdout = child.stdout.take().ok_or_else(|| eyre!("no stdout"))?;
+    let stderr = child.stderr.take();
+    let (stderr_rx, stderr_handle) = {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let handle = std::thread::spawn(move || {
+            if let Some(se) = stderr {
+                let reader = std::io::BufReader::new(se);
+                for line in reader.lines().flatten() {
+                    let _ = tx.send(line);
+                }
+            }
+        });
+        (rx, handle)
+    };
+
     let reader = std::io::BufReader::new(stdout);
     for line in reader.lines() {
         if let Ok(l) = line {
@@ -401,6 +437,14 @@ where
     }
 
     let status = child.wait()?;
+    let _ = stderr_handle.join();
+    for line in stderr_rx.try_iter() {
+        let cleaned = strip_ansi(&line);
+        let trimmed = cleaned.trim();
+        if !trimmed.is_empty() {
+            on_line(trimmed);
+        }
+    }
     Ok(status.code().unwrap_or(1))
 }
 

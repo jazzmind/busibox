@@ -20,7 +20,9 @@
 #   status   - Show service status
 #   redeploy - Rebuild and restart (Docker) or redeploy (Ansible/K8s)
 #
-set -eo pipefail
+set -Eeo pipefail
+
+trap 'rc=$?; echo "[ERROR] service-manage.sh failed at line ${LINENO}: ${BASH_COMMAND} (exit ${rc})" >&2' ERR
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -170,6 +172,8 @@ main() {
     env=$(get_current_env)
     backend=$(get_backend_type "$env")
     prefix=$(get_container_prefix "$env")
+
+    info "Service manage request: service(s)=${services_input} action=${action} env=${env} backend=${backend} vault=${VAULT_PREFIX:-$prefix}"
 
     # Set globals for backend files
     export CONTAINER_PREFIX="$prefix"

@@ -2244,23 +2244,17 @@ fn apply_tier_inner(app: &mut App, deploy: bool) {
                     "--- Step 2/5: Deploying vLLM services ---".into(),
                 ));
 
-                let cache_home = if is_remote {
-                    "$HOME".to_string()
-                } else {
-                    dirs::home_dir()
-                        .unwrap_or_default()
-                        .display()
-                        .to_string()
-                };
                 let mut download_args = format!(
                     "{env_prefix}\
-                     LLM_BACKEND=vllm \
-                     HF_HOST_CACHE={cache_home}/.cache/huggingface "
+                     LLM_BACKEND=vllm "
                 );
                 if let Some(ref tok) = hf_token {
                     download_args.push_str(&format!("HF_TOKEN={} ", shell_escape(tok)));
                 }
-                download_args.push_str(&format!("install SERVICE={llm_svc}"));
+                download_args.push_str(&format!(
+                    "manage SERVICE={llm_svc} ACTION=redeploy LLM_TIER={}",
+                    shell_escape(&tier_name)
+                ));
                 step2_ok = run_make_step(
                     &tx,
                     is_remote,
@@ -2276,8 +2270,12 @@ fn apply_tier_inner(app: &mut App, deploy: bool) {
                 let _ = tx.send(ModelsManageUpdate::Log(
                     "WARNING: Model download/install may have failed".into(),
                 ));
+                let _ = tx.send(ModelsManageUpdate::Log(
+                    "Skipping readiness wait and LiteLLM redeploy because model deployment failed".into(),
+                ));
             }
 
+            if step2_ok {
             // Step 3: Wait for models to be available
             if backend_str == "mlx" {
                 let _ = tx.send(ModelsManageUpdate::Log(
@@ -2423,6 +2421,7 @@ fn apply_tier_inner(app: &mut App, deploy: bool) {
                     "WARNING: litellm redeploy may have failed".into(),
                 ));
             }
+            }
         } else {
             let _ = tx.send(ModelsManageUpdate::Log(
                 "--- Steps 2-4 skipped (no changes) ---".into(),
@@ -2478,6 +2477,11 @@ fn run_make_step(
     make_args: &str,
     vault_password: Option<&str>,
 ) -> bool {
+    let redacted_make_args = redact_make_args(make_args);
+    let _ = tx.send(ModelsManageUpdate::Log(format!(
+        "Running: make {redacted_make_args}"
+    )));
+
     let tx2 = tx.clone();
     let on_line = move |line: &str| {
         let _ = tx2.send(ModelsManageUpdate::Log(format!("  {line}")));
@@ -2536,6 +2540,21 @@ fn run_make_step(
             }
         }
     }
+}
+
+fn redact_make_args(make_args: &str) -> String {
+    make_args
+        .split_whitespace()
+        .map(|part| {
+            if part.starts_with("HF_TOKEN=") || part.starts_with("ANSIBLE_VAULT_PASSWORD=") {
+                let key = part.split_once('=').map(|(key, _)| key).unwrap_or(part);
+                format!("{key}=<redacted>")
+            } else {
+                part.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn run_local_command_streaming<F>(

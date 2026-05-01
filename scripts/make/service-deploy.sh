@@ -14,7 +14,10 @@
 # This script reads the environment from state file and uses
 # Ansible to deploy with proper vault secrets.
 #
-set -eo pipefail
+set -Eeo pipefail
+
+# Trap ERR to print debug info when a command fails under set -e
+trap 'rc=$?; echo "[ERROR] service-deploy.sh failed at line ${LINENO}: ${BASH_COMMAND} (exit ${rc})" >&2' ERR
 
 # Make exports ENV= into the environment. Perl taint mode (used by pct)
 # considers ENV and BASH_ENV insecure. Unset them early.
@@ -756,17 +759,17 @@ main() {
     
     # Set vault environment: VAULT_PREFIX (per-profile) takes precedence over container prefix
     local vault_prefix="${VAULT_PREFIX:-$prefix}"
-    set_vault_environment "$vault_prefix" 2>/dev/null || true
+    set_vault_environment "$vault_prefix" || true
     
     # Ensure vault access (fatal if it fails)
-    if ! ensure_vault_access 2>/dev/null; then
+    if ! ensure_vault_access; then
         error "Cannot access vault - deployment aborted. Secrets would not be injected."
         error "Run 'make install' through the CLI to set up vault access first."
         exit 1
     fi
     
     # Validate vault secrets before deploying (reject placeholders/insecure defaults)
-    if ! validate_vault_secrets 2>/dev/null; then
+    if ! validate_vault_secrets; then
         error "Vault secrets validation failed - deployment aborted."
         error "Update your vault file and re-encrypt before deploying."
         exit 1

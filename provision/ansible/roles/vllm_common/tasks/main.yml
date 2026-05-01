@@ -20,6 +20,7 @@
       - curl
       - wget
       - ca-certificates
+      - ninja-build  # Required by torch/vLLM compile paths
       - psmisc  # For fuser
       - lsof    # For debugging open files
     state: present

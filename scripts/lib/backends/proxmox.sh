@@ -93,6 +93,53 @@ _proxmox_get_systemd_name() {
     esac
 }
 
+_proxmox_vllm_status() {
+    local env="$1"
+    local ip
+    ip=$(_proxmox_get_service_ip "vllm" "$env")
+    if [[ -z "$ip" ]]; then
+        echo "unknown"
+        return
+    fi
+
+    ssh "root@${ip}" '
+        units=$(systemctl list-unit-files "vllm-*.service" --no-legend --no-pager 2>/dev/null | awk "{print \$1}")
+        if [ -z "$units" ]; then
+            echo "stopped"
+            exit 0
+        fi
+        active=0
+        inactive=0
+        failed=0
+        for unit in $units; do
+            state=$(systemctl is-active "$unit" 2>/dev/null || true)
+            case "$state" in
+                active) active=$((active + 1)) ;;
+                failed) failed=$((failed + 1)) ;;
+                *) inactive=$((inactive + 1)) ;;
+            esac
+        done
+        if [ "$failed" -gt 0 ]; then
+            echo "unhealthy"
+        elif [ "$active" -gt 0 ] && [ "$inactive" -eq 0 ]; then
+            echo "healthy"
+        elif [ "$active" -gt 0 ]; then
+            echo "unhealthy"
+        else
+            echo "stopped"
+        fi
+    ' 2>/dev/null || echo "unreachable"
+}
+
+_proxmox_vllm_units_command() {
+    local action="$1"
+    case "$action" in
+        start|stop|restart)
+            echo "systemctl list-unit-files 'vllm-*.service' --no-legend --no-pager 2>/dev/null | awk '{print \$1}' | xargs -r systemctl ${action}"
+            ;;
+    esac
+}
+
 # Get inventory path for environment
 _proxmox_get_inventory() {
     local env="$1"
@@ -111,6 +158,11 @@ _proxmox_get_inventory() {
 backend_get_service_status() {
     local service="$1"
     local env="${CURRENT_ENV:-staging}"
+
+    if [[ "$service" == "vllm" ]]; then
+        _proxmox_vllm_status "$env"
+        return
+    fi
 
     # Normalize service name for registry lookup
     local lookup_service="${service//-/_}"
@@ -282,6 +334,9 @@ backend_service_action() {
                     # user-apps LXC hosts multiple app services — start all enabled
                     ssh "root@${container_ip}" "systemctl list-unit-files --type=service --state=enabled --no-legend 2>/dev/null | awk '{print \$1}' | grep -v '^ssh' | xargs -r systemctl start" 2>/dev/null || error "Failed to start user app services"
                     success "User app services started"
+                elif [[ "$service" == "vllm" ]]; then
+                    ssh "root@${container_ip}" "$(_proxmox_vllm_units_command start)" 2>/dev/null || error "Failed to start vLLM services"
+                    success "vLLM services started"
                 else
                     ssh "root@${container_ip}" "systemctl start ${systemd_service}" 2>/dev/null || error "Failed to start"
                     success "Service started"
@@ -297,6 +352,9 @@ backend_service_action() {
                 if [[ "$service" == "user-apps" ]]; then
                     ssh "root@${container_ip}" "systemctl list-unit-files --type=service --state=enabled --no-legend 2>/dev/null | awk '{print \$1}' | grep -v '^ssh' | xargs -r systemctl stop" 2>/dev/null || error "Failed to stop user app services"
                     success "User app services stopped"
+                elif [[ "$service" == "vllm" ]]; then
+                    ssh "root@${container_ip}" "$(_proxmox_vllm_units_command stop)" 2>/dev/null || error "Failed to stop vLLM services"
+                    success "vLLM services stopped"
                 else
                     ssh "root@${container_ip}" "systemctl stop ${systemd_service}" 2>/dev/null || error "Failed to stop"
                     success "Service stopped"
@@ -312,6 +370,9 @@ backend_service_action() {
                 if [[ "$service" == "user-apps" ]]; then
                     ssh "root@${container_ip}" "systemctl list-unit-files --type=service --state=enabled --no-legend 2>/dev/null | awk '{print \$1}' | grep -v '^ssh' | xargs -r systemctl restart" 2>/dev/null || error "Failed to restart user app services"
                     success "User app services restarted"
+                elif [[ "$service" == "vllm" ]]; then
+                    ssh "root@${container_ip}" "$(_proxmox_vllm_units_command restart)" 2>/dev/null || error "Failed to restart vLLM services"
+                    success "vLLM services restarted"
                 else
                     ssh "root@${container_ip}" "systemctl restart ${systemd_service}" 2>/dev/null || error "Failed to restart"
                     success "Service restarted"
@@ -328,6 +389,8 @@ backend_service_action() {
                 if [[ "$service" == "user-apps" ]]; then
                     # user-apps LXC hosts multiple app services — show all journal output
                     ssh "root@${container_ip}" "journalctl -f --no-pager -n 100" 2>&1 || echo "Could not get logs for ${service}"
+                elif [[ "$service" == "vllm" ]]; then
+                    ssh "root@${container_ip}" "journalctl -u 'vllm-*' -f --no-pager -n 100" 2>&1 || echo "Could not get logs for ${service}"
                 else
                     ssh "root@${container_ip}" "journalctl -u ${systemd_service} -f --no-pager -n 100" 2>&1 || echo "Could not get logs for ${service}"
                 fi
@@ -349,6 +412,11 @@ backend_service_action() {
                     if [[ "$running_count" -eq 0 ]]; then
                         echo "    (no user app services running)"
                     fi
+                elif [[ "$service" == "vllm" ]]; then
+                    echo "  ${BOLD}${service}${NC} (container: ${container_ip}):"
+                    ssh "root@${container_ip}" "systemctl list-units 'vllm-*.service' --all --no-pager --no-legend 2>/dev/null" 2>/dev/null | while IFS= read -r line; do
+                        echo "    $line"
+                    done
                 else
                     local status
                     status=$(ssh "root@${container_ip}" "systemctl is-active ${systemd_service}" 2>/dev/null || echo "unknown")
