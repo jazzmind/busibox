@@ -2694,6 +2694,421 @@ class PostgresService:
                 },
             }
 
+    # ---------------------------------------------------------------------
+    # Analytics helpers
+    # ---------------------------------------------------------------------
+
+    async def get_app_usage_summary(self, *, days: int = 30) -> List[dict]:
+        """
+        Aggregate oauth.token.issued audit events by app_id.
+
+        Uses details->>'resource_id' as the app identifier because the
+        legacy insert_audit path stores the app id there.  We exclude
+        rows where that field is NULL or empty string.
+
+        Returns a list of per-app dicts with request counts and unique
+        user counts for today / 7 days / the full window, plus a daily
+        trend list.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        today_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        week_start = datetime.now(timezone.utc) - timedelta(days=7)
+
+        async with self.acquire(None, None) as conn:
+            # Per-app aggregates for three windows
+            rows = await conn.fetch(
+                """
+                SELECT
+                    details->>'resource_id' AS app_id,
+                    COUNT(*)                                                    AS requests_30d,
+                    COUNT(DISTINCT actor_id)                                    AS unique_users_30d,
+                    COUNT(*) FILTER (WHERE created_at >= $2)                   AS requests_7d,
+                    COUNT(DISTINCT actor_id) FILTER (WHERE created_at >= $2)   AS unique_users_7d,
+                    COUNT(*) FILTER (WHERE created_at >= $3)                   AS requests_today,
+                    COUNT(DISTINCT actor_id) FILTER (WHERE created_at >= $3)   AS unique_users_today
+                FROM audit_logs
+                WHERE action = 'oauth.token.issued'
+                  AND created_at >= $1
+                  AND details->>'resource_id' IS NOT NULL
+                  AND details->>'resource_id' <> ''
+                GROUP BY details->>'resource_id'
+                ORDER BY requests_30d DESC
+                """,
+                cutoff,
+                week_start,
+                today_start,
+            )
+
+            # Daily trend for each app over the window
+            trend_rows = await conn.fetch(
+                """
+                SELECT
+                    details->>'resource_id'        AS app_id,
+                    DATE(created_at)               AS day,
+                    COUNT(*)                       AS requests,
+                    COUNT(DISTINCT actor_id)        AS unique_users
+                FROM audit_logs
+                WHERE action = 'oauth.token.issued'
+                  AND created_at >= $1
+                  AND details->>'resource_id' IS NOT NULL
+                  AND details->>'resource_id' <> ''
+                GROUP BY details->>'resource_id', DATE(created_at)
+                ORDER BY day
+                """,
+                cutoff,
+            )
+
+        # Index trends by app_id
+        trends: dict[str, list] = {}
+        for t in trend_rows:
+            app = t["app_id"]
+            if app not in trends:
+                trends[app] = []
+            trends[app].append(
+                {
+                    "date": t["day"].isoformat(),
+                    "requests": t["requests"],
+                    "unique_users": t["unique_users"],
+                }
+            )
+
+        return [
+            {
+                "app_id": r["app_id"],
+                "requests_today": r["requests_today"],
+                "requests_7d": r["requests_7d"],
+                "requests_30d": r["requests_30d"],
+                "unique_users_today": r["unique_users_today"],
+                "unique_users_7d": r["unique_users_7d"],
+                "unique_users_30d": r["unique_users_30d"],
+                "daily_trend": trends.get(r["app_id"], []),
+            }
+            for r in rows
+        ]
+
+    async def get_app_usage_detail(
+        self, *, app_id: str, days: int = 30
+    ) -> dict:
+        """
+        Detailed usage for a single app: daily breakdown, hourly distribution,
+        and top users.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+        async with self.acquire(None, None) as conn:
+            daily_rows = await conn.fetch(
+                """
+                SELECT
+                    DATE(created_at)         AS day,
+                    COUNT(*)                 AS requests,
+                    COUNT(DISTINCT actor_id) AS unique_users
+                FROM audit_logs
+                WHERE action = 'oauth.token.issued'
+                  AND created_at >= $1
+                  AND details->>'resource_id' = $2
+                GROUP BY DATE(created_at)
+                ORDER BY day
+                """,
+                cutoff,
+                app_id,
+            )
+
+            hourly_rows = await conn.fetch(
+                """
+                SELECT
+                    EXTRACT(HOUR FROM created_at)::int AS hour,
+                    COUNT(*)                            AS requests
+                FROM audit_logs
+                WHERE action = 'oauth.token.issued'
+                  AND created_at >= $1
+                  AND details->>'resource_id' = $2
+                GROUP BY EXTRACT(HOUR FROM created_at)
+                ORDER BY hour
+                """,
+                cutoff,
+                app_id,
+            )
+
+            top_user_rows = await conn.fetch(
+                """
+                SELECT
+                    actor_id::text AS user_id,
+                    COUNT(*)       AS requests
+                FROM audit_logs
+                WHERE action = 'oauth.token.issued'
+                  AND created_at >= $1
+                  AND details->>'resource_id' = $2
+                GROUP BY actor_id
+                ORDER BY requests DESC
+                LIMIT 20
+                """,
+                cutoff,
+                app_id,
+            )
+
+        return {
+            "daily_active_users": [
+                {
+                    "date": r["day"].isoformat(),
+                    "unique_users": r["unique_users"],
+                    "requests": r["requests"],
+                }
+                for r in daily_rows
+            ],
+            "hourly_distribution": [
+                {"hour": r["hour"], "requests": r["requests"]}
+                for r in hourly_rows
+            ],
+            "top_users": [
+                {"user_id": r["user_id"], "requests": r["requests"]}
+                for r in top_user_rows
+            ],
+        }
+
+    async def get_feedback_summary(
+        self,
+        *,
+        app_id: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> List[dict]:
+        """
+        Aggregate app.feedback.submitted audit events per app.
+
+        Feedback entries are stored with:
+          details = {app_id, rating ('positive'|'neutral'|'negative'), comment}
+        """
+        from datetime import datetime, timedelta, timezone
+
+        async with self.acquire(None, None) as conn:
+            conditions = [
+                "action = 'app.feedback.submitted'",
+                "details->>'app_id' IS NOT NULL",
+                "details->>'app_id' <> ''",
+            ]
+            params: list = []
+            idx = 1
+
+            if app_id:
+                conditions.append(f"details->>'app_id' = ${idx}")
+                params.append(app_id)
+                idx += 1
+
+            if from_date:
+                conditions.append(f"created_at >= ${idx}")
+                params.append(
+                    datetime.fromisoformat(from_date.replace("Z", "+00:00"))
+                )
+                idx += 1
+            else:
+                # Default to last 30 days
+                conditions.append(f"created_at >= ${idx}")
+                params.append(datetime.now(timezone.utc) - timedelta(days=30))
+                idx += 1
+
+            if to_date:
+                conditions.append(f"created_at <= ${idx}")
+                params.append(
+                    datetime.fromisoformat(to_date.replace("Z", "+00:00"))
+                )
+                idx += 1
+
+            where = "WHERE " + " AND ".join(conditions)
+
+            agg_rows = await conn.fetch(
+                f"""
+                SELECT
+                    details->>'app_id'                                          AS app_id,
+                    COUNT(*) FILTER (WHERE details->>'rating' = 'positive')     AS positive,
+                    COUNT(*) FILTER (WHERE details->>'rating' = 'neutral')      AS neutral,
+                    COUNT(*) FILTER (WHERE details->>'rating' = 'negative')     AS negative,
+                    COUNT(*)                                                     AS total
+                FROM audit_logs
+                {where}
+                GROUP BY details->>'app_id'
+                ORDER BY total DESC
+                """,
+                *params,
+            )
+
+            # Recent comments per app (limit 5)
+            comment_rows = await conn.fetch(
+                f"""
+                SELECT DISTINCT ON (details->>'app_id')
+                    details->>'app_id'      AS app_id,
+                    details->>'comment'     AS comment,
+                    details->>'rating'      AS rating,
+                    created_at
+                FROM audit_logs
+                {where}
+                  AND details->>'comment' IS NOT NULL
+                  AND details->>'comment' <> ''
+                ORDER BY details->>'app_id', created_at DESC
+                """,
+                *params,
+            )
+
+        comments_by_app: dict[str, list] = {}
+        for c in comment_rows:
+            aid = c["app_id"]
+            if aid not in comments_by_app:
+                comments_by_app[aid] = []
+            if len(comments_by_app[aid]) < 5:
+                comments_by_app[aid].append(
+                    {
+                        "comment": c["comment"],
+                        "rating": c["rating"],
+                        "created_at": c["created_at"].isoformat(),
+                    }
+                )
+
+        result = []
+        for r in agg_rows:
+            total = r["total"] or 1
+            pos = r["positive"] or 0
+            neg = r["negative"] or 0
+            score = round((pos - neg) / total * 100, 1)
+            result.append(
+                {
+                    "app_id": r["app_id"],
+                    "positive": pos,
+                    "neutral": r["neutral"] or 0,
+                    "negative": neg,
+                    "total": r["total"],
+                    "satisfaction_score": score,
+                    "recent_comments": comments_by_app.get(r["app_id"], []),
+                }
+            )
+        return result
+
+    async def get_app_feedback_detail(
+        self,
+        *,
+        app_id: str,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        limit: int = 100,
+    ) -> dict:
+        """
+        Full feedback history and weekly trend for a single app.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        async with self.acquire(None, None) as conn:
+            conditions = [
+                "action = 'app.feedback.submitted'",
+                f"details->>'app_id' = $1",
+            ]
+            params: list = [app_id]
+            idx = 2
+
+            if from_date:
+                conditions.append(f"created_at >= ${idx}")
+                params.append(
+                    datetime.fromisoformat(from_date.replace("Z", "+00:00"))
+                )
+                idx += 1
+            else:
+                conditions.append(f"created_at >= ${idx}")
+                params.append(datetime.now(timezone.utc) - timedelta(days=90))
+                idx += 1
+
+            if to_date:
+                conditions.append(f"created_at <= ${idx}")
+                params.append(
+                    datetime.fromisoformat(to_date.replace("Z", "+00:00"))
+                )
+                idx += 1
+
+            where = "WHERE " + " AND ".join(conditions)
+
+            # Summary
+            summary_row = await conn.fetchrow(
+                f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE details->>'rating' = 'positive') AS positive,
+                    COUNT(*) FILTER (WHERE details->>'rating' = 'neutral')  AS neutral,
+                    COUNT(*) FILTER (WHERE details->>'rating' = 'negative') AS negative,
+                    COUNT(*)                                                  AS total
+                FROM audit_logs
+                {where}
+                """,
+                *params,
+            )
+
+            # Entries
+            entry_rows = await conn.fetch(
+                f"""
+                SELECT
+                    id::text            AS id,
+                    actor_id::text      AS actor_id,
+                    details->>'rating'  AS rating,
+                    details->>'comment' AS comment,
+                    created_at
+                FROM audit_logs
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ${idx}
+                """,
+                *params,
+                limit,
+            )
+
+            # Weekly trend
+            trend_rows = await conn.fetch(
+                f"""
+                SELECT
+                    DATE_TRUNC('week', created_at)::date                        AS week,
+                    COUNT(*) FILTER (WHERE details->>'rating' = 'positive')     AS positive,
+                    COUNT(*) FILTER (WHERE details->>'rating' = 'neutral')      AS neutral,
+                    COUNT(*) FILTER (WHERE details->>'rating' = 'negative')     AS negative
+                FROM audit_logs
+                {where}
+                GROUP BY DATE_TRUNC('week', created_at)
+                ORDER BY week
+                """,
+                *params,
+            )
+
+        total = summary_row["total"] or 1
+        pos = summary_row["positive"] or 0
+        neg = summary_row["negative"] or 0
+
+        return {
+            "summary": {
+                "positive": pos,
+                "neutral": summary_row["neutral"] or 0,
+                "negative": neg,
+                "total": summary_row["total"],
+                "satisfaction_score": round((pos - neg) / total * 100, 1),
+            },
+            "entries": [
+                {
+                    "id": e["id"],
+                    "actor_id": e["actor_id"],
+                    "rating": e["rating"],
+                    "comment": e["comment"],
+                    "created_at": e["created_at"].isoformat(),
+                }
+                for e in entry_rows
+            ],
+            "weekly_trend": [
+                {
+                    "week": t["week"].isoformat(),
+                    "positive": t["positive"] or 0,
+                    "neutral": t["neutral"] or 0,
+                    "negative": t["negative"] or 0,
+                }
+                for t in trend_rows
+            ],
+        }
+
     async def get_user_audit_trail(self, user_id: str, limit: int = 100) -> List[dict]:
         """Get audit trail for a specific user."""
         uid = validate_uuid(user_id, "user_id")

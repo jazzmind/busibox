@@ -279,6 +279,134 @@ async def get_usage_stats(
         )
 
 
+class AppUsageStats(BaseModel):
+    """Chat and agent usage statistics for a single app (source)."""
+    app_id: str
+    conversations_total: int
+    conversations_7d: int
+    conversations_today: int
+    unique_users_total: int
+    unique_users_7d: int
+    unique_users_today: int
+    messages_total: int
+    avg_messages_per_conversation: float = 0.0
+    daily_trend: list[dict] = []
+
+
+class AppUsageResponse(BaseModel):
+    """Per-app usage statistics."""
+    apps: list[AppUsageStats]
+    days: int
+
+
+@router.get("/stats/usage/by-app", response_model=AppUsageResponse)
+async def get_usage_stats_by_app(
+    days: int = 30,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> AppUsageResponse:
+    """
+    Get chat usage statistics grouped by app (conversation source).
+
+    Uses conversations.source to identify which app originated each
+    conversation.  Apps that have never started a conversation will not
+    appear in the results.
+
+    Requires admin role.
+
+    Args:
+        days: Number of days to include (default: 30)
+    """
+    require_admin(principal)
+
+    try:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        today_start = datetime.utcnow().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        week_start = datetime.utcnow() - timedelta(days=7)
+
+        # Per-app aggregates
+        agg_query = text("""
+            SELECT
+                COALESCE(c.source, 'unknown')                               AS app_id,
+                COUNT(c.id)                                                  AS conversations_total,
+                COUNT(c.id) FILTER (WHERE c.created_at >= :week_start)      AS conversations_7d,
+                COUNT(c.id) FILTER (WHERE c.created_at >= :today_start)     AS conversations_today,
+                COUNT(DISTINCT c.user_id)                                   AS unique_users_total,
+                COUNT(DISTINCT c.user_id) FILTER (WHERE c.created_at >= :week_start) AS unique_users_7d,
+                COUNT(DISTINCT c.user_id) FILTER (WHERE c.created_at >= :today_start) AS unique_users_today,
+                COUNT(m.id)                                                  AS messages_total
+            FROM conversations c
+            LEFT JOIN messages m ON m.conversation_id = c.id
+            WHERE c.created_at >= :cutoff
+            GROUP BY COALESCE(c.source, 'unknown')
+            ORDER BY conversations_total DESC
+        """)
+        agg_result = await session.execute(
+            agg_query,
+            {
+                "cutoff": cutoff,
+                "week_start": week_start,
+                "today_start": today_start,
+            },
+        )
+        agg_rows = agg_result.fetchall()
+
+        # Daily trend per app
+        trend_query = text("""
+            SELECT
+                COALESCE(source, 'unknown')         AS app_id,
+                DATE(created_at)                    AS day,
+                COUNT(*)                            AS conversations,
+                COUNT(DISTINCT user_id)             AS unique_users
+            FROM conversations
+            WHERE created_at >= :cutoff
+            GROUP BY COALESCE(source, 'unknown'), DATE(created_at)
+            ORDER BY day
+        """)
+        trend_result = await session.execute(trend_query, {"cutoff": cutoff})
+        trend_rows = trend_result.fetchall()
+
+        trends: dict[str, list] = {}
+        for t in trend_rows:
+            app = t.app_id
+            if app not in trends:
+                trends[app] = []
+            trends[app].append(
+                {
+                    "date": t.day.isoformat(),
+                    "conversations": t.conversations,
+                    "unique_users": t.unique_users,
+                }
+            )
+
+        apps = []
+        for row in agg_rows:
+            total_convs = row.conversations_total or 1
+            avg_msgs = (row.messages_total or 0) / total_convs
+            apps.append(
+                AppUsageStats(
+                    app_id=row.app_id,
+                    conversations_total=row.conversations_total or 0,
+                    conversations_7d=row.conversations_7d or 0,
+                    conversations_today=row.conversations_today or 0,
+                    unique_users_total=row.unique_users_total or 0,
+                    unique_users_7d=row.unique_users_7d or 0,
+                    unique_users_today=row.unique_users_today or 0,
+                    messages_total=row.messages_total or 0,
+                    avg_messages_per_conversation=round(avg_msgs, 1),
+                    daily_trend=trends.get(row.app_id, []),
+                )
+            )
+
+        return AppUsageResponse(apps=apps, days=days)
+
+    except Exception as e:
+        logger.error(f"Failed to get per-app usage stats: {e}", exc_info=True)
+        return AppUsageResponse(apps=[], days=days)
+
+
 @router.get("/stats/system", response_model=SystemStatsResponse)
 async def get_system_stats(
     principal: Principal = Depends(get_principal),
