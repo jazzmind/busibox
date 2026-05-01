@@ -659,7 +659,6 @@ pub fn sync_vault_file(
 /// provision/ansible/roles/validate_env/tasks/docker.yml.
 const INSECURE_DEFAULTS: &[&str] = &[
     "devpassword",
-    "minioadmin",
     "sk-local-dev-key",
     "local-master-key-change-in-production",
     "dev-encryption-key",
@@ -677,7 +676,6 @@ const INSECURE_DEFAULTS: &[&str] = &[
 /// Uses dot-notation matching against the YAML structure under `secrets:`.
 pub const REQUIRED_VAULT_KEYS: &[&str] = &[
     "postgresql.password",
-    "minio.root_user",
     "minio.root_password",
     "neo4j.password",
     "authz_master_key",

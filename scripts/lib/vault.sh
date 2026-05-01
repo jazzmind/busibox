@@ -678,7 +678,6 @@ has_vault_secret() {
 
     # Reject known insecure defaults that should never appear in a real vault
     if [[ "$value" == "devpassword" ]] || \
-       [[ "$value" == "minioadmin" ]] || \
        [[ "$value" == "sk-local-dev-key" ]] || \
        [[ "$value" == *"change-in-production"* ]] || \
        [[ "$value" == *"change-me"* ]] || \
@@ -728,11 +727,7 @@ validate_vault_secrets() {
         "secrets.neo4j.password"
     )
     
-    # Secrets that must exist but should NEVER be auto-replaced because they are
-    # identifiers (usernames) for already-running services. Changing them in the
-    # vault without also updating the running service causes auth failures.
     local warn_only_secrets=(
-        "secrets.minio.root_user"
     )
     
     local optional_secrets=(

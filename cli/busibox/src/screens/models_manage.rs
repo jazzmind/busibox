@@ -2078,6 +2078,11 @@ fn apply_tier_inner(app: &mut App, deploy: bool) {
                     let _ = tx.send(ModelsManageUpdate::Complete { success: false, deployed: false });
                     return;
                 }
+                if let Err(e) = remote::sync_vault_file(&repo_root, host, user, key, &remote_path, &vault_prefix) {
+                    let _ = tx.send(ModelsManageUpdate::Log(format!(
+                        "WARNING: vault push failed: {e}"
+                    )));
+                }
                 let _ = tx.send(ModelsManageUpdate::Log("✓ Files synced".into()));
 
                 let tx2 = tx.clone();

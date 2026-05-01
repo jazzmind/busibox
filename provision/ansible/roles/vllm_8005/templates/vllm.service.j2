@@ -48,7 +48,7 @@ ExecStart={{ vllm_venv_dir }}/bin/python -m vllm.entrypoints.openai.api_server \
   --kv-cache-dtype {{ vllm_kv_cache_dtype }} \
 {% endif %}
 {% if vllm_reasoning_parser is defined and vllm_reasoning_parser | length > 0 %}
-  --enable-reasoning --reasoning-parser {{ vllm_reasoning_parser }} \
+  --reasoning-parser {{ vllm_reasoning_parser }} \
 {% endif %}
 {% if vllm_trust_remote_code %}
   --trust-remote-code \
