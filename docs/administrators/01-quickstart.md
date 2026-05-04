@@ -8,7 +8,16 @@ published: true
 
 # Administrator Quick Start
 
-This guide gets you from zero to a running Busibox instance as fast as possible. For detailed explanations, see the individual guides linked throughout.
+This guide covers the **multi-host / Proxmox / Kubernetes** flow via the
+Busibox CLI. For a single-machine first-run evaluation, start with the
+Docker-only path in [QUICKSTART.md](../../QUICKSTART.md) — it does not
+require a GPU, Rust toolchain, or remote host.
+
+> **First-run recommendation:** evaluate Busibox on local Docker with a
+> cloud LLM API key (OpenAI, Anthropic, or AWS Bedrock). Once you've
+> confirmed the platform fits, use this guide to bring up a real
+> deployment, and add local inference via the
+> [local-models add-on pack](./local-models-addon.md) when you're ready.
 
 ## Prerequisites
 

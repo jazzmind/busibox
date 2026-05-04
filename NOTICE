@@ -1,0 +1,58 @@
+Busibox
+Copyright (c) 2026 Wes Sonnenreich and Jazzmind contributors
+
+This product is licensed under the MIT License (see LICENSE).
+
+The Busibox project source code is MIT-licensed. However, when building or
+running the platform, you may install third-party components and Docker images
+whose licenses differ from MIT. The list below is provided as a courtesy to
+help operators understand their distribution obligations. It is not legal
+advice — verify upstream licenses before redistributing a bundled image or
+product that includes these components.
+
+------------------------------------------------------------------------------
+Optional / feature-gated components with non-permissive licenses
+------------------------------------------------------------------------------
+
+The following Python dependencies are pulled in by the optional Marker /
+ColPali / advanced-PDF processing path of the data worker
+(srv/data/requirements.txt). They are not required for first-run evaluation
+and can be disabled via the MARKER_ENABLED=false and COLPALI_ENABLED=false
+environment flags.
+
+  - PyMuPDF (fitz)         — AGPL-3.0 (Artifex)
+  - pymupdf4llm            — AGPL-3.0
+  - pymupdf-layout         — AGPL-3.0
+  - marker-pdf             — source-available (verify pinned version's license)
+  - surya-ocr              — source-available (verify pinned version's license)
+  - poppler-utils (system) — GPL-2.0 (invoked as a subprocess by pdf2image)
+
+If you redistribute a Docker image or product that includes these components,
+you are responsible for complying with their respective licenses (which may
+include source-disclosure obligations).
+
+------------------------------------------------------------------------------
+Bundled third-party services (Docker images)
+------------------------------------------------------------------------------
+
+The default docker-compose.yml ships images for the following services. Their
+licenses apply to the images themselves, not to Busibox:
+
+  - PostgreSQL              — PostgreSQL License (permissive)
+  - Milvus                  — Apache-2.0
+  - etcd                    — Apache-2.0
+  - nginx                   — BSD-2-Clause
+  - LiteLLM                 — MIT (built locally)
+  - Redis 7                 — SSPL-1.0 / RSALv2 (source-available since 7.4)
+  - MinIO                   — AGPL-3.0
+  - Neo4j Community         — GPL-3.0
+  - vLLM                    — Apache-2.0 (optional, GPU profile)
+
+Operators who wish to ship a redistributable bundle under permissive terms
+should consider substituting Valkey for Redis and a permissively-licensed
+object store for MinIO. See docs/administrators/license-considerations.md
+(if present) and CHANGELOG.md for tracking notes.
+
+------------------------------------------------------------------------------
+Per-package license metadata for direct dependencies is tracked in the
+respective manifests (requirements.txt, Cargo.toml, package.json).

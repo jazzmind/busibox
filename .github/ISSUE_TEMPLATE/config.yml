@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability (private)
+    url: https://github.com/jazzmind/busibox/security/advisories/new
+    about: Please report security issues privately. See SECURITY.md for details.
+  - name: Question or discussion
+    url: https://github.com/jazzmind/busibox/discussions
+    about: Open-ended questions, design discussions, and "is anyone else hitting this?" go in Discussions.

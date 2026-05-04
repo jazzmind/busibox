@@ -1,5 +1,7 @@
 # Busibox
 
+> **Project status — v0.1.0 (early preview).** Busibox is suitable for evaluation, lab use, and design-partner pilots. It has not yet had an independent security audit, and APIs/schemas may change before 1.0. See [CHANGELOG.md](CHANGELOG.md) for known limitations.
+
 **A self-hosted AI platform that keeps your data on your infrastructure.**
 
 Busibox integrates document processing, semantic search, AI agents, and custom applications into a single platform — running on Docker or Proxmox LXC containers with enterprise-grade security baked in.
@@ -106,9 +108,45 @@ Busibox is single-tenant and multi-user — each installation serves one organiz
 
 ---
 
-## Quick Start
+## Quick Start — Docker + a cloud API key (recommended for first run)
 
-The **Busibox CLI** is an interactive terminal UI that walks you through setup, deployment, and ongoing management. It handles SSH connectivity, encrypted vault passwords, model selection, and service health — all from one interface.
+The fastest way to evaluate Busibox is to run the whole stack locally on Docker and bring your own LLM API key. **No GPU and no local model downloads are required for a first run.** Local inference (vLLM / Ollama / MLX) is an optional add-on — see ["Optional: local inference"](#optional-local-inference) below.
+
+**Prerequisites:** Docker + Docker Compose, ~16 GB free disk for images, and one of: an OpenAI key, an Anthropic key, or AWS Bedrock credentials.
+
+```bash
+git clone https://github.com/jazzmind/busibox.git
+cd busibox
+
+# Start from the example env file and add a cloud LLM key
+cp env.local.example .env.local
+# Edit .env.local and set ONE of:
+#   OPENAI_API_KEY=sk-...
+#   ANTHROPIC_API_KEY=sk-ant-...
+#   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION_NAME (for Bedrock)
+
+make docker-up
+```
+
+The Portal is then available at `http://localhost:3000`. The first user to sign up becomes the admin (configurable via `ADMIN_EMAIL`). See [QUICKSTART.md](QUICKSTART.md) for details, and [docs/administrators/](docs/administrators/) for the full operator guide.
+
+> **Why cloud-key by default?** A first-run evaluation should focus on the platform — auth, RAG, agents, search — not on model downloads, GPU drivers, or quantisation tradeoffs. Once you've verified Busibox does what you need, swap in local models with the add-on pack. See [docs/administrators/local-models-addon.md](docs/administrators/local-models-addon.md) for the design.
+
+### Optional: local inference
+
+For air-gapped or fully on-prem deployments, Busibox routes through LiteLLM to local backends:
+
+| Backend | Hardware | When to use |
+|---------|----------|-------------|
+| **Ollama** | CPU or any GPU | Easiest path; good for small/mid-sized models |
+| **vLLM** | NVIDIA GPU (recent) | Highest throughput on CUDA |
+| **MLX** | Apple Silicon | Fast on M-series Macs |
+
+The local-model add-on pack is documented at [docs/administrators/local-models-addon.md](docs/administrators/local-models-addon.md). For multi-host or Proxmox deployments, the Busibox CLI handles GPU detection and model selection automatically.
+
+### For multi-host / Proxmox / Kubernetes
+
+The **Busibox CLI** is an interactive terminal UI that walks you through profile setup, hardware profiling, model selection, and deployment across Docker, Proxmox LXC, and Kubernetes targets. It handles SSH connectivity, encrypted vault passwords, and service health from one interface.
 
 ```bash
 cd cli/busibox
@@ -116,17 +154,7 @@ cargo build --release
 ./target/release/busibox
 ```
 
-The CLI guides you through:
-
-1. **Profile setup** — configure Docker, Proxmox, or Kubernetes targets
-2. **Hardware profiling** — detect GPUs and available resources
-3. **Model selection** — choose and download AI models for your hardware
-4. **Deployment** — install all services with proper secrets injection
-5. **Management** — restart, monitor, redeploy, and view logs
-
-Manage multiple Busibox installations (Docker, Proxmox, Kubernetes — self-hosted or cloud) from a single workstation through deployment profiles.
-
-See [docs/administrators/](docs/administrators/) for full deployment and configuration guides.
+See [docs/administrators/01-quickstart.md](docs/administrators/01-quickstart.md) for the full CLI flow.
 
 ---
 
@@ -225,9 +253,19 @@ busibox/                        # This repo — infrastructure, APIs, provisioni
 
 ## Contributing
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full contributor guide. The short version:
+
 1. Read the architecture docs in [docs/developers/architecture/](docs/developers/architecture/)
 2. Set up a local development environment with Docker: `make install SERVICE=all`
 3. Run tests: `make test-docker SERVICE=<service>`
 4. Follow the organization rules in `.cursor/rules/` for file placement and naming
 
+Participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md). Security issues should be reported privately — see [SECURITY.md](SECURITY.md).
+
 See [CLAUDE.md](CLAUDE.md) for detailed development workflow and conventions.
+
+---
+
+## License
+
+Busibox is released under the [MIT License](LICENSE). The project source code is MIT-licensed; some optional and bundled third-party components carry their own licenses. See [NOTICE](NOTICE) for the per-component breakdown — most relevant for operators who plan to redistribute a Docker image of the platform.
