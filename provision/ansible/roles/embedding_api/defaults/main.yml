@@ -18,3 +18,11 @@ embedding_cache_dir: "{{ '/home/' + embedding_api_user + '/.cache/fastembed' if 
 embedding_model: "nomic-ai/nomic-embed-text-v1.5"
 embedding_dimension: 768
 embedding_batch_size: 32
+
+# ONNX Runtime thread control
+# In LXC containers ONNX sees all host CPUs but cgroups restrict affinity,
+# causing pthread_setaffinity_np failures and oversized thread pools that
+# trigger OOM kills during inference. Set these to the container's actual
+# CPU allocation.
+embedding_intra_op_threads: 4
+embedding_inter_op_threads: 2

@@ -5,11 +5,11 @@ Busibox File Data Worker
 Consumes jobs from Redis Streams and processes uploaded files:
 1. Check for duplicate content (content_hash)
 2. Download file from MinIO
-3. Extract text (Marker, TATR, page images)
+3. Extract text (pymupdf4llm progressive pipeline; Marker if MARKER_ENABLED=true)
 4. Classify document and detect languages
 5. Extract metadata
 6. Chunk text (400-800 tokens, semantic boundaries)
-7. Generate embeddings (dense via liteLLM, ColPali for pages)
+7. Generate embeddings (dense via embedding-api, ColPali for pages)
 8. Store vectors in Milvus (dense, sparse BM25, multi-vector)
 9. Store metadata in PostgreSQL
 10. Update job status with NOTIFY
@@ -42,25 +42,30 @@ import redis as redis_sync
 from redis.exceptions import RedisError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-# IMPORTANT: Patch transformers before any marker/surya imports
-# This fixes "Cannot copy out of meta tensor" error with transformers 4.56+
-# by disabling lazy loading of model weights
+# Patch transformers before any marker/surya imports — only when marker is
+# actually enabled. This avoids importing PyTorch/transformers at startup
+# (several GB of RAM) when the progressive pipeline (pymupdf4llm + vision LLM)
+# is the active path.
+#
+# Fixes "Cannot copy out of meta tensor" error with transformers 4.56+ by
+# disabling lazy loading of model weights.
 def _patch_transformers_loading():
     """Patch transformers to disable low_cpu_mem_usage which causes meta tensor issues on GPU."""
     try:
         from transformers import PreTrainedModel
         original_from_pretrained = PreTrainedModel.from_pretrained.__func__
-        
+
         def patched_from_pretrained(cls, *args, **kwargs):
-            # Disable meta tensor loading - we have plenty of RAM
             kwargs['low_cpu_mem_usage'] = False
             return original_from_pretrained(cls, *args, **kwargs)
-        
+
         PreTrainedModel.from_pretrained = classmethod(patched_from_pretrained)
     except Exception:
         pass  # If patch fails, continue anyway
 
-_patch_transformers_loading()
+_MARKER_ENABLED = os.getenv("MARKER_ENABLED", "true").lower() == "true"
+if _MARKER_ENABLED:
+    _patch_transformers_loading()
 
 # Early logging setup for debugging import issues
 import logging

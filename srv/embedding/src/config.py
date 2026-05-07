@@ -50,6 +50,12 @@ class Config:
     # If not set, uses the model's native dimension.
     _output_dim: Optional[str] = field(default_factory=lambda: os.getenv("EMBEDDING_DIMENSION"))
     
+    # ONNX Runtime thread control
+    # In LXC containers ONNX detects all host CPUs but cgroups restrict which
+    # are usable, creating oversized thread pools that OOM-kill the process.
+    # FastEmbed's TextEmbedding(threads=N) sets both intra_op and inter_op.
+    threads: Optional[int] = int(os.getenv("EMBEDDING_THREADS", "0")) or None
+    
     # Server configuration
     port: int = int(os.getenv("PORT", "8005"))
     

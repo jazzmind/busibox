@@ -157,6 +157,20 @@ huggingface_token: "{{ secrets.huggingface.token }}"
 # GPU assignments, ports, and tensor parallelism are configured via configure-vllm-model-routing.sh
 
 # ============================================================================
+# Data Worker Configuration
+# ============================================================================
+# Marker/surya use PyTorch + transformers which consume several GB of RAM at
+# startup even when not processing. Disable unless local high-quality marker
+# extraction is needed (production uses pymupdf4llm + vision LLM instead).
+marker_enabled: "false"
+
+# ColPali visual embeddings via vLLM on vllm-lxc (10.96.200.208:9006).
+# Disabled in production: the colpali vLLM endpoint is not running and
+# importing ColPaliEmbedder pulls in heavy GPU deps. Enable only when
+# a dedicated ColPali vLLM instance is deployed and tested.
+colpali_enabled: "false"
+
+# ============================================================================
 # Deployment Configuration
 # ============================================================================
 # Deploy API is the unified deployment system for both Docker and Proxmox.
