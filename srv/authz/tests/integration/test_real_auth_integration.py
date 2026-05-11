@@ -60,110 +60,6 @@ def skip_if_no_oauth_credentials():
     pytest.skip("Legacy client-credential flow is disabled in Zero Trust mode")
 
 
-async def _mint_admin_access_token() -> str:
-    """Mint an authz-api access token for the test user via Zero Trust exchange."""
-    skip_if_no_credentials()
-    candidate_emails = [TEST_USER_EMAIL.lower(), "test@test.example.com"]
-    candidate_emails = list(dict.fromkeys(candidate_emails))
-
-    conn = await asyncpg.connect(
-        host=TEST_DB_HOST,
-        port=TEST_DB_PORT,
-        database=TEST_DB_NAME,
-        user=TEST_DB_USER,
-        password=TEST_DB_PASSWORD,
-        timeout=10.0,
-    )
-    try:
-        admin_role = await conn.fetchrow(
-            """
-            SELECT id
-            FROM authz_roles
-            WHERE name IN ('Admin', 'DockerTestAdmin')
-            ORDER BY CASE name WHEN 'Admin' THEN 0 ELSE 1 END
-            LIMIT 1
-            """
-        )
-        assert admin_role is not None, "No admin-capable role found in authz_roles"
-        admin_role_id = admin_role["id"]
-
-        selected_email = None
-        for test_email in candidate_emails:
-            user_row = await conn.fetchrow(
-                "SELECT user_id FROM authz_users WHERE lower(email) = $1 LIMIT 1",
-                test_email,
-            )
-            if user_row:
-                selected_email = test_email
-                await conn.execute(
-                    "UPDATE authz_users SET status = 'ACTIVE' WHERE user_id = $1",
-                    user_row["user_id"],
-                )
-                await conn.execute(
-                    """
-                    INSERT INTO authz_user_roles (user_id, role_id)
-                    VALUES ($1, $2)
-                    ON CONFLICT (user_id, role_id) DO NOTHING
-                    """,
-                    user_row["user_id"],
-                    admin_role_id,
-                )
-                break
-
-        if selected_email is None:
-            selected_email = candidate_emails[-1]
-
-        async with httpx.AsyncClient() as client:
-            init_resp = await client.post(
-                f"{TEST_AUTHZ_URL}/auth/login/initiate",
-                json={"email": selected_email},
-                headers=TEST_MODE_HEADERS,
-                timeout=30.0,
-            )
-            assert init_resp.status_code == 200, f"Login initiation failed: {init_resp.text}"
-
-        magic_link_row = await conn.fetchrow(
-            """
-            SELECT token
-            FROM authz_magic_links
-            WHERE email = $1
-              AND used_at IS NULL
-              AND expires_at > now()
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-                selected_email,
-        )
-        assert magic_link_row is not None, "No valid magic link token found for test user"
-        magic_link_token = magic_link_row["token"]
-    finally:
-        await conn.close()
-
-    async with httpx.AsyncClient() as client:
-        use_resp = await client.post(
-            f"{TEST_AUTHZ_URL}/auth/magic-links/{magic_link_token}/use",
-            headers=TEST_MODE_HEADERS,
-            timeout=30.0,
-        )
-        assert use_resp.status_code == 200, f"Magic link use failed: {use_resp.text}"
-        session_jwt = use_resp.json().get("session", {}).get("token")
-        assert session_jwt, "Missing session token from magic link flow"
-
-        exchange_resp = await client.post(
-            f"{TEST_AUTHZ_URL}/oauth/token",
-            headers=TEST_MODE_HEADERS,
-            data={
-                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                "subject_token": session_jwt,
-                "audience": "authz-api",
-            },
-            timeout=30.0,
-        )
-        assert exchange_resp.status_code == 200, f"Token exchange failed: {exchange_resp.text}"
-        token_data = exchange_resp.json()
-        assert "access_token" in token_data, "Missing access token in exchange response"
-        return token_data["access_token"]
- 
 # ============================================================================
 # Fixtures
 # ============================================================================
@@ -188,16 +84,14 @@ async def db_pool():
 
 
 @pytest.fixture
-async def admin_headers():
+def admin_headers(auth_client):
     """Headers for admin-authenticated requests.
-    
+
+    Uses the shared AuthTestClient (session-scoped, provided by conftest) which
+    handles test-user bootstrap and magic-link login transparently.
     Includes X-Test-Mode: true to route requests to the test database.
     """
-    admin_token = await _mint_admin_access_token()
-    return {
-        "Authorization": f"Bearer {admin_token}",
-        "X-Test-Mode": "true",  # Route to test database
-    }
+    return auth_client.get_auth_header(audience="authz-api")
 
 
 @pytest.fixture

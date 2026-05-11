@@ -2,9 +2,10 @@ use crate::app::{App, MessageKind, Screen, TestUpdate};
 use crate::modules::remote;
 use crate::theme;
 use crossterm::event::{KeyCode, KeyEvent};
-use ratatui::layout::Margin;
 use ratatui::prelude::*;
-use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState, *};
+use ratatui::widgets::*;
+use std::path::Path;
+use std::process::{Command, Stdio};
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -13,6 +14,12 @@ const TEST_SERVICES_DISPLAY: &[&str] =
     &["All Services", "authz", "agent", "data", "search"];
 
 const TEST_SUITES: &[&str] = &["Integration", "Unit", "Security", "Custom Args"];
+const TEST_SUITE_DESCS: &[&str] = &[
+    "Full integration test suite",
+    "Unit tests only (fast, no network)",
+    "Security / penetration test suite",
+    "Specify custom pytest args",
+];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Render
@@ -21,152 +28,181 @@ const TEST_SUITES: &[&str] = &["Integration", "Unit", "Security", "Custom Args"]
 pub fn render(f: &mut Frame, app: &App) {
     if app.test_log_visible {
         render_log_viewer(f, app);
+    } else if app.test_custom_input_active {
+        render_custom_args(f, app);
+    } else if app.test_focus_suite {
+        render_suite_step(f, app);
     } else {
-        render_picker(f, app);
+        render_service_step(f, app);
     }
 }
 
-fn render_picker(f: &mut Frame, app: &App) {
+fn header_area(f: &mut Frame, app: &App, subtitle: &str) -> [Rect; 3] {
     let area = f.area();
+    let env_label = app
+        .active_profile()
+        .map(|(_, p)| format!("{}  ·  {}", p.environment, p.backend))
+        .unwrap_or_else(|| "unknown".to_string());
 
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Min(10),
-            Constraint::Length(3),
+            Constraint::Length(1),  // top margin
+            Constraint::Length(1),  // title
+            Constraint::Length(1),  // env label
+            Constraint::Length(1),  // subtitle / breadcrumb
+            Constraint::Length(1),  // spacer
+            Constraint::Min(4),     // content
+            Constraint::Length(1),  // help bar
         ])
-        .margin(2)
         .split(area);
 
-    // Title
-    let env_label = app
-        .active_profile()
-        .map(|(_, p)| format!("{} ({})", p.environment, p.backend))
-        .unwrap_or_else(|| "unknown".to_string());
+    f.render_widget(
+        Paragraph::new("Run Tests")
+            .style(theme::title())
+            .alignment(Alignment::Center),
+        outer[1],
+    );
+    f.render_widget(
+        Paragraph::new(env_label)
+            .style(theme::muted())
+            .alignment(Alignment::Center),
+        outer[2],
+    );
+    f.render_widget(
+        Paragraph::new(subtitle)
+            .style(theme::info())
+            .alignment(Alignment::Center),
+        outer[3],
+    );
 
-    let title = Paragraph::new(format!("Run Tests  —  {env_label}"))
-        .style(theme::title())
-        .alignment(Alignment::Center);
-    f.render_widget(title, outer[0]);
+    [outer[5], outer[6], area]
+}
 
-    // Body: two side-by-side panels
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-        .split(outer[1]);
+fn render_service_step(f: &mut Frame, app: &App) {
+    let [content, help_area, _] = header_area(f, app, "Step 1 of 2 — Select a service");
 
-    // ── Service list ──
-    let svc_border_style = if !app.test_focus_suite {
-        theme::selected()
-    } else {
-        theme::dim()
-    };
-
-    let svc_items: Vec<ListItem> = TEST_SERVICES_DISPLAY
+    let items: Vec<ListItem> = TEST_SERVICES_DISPLAY
         .iter()
         .enumerate()
         .map(|(i, name)| {
-            let style = if i == app.test_service_selected && !app.test_focus_suite {
+            let style = if i == app.test_service_selected {
                 theme::selected()
-            } else if i == app.test_service_selected {
-                theme::muted()
             } else {
                 theme::normal()
             };
-            ListItem::new(format!("  {name}  ")).style(style)
+            let prefix = if i == app.test_service_selected { "▶ " } else { "  " };
+            ListItem::new(format!("{prefix}{name}")).style(style)
         })
         .collect();
 
-    let svc_list = List::new(svc_items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(svc_border_style)
-                .title(" Service ")
-                .title_style(theme::heading()),
-        )
-        .highlight_style(theme::selected());
-    f.render_widget(svc_list, columns[0]);
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme::selected())
+            .title(" Service ")
+            .title_style(theme::heading()),
+    );
+    f.render_widget(list, content);
 
-    // ── Suite / Args panel ──
-    let suite_border_style = if app.test_focus_suite {
-        theme::selected()
-    } else {
-        theme::dim()
-    };
+    render_help(
+        f,
+        help_area,
+        &[("↑↓", "Select"), ("Enter", "Next"), ("Esc", "Back")],
+    );
+}
 
-    let suite_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(suite_border_style)
-        .title(" Suite ")
-        .title_style(theme::heading());
+fn render_suite_step(f: &mut Frame, app: &App) {
+    let svc_name = TEST_SERVICES_DISPLAY
+        .get(app.test_service_selected)
+        .copied()
+        .unwrap_or("all");
+    let subtitle = format!("Step 2 of 2 — Service: {svc_name}  →  Select a suite");
+    let [content, help_area, _] = header_area(f, app, &subtitle);
 
-    if app.test_custom_input_active {
-        // Show text input for custom args
-        let inner = suite_block.inner(columns[1]);
-        f.render_widget(suite_block, columns[1]);
+    let items: Vec<ListItem> = TEST_SUITES
+        .iter()
+        .zip(TEST_SUITE_DESCS.iter())
+        .enumerate()
+        .map(|(i, (name, desc))| {
+            let selected = i == app.test_suite_selected;
+            let name_style = if selected { theme::selected() } else { theme::normal() };
+            let desc_style = if selected { theme::muted() } else { theme::dim() };
+            let prefix = if selected { "▶ " } else { "  " };
+            let line = Line::from(vec![
+                Span::styled(format!("{prefix}{name:<16}", name = name), name_style),
+                Span::styled(format!("  {desc}"), desc_style),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
 
-        let input_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(2), Constraint::Length(3), Constraint::Min(1)])
-            .margin(1)
-            .split(inner);
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme::selected())
+            .title(" Suite ")
+            .title_style(theme::heading()),
+    );
+    f.render_widget(list, content);
 
-        let prompt = Paragraph::new("Enter pytest args (e.g. tests/integration/test_foo.py::test_bar):")
-            .style(theme::muted());
-        f.render_widget(prompt, input_chunks[0]);
+    render_help(
+        f,
+        help_area,
+        &[("↑↓", "Select"), ("Enter", "Run"), ("Esc", "Back")],
+    );
+}
 
-        let input_display = format!(" {} ", app.test_custom_args);
-        let input = Paragraph::new(input_display.as_str())
+fn render_custom_args(f: &mut Frame, app: &App) {
+    let svc_name = TEST_SERVICES_DISPLAY
+        .get(app.test_service_selected)
+        .copied()
+        .unwrap_or("all");
+    let subtitle = format!("Custom Args — Service: {svc_name}");
+    let [content, help_area, _] = header_area(f, app, &subtitle);
+
+    let inner = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(3),
+            Constraint::Min(1),
+        ])
+        .margin(1)
+        .split(content);
+
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme::selected())
+            .title(" Custom pytest args ")
+            .title_style(theme::heading()),
+        content,
+    );
+
+    f.render_widget(
+        Paragraph::new("e.g.  tests/integration/test_foo.py::test_bar   or   tests/unit")
+            .style(theme::muted()),
+        inner[0],
+    );
+
+    let input_display = format!(" {} ", app.test_custom_args);
+    f.render_widget(
+        Paragraph::new(input_display.as_str())
             .style(theme::selected())
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(theme::selected()),
-            );
-        f.render_widget(input, input_chunks[1]);
+            ),
+        inner[1],
+    );
 
-        let hint = Paragraph::new("Enter to confirm  Esc to cancel").style(theme::dim());
-        f.render_widget(hint, input_chunks[2]);
-    } else {
-        let suite_items: Vec<ListItem> = TEST_SUITES
-            .iter()
-            .enumerate()
-            .map(|(i, name)| {
-                let label = if name == &"Custom Args" && !app.test_custom_args.is_empty() {
-                    format!("  {name}: {}  ", app.test_custom_args)
-                } else {
-                    format!("  {name}  ")
-                };
-                let style = if i == app.test_suite_selected && app.test_focus_suite {
-                    theme::selected()
-                } else if i == app.test_suite_selected {
-                    theme::muted()
-                } else {
-                    theme::normal()
-                };
-                ListItem::new(label).style(style)
-            })
-            .collect();
-
-        let suite_list = List::new(suite_items).block(suite_block);
-        f.render_widget(suite_list, columns[1]);
-    }
-
-    // ── Help bar ──
-    let help_spans = vec![
-        Span::styled("Tab", theme::info()),
-        Span::styled(" Switch panel  ", theme::muted()),
-        Span::styled("↑↓", theme::info()),
-        Span::styled(" Select  ", theme::muted()),
-        Span::styled("Enter", theme::info()),
-        Span::styled(" Run  ", theme::muted()),
-        Span::styled("Esc", theme::info()),
-        Span::styled(" Back", theme::muted()),
-    ];
-    let help = Paragraph::new(Line::from(help_spans));
-    f.render_widget(help, outer[2]);
+    render_help(
+        f,
+        help_area,
+        &[("Enter", "Run"), ("Esc", "Cancel")],
+    );
 }
 
 fn render_log_viewer(f: &mut Frame, app: &App) {
@@ -176,9 +212,9 @@ fn render_log_viewer(f: &mut Frame, app: &App) {
             Constraint::Length(3),
             Constraint::Length(1),
             Constraint::Min(6),
-            Constraint::Length(3),
+            Constraint::Length(1),
         ])
-        .margin(2)
+        .margin(1)
         .split(f.area());
 
     let svc = TEST_SERVICES_DISPLAY
@@ -190,30 +226,29 @@ fn render_log_viewer(f: &mut Frame, app: &App) {
         .copied()
         .unwrap_or("unknown");
 
-    let title = Paragraph::new(format!("Test Output — {svc} / {suite}"))
-        .style(theme::title())
-        .alignment(Alignment::Center);
-    f.render_widget(title, chunks[0]);
+    f.render_widget(
+        Paragraph::new(format!("Test Output — {svc} / {suite}"))
+            .style(theme::title())
+            .alignment(Alignment::Center),
+        chunks[0],
+    );
 
     let tick = app.test_tick;
     let spinner_char = SPINNER[tick % SPINNER.len()];
-
     let subtitle = if app.test_action_running {
         Paragraph::new(Line::from(vec![
             Span::styled(format!("{spinner_char} "), theme::info()),
-            Span::styled("Running tests...", theme::info()),
+            Span::styled("Running...", theme::info()),
         ]))
         .alignment(Alignment::Center)
     } else if app.test_action_complete {
-        let last = app.test_log.last().map(|s| s.as_str()).unwrap_or("");
-        if last.contains("ERROR") || last.contains("FAILED") || last.contains("failed") || last.contains("error") {
-            Paragraph::new("Tests failed")
-                .style(theme::error())
-                .alignment(Alignment::Center)
+        let failed = app.test_log.iter().any(|l| {
+            l.contains("ERROR") || l.contains("FAILED") || l.contains("failed") || l.contains("error")
+        });
+        if failed {
+            Paragraph::new("Tests FAILED").style(theme::error()).alignment(Alignment::Center)
         } else {
-            Paragraph::new("Tests complete")
-                .style(theme::success())
-                .alignment(Alignment::Center)
+            Paragraph::new("✓ Tests passed").style(theme::success()).alignment(Alignment::Center)
         }
     } else {
         Paragraph::new("").alignment(Alignment::Center)
@@ -234,7 +269,9 @@ fn render_log_viewer(f: &mut Frame, app: &App) {
                 theme::error()
             } else if l.contains("passed") || l.contains("✓") || l.contains("PASSED") {
                 theme::success()
-            } else if l.starts_with("  ") || l.starts_with("Running") || l.starts_with("make") {
+            } else if l.starts_with("  Syncing") || l.starts_with("  ✓ Synced") {
+                theme::info()
+            } else if l.starts_with("  Running") || l.starts_with("  make") || l.starts_with("Running") {
                 theme::info()
             } else if l.contains("warning") || l.contains("WARNING") {
                 theme::warning()
@@ -245,7 +282,7 @@ fn render_log_viewer(f: &mut Frame, app: &App) {
         })
         .collect();
 
-    let scrollbar_info = if app.test_log.len() > log_height {
+    let scrollbar_title = if app.test_log.len() > log_height {
         format!(
             " Output ({}-{} of {}) ",
             scroll + 1,
@@ -256,37 +293,41 @@ fn render_log_viewer(f: &mut Frame, app: &App) {
         " Output ".to_string()
     };
 
-    let log_panel = Paragraph::new(visible).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(theme::dim())
-            .title(scrollbar_info)
-            .title_style(theme::heading()),
+    f.render_widget(
+        Paragraph::new(visible).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(theme::dim())
+                .title(scrollbar_title)
+                .title_style(theme::heading()),
+        ),
+        chunks[2],
     );
-    f.render_widget(log_panel, chunks[2]);
-
-    if app.test_log.len() > log_height {
-        let mut scrollbar_state = ScrollbarState::new(app.test_log.len()).position(scroll);
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(Some("↑"))
-            .end_symbol(Some("↓"));
-        f.render_stateful_widget(
-            scrollbar,
-            chunks[2].inner(Margin {
-                vertical: 1,
-                horizontal: 0,
-            }),
-            &mut scrollbar_state,
-        );
-    }
 
     let help_text = if app.test_action_running {
-        " ↑/↓ Scroll  (tests running...)"
+        "↑/↓ Scroll  (tests running...)"
     } else {
-        " ↑/↓ Scroll  PgUp/PgDn  Esc Back to picker"
+        "↑/↓ Scroll  PgUp/PgDn  End — jump to end  c — copy output  Esc — back"
     };
-    let help = Paragraph::new(Line::from(Span::styled(help_text, theme::muted())));
-    f.render_widget(help, chunks[3]);
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(help_text, theme::muted()))),
+        chunks[3],
+    );
+}
+
+fn render_help(f: &mut Frame, area: Rect, bindings: &[(&str, &str)]) {
+    let mut spans = vec![];
+    for (i, (key, label)) in bindings.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled("   ", theme::muted()));
+        }
+        spans.push(Span::styled(*key, theme::info()));
+        spans.push(Span::styled(format!(" {label}"), theme::muted()));
+    }
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
+        area,
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -296,52 +337,59 @@ fn render_log_viewer(f: &mut Frame, app: &App) {
 pub fn handle_key(app: &mut App, key: KeyEvent) {
     if app.test_log_visible {
         handle_log_key(app, key);
-        return;
-    }
-
-    if app.test_custom_input_active {
+    } else if app.test_custom_input_active {
         handle_custom_input_key(app, key);
-        return;
+    } else if app.test_focus_suite {
+        handle_suite_key(app, key);
+    } else {
+        handle_service_key(app, key);
     }
-
-    handle_picker_key(app, key);
 }
 
-fn handle_picker_key(app: &mut App, key: KeyEvent) {
+fn handle_service_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
             app.screen = Screen::Welcome;
             app.action_menu_selected = 0;
         }
-        KeyCode::Tab => {
-            app.test_focus_suite = !app.test_focus_suite;
-        }
         KeyCode::Up => {
-            if app.test_focus_suite {
-                if app.test_suite_selected > 0 {
-                    app.test_suite_selected -= 1;
-                }
-            } else if app.test_service_selected > 0 {
+            if app.test_service_selected > 0 {
                 app.test_service_selected -= 1;
             }
         }
         KeyCode::Down => {
-            if app.test_focus_suite {
-                if app.test_suite_selected + 1 < TEST_SUITES.len() {
-                    app.test_suite_selected += 1;
-                }
-            } else if app.test_service_selected + 1 < TEST_SERVICES.len() {
+            if app.test_service_selected + 1 < TEST_SERVICES.len() {
                 app.test_service_selected += 1;
             }
         }
         KeyCode::Enter => {
-            // If custom suite selected, first collect args
-            if TEST_SUITES.get(app.test_suite_selected) == Some(&"Custom Args") && app.test_custom_args.is_empty() {
-                app.test_focus_suite = true;
-                app.test_custom_input_active = true;
-                return;
+            app.test_focus_suite = true;
+        }
+        _ => {}
+    }
+}
+
+fn handle_suite_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => {
+            app.test_focus_suite = false;
+        }
+        KeyCode::Up => {
+            if app.test_suite_selected > 0 {
+                app.test_suite_selected -= 1;
             }
-            spawn_test_worker(app);
+        }
+        KeyCode::Down => {
+            if app.test_suite_selected + 1 < TEST_SUITES.len() {
+                app.test_suite_selected += 1;
+            }
+        }
+        KeyCode::Enter => {
+            if TEST_SUITES.get(app.test_suite_selected) == Some(&"Custom Args") {
+                app.test_custom_input_active = true;
+            } else {
+                spawn_test_worker(app);
+            }
         }
         _ => {}
     }
@@ -370,7 +418,7 @@ fn handle_custom_input_key(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_log_key(app: &mut App, key: KeyEvent) {
-    let log_height: usize = 20; // approximate; scrolling is clamped anyway
+    let log_height: usize = 20;
     match key.code {
         KeyCode::Esc => {
             if !app.test_action_running {
@@ -401,7 +449,152 @@ fn handle_log_key(app: &mut App, key: KeyEvent) {
             app.test_log_autoscroll = true;
             app.test_log_scroll = app.test_log.len().saturating_sub(log_height);
         }
+        KeyCode::Char('c') | KeyCode::Char('C') => {
+            copy_log_to_clipboard(app);
+        }
         _ => {}
+    }
+}
+
+fn copy_log_to_clipboard(app: &mut App) {
+    let text = app.test_log.join("\n");
+    // Try pbcopy (macOS), then xclip / xsel (Linux).
+    let copied = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .spawn()
+        .ok()
+        .and_then(|mut child| {
+            use std::io::Write;
+            child.stdin.take()?.write_all(text.as_bytes()).ok()?;
+            child.wait().ok()?.success().then_some(())
+        })
+        .or_else(|| {
+            Command::new("xclip")
+                .args(["-selection", "clipboard"])
+                .stdin(Stdio::piped())
+                .spawn()
+                .ok()
+                .and_then(|mut child| {
+                    use std::io::Write;
+                    child.stdin.take()?.write_all(text.as_bytes()).ok()?;
+                    child.wait().ok()?.success().then_some(())
+                })
+        })
+        .or_else(|| {
+            Command::new("xsel")
+                .args(["--clipboard", "--input"])
+                .stdin(Stdio::piped())
+                .spawn()
+                .ok()
+                .and_then(|mut child| {
+                    use std::io::Write;
+                    child.stdin.take()?.write_all(text.as_bytes()).ok()?;
+                    child.wait().ok()?.success().then_some(())
+                })
+        });
+
+    if copied.is_some() {
+        app.set_message(
+            &format!("Copied {} lines to clipboard", app.test_log.len()),
+            crate::app::MessageKind::Success,
+        );
+    } else {
+        app.set_message("Could not copy — pbcopy/xclip not available", crate::app::MessageKind::Warning);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Local vault credential extraction
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Decrypt the Ansible vault file locally (on the admin workstation where
+/// `ansible-vault` and `python3` are guaranteed to be available) and return
+/// the test credentials as `(KEY, value)` pairs.
+///
+/// These are then injected directly as env vars in the remote SSH command so
+/// `extract_vault_credentials` in `test.sh` can skip vault decryption on the
+/// remote host (which may not have ansible installed).
+fn extract_vault_creds_locally(
+    repo_root: &Path,
+    vault_prefix: &str,
+    vault_password: &str,
+) -> Vec<(String, String)> {
+    let vault_file = repo_root.join(format!(
+        "provision/ansible/roles/secrets/vars/vault.{vault_prefix}.yml"
+    ));
+    if !vault_file.exists() {
+        return vec![];
+    }
+
+    // Write vault password to a temp executable script so ansible-vault can
+    // call it as --vault-password-file.
+    let tmp_path = std::env::temp_dir()
+        .join(format!("busibox-test-vp-{}.sh", std::process::id()));
+    let pw_escaped = vault_password.replace('\'', "'\\''");
+    if std::fs::write(&tmp_path, format!("#!/bin/sh\necho '{pw_escaped}'")).is_err() {
+        return vec![];
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o700));
+    }
+
+    // Decrypt the vault file.
+    let vault_output = Command::new("ansible-vault")
+        .args(["view", vault_file.to_str().unwrap_or(""), "--vault-password-file"])
+        .arg(&tmp_path)
+        .output();
+    let _ = std::fs::remove_file(&tmp_path);
+
+    let yaml_content = match vault_output {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => return vec![],
+    };
+
+    // Extract the needed test credentials using Python (same logic as test.sh).
+    let python_script = r#"
+import yaml, sys
+vault = yaml.safe_load(sys.stdin.read()) or {}
+secrets = vault.get('secrets', {})
+pg = secrets.get('postgresql', {})
+authz = secrets.get('authz', {})
+minio = secrets.get('minio', {})
+test_creds = secrets.get('test_credentials', {})
+print(f"POSTGRES_PASSWORD={pg.get('password', '')}")
+print(f"TEST_DB_PASSWORD={pg.get('password', '')}")
+print(f"AUTHZ_MASTER_KEY={authz.get('master_key', '')}")
+print(f"MINIO_ACCESS_KEY={minio.get('minio_access_key', '') or minio.get('access_key', '')}")
+print(f"MINIO_SECRET_KEY={minio.get('minio_secret_key', '') or minio.get('secret_key', '')}")
+print(f"TEST_USER_ID={test_creds.get('test_user_id', '')}")
+print(f"JWT_SECRET={secrets.get('jwt_secret', '')}")
+"#;
+
+    let result = Command::new("python3")
+        .args(["-c", python_script])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .and_then(|mut child| {
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                let _ = stdin.write_all(yaml_content.as_bytes());
+            }
+            child.wait_with_output()
+        });
+
+    match result {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.splitn(2, '=');
+                let key = parts.next()?.trim().to_string();
+                let val = parts.next()?.to_string();
+                if key.is_empty() { None } else { Some((key, val)) }
+            })
+            .collect(),
+        _ => vec![],
     }
 }
 
@@ -436,6 +629,16 @@ pub fn spawn_test_worker(app: &mut App) {
         .active_profile()
         .map(|(_, p)| p.backend.to_lowercase())
         .unwrap_or_else(|| "proxmox".to_string());
+    // vault_prefix resolves to the profile's explicit prefix or falls back to
+    // the profile ID — this matches how profiles.sh picks the vault file.
+    let vault_prefix: String = app
+        .active_profile()
+        .map(|(id, p)| {
+            p.vault_prefix
+                .clone()
+                .unwrap_or_else(|| id.to_string())
+        })
+        .unwrap_or_else(|| "dev".to_string());
 
     let ssh_details: Option<(String, String, String)> = if is_remote {
         app.active_profile().and_then(|(_, p)| {
@@ -460,6 +663,12 @@ pub fn spawn_test_worker(app: &mut App) {
 
     let repo_root = app.repo_root.clone();
     let custom_args = app.test_custom_args.clone();
+    let vault_prefix = vault_prefix.clone();
+
+    // Decrypt the vault locally so test.sh never needs ansible-vault on the
+    // remote host.  Failures are soft — the remote fallback still tries.
+    let local_creds: Vec<(String, String)> =
+        extract_vault_creds_locally(&repo_root, &vault_prefix, &vault_password);
 
     // Clear log and show log viewer
     app.test_log.clear();
@@ -474,6 +683,7 @@ pub fn spawn_test_worker(app: &mut App) {
 
     let svc_key = svc_key.to_string();
     let suite = suite.to_string();
+    let local_creds = local_creds; // move into thread
 
     std::thread::spawn(move || {
         let remote_path = profile_remote_path
@@ -481,31 +691,57 @@ pub fn spawn_test_worker(app: &mut App) {
             .unwrap_or("~/busibox")
             .to_string();
 
-        // Build the make command arguments.
-        // Docker backend uses make test-docker; Proxmox/remote uses make test with INV.
+        // ── Step 1: sync repo to remote (Proxmox only) ──────────────────────
+        if is_remote {
+            if let Some((ref host, ref user, ref key)) = ssh_details {
+                let display_host = profile_host.as_deref().unwrap_or(host);
+                let _ = tx.send(TestUpdate::Log(format!(
+                    "Syncing code to {display_host}..."
+                )));
+                match remote::sync(&repo_root, host, user, key, &remote_path) {
+                    Ok(()) => {
+                        let _ = tx.send(TestUpdate::Log("✓ Synced".to_string()));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(TestUpdate::Log(format!("WARNING: sync failed: {e}")));
+                        let _ = tx.send(TestUpdate::Log(
+                            "Continuing with existing remote code...".to_string(),
+                        ));
+                    }
+                }
+                let _ = tx.send(TestUpdate::Log(String::new()));
+            }
+        }
+
+        // ── Step 2: build make args ──────────────────────────────────────────
         let is_docker = profile_backend == "docker";
+        // VAULT_PREFIX is passed as a make variable so test.sh can find the
+        // correct vault.{prefix}.yml file without interactive prompts.
+        let vp_arg = if !is_docker && !vault_prefix.is_empty() {
+            format!("VAULT_PREFIX={vault_prefix} ")
+        } else {
+            String::new()
+        };
 
         let make_args = if suite == "Security" {
-            // Security tests don't take a SERVICE argument
-            "test-security".to_string()
+            format!("{vp_arg}test-security")
         } else if suite == "Unit" {
             if is_docker {
                 format!("test-docker SERVICE={svc_key} ARGS=\"tests/unit\"")
             } else {
-                format!("test SERVICE={svc_key} INV={profile_env} ARGS=\"tests/unit\"")
+                format!("{vp_arg}test SERVICE={svc_key} INV={profile_env} ARGS=\"tests/unit\"")
             }
         } else if suite == "Custom Args" && !custom_args.is_empty() {
             if is_docker {
                 format!("test-docker SERVICE={svc_key} ARGS=\"{custom_args}\"")
             } else {
-                format!("test SERVICE={svc_key} INV={profile_env} ARGS=\"{custom_args}\"")
+                format!("{vp_arg}test SERVICE={svc_key} INV={profile_env} ARGS=\"{custom_args}\"")
             }
         } else {
-            // Integration (default)
             if is_docker {
                 format!("test-docker SERVICE={svc_key}")
             } else {
-                format!("test SERVICE={svc_key} INV={profile_env}")
+                format!("{vp_arg}test SERVICE={svc_key} INV={profile_env}")
             }
         };
 
@@ -520,17 +756,26 @@ pub fn spawn_test_worker(app: &mut App) {
             let _ = stream_tx.send(TestUpdate::Log(format!("  {line}")));
         };
 
+        // ── Step 3: run tests ────────────────────────────────────────────────
         let result: color_eyre::Result<i32> = if is_remote {
             if let Some((ref host, ref user, ref key)) = ssh_details {
                 let display_host = profile_host.as_deref().unwrap_or(host);
                 let ssh = crate::modules::ssh::SshConnection::new(display_host, user, key);
-                remote::exec_make_quiet_with_vault_streaming(
-                    &ssh,
-                    &remote_path,
-                    &make_args,
-                    &vault_password,
-                    on_line,
-                )
+
+                // Build a shell command that injects vault password AND any
+                // test credentials decrypted locally, then runs make.
+                let escaped_pw = vault_password.replace('\'', "'\\''");
+                let mut env_block = format!("export ANSIBLE_VAULT_PASSWORD='{escaped_pw}'; ");
+                // Pre-inject test credentials so test.sh skips ansible-vault
+                // on the remote host (which may not have ansible installed).
+                for (k, v) in &local_creds {
+                    let v_esc = v.replace('\'', "'\\''");
+                    env_block.push_str(&format!("export {k}='{v_esc}'; "));
+                }
+                // Always run tests against the test database — never production.
+                env_block.push_str("export AUTHZ_TEST_MODE_ENABLED='true'; ");
+                let cmd = format!("{env_block}USE_MANAGER=0 make {make_args}");
+                remote::exec_remote_streaming(&ssh, &remote_path, &cmd, on_line)
             } else {
                 Err(color_eyre::eyre::eyre!("Remote profile has no SSH host configured"))
             }
@@ -551,9 +796,7 @@ pub fn spawn_test_worker(app: &mut App) {
             }
             Ok(code) => {
                 let _ = tx.send(TestUpdate::Log(String::new()));
-                let _ = tx.send(TestUpdate::Log(format!(
-                    "Tests FAILED (exit code {code})"
-                )));
+                let _ = tx.send(TestUpdate::Log(format!("Tests FAILED (exit code {code})")));
                 let _ = tx.send(TestUpdate::Complete { success: false });
             }
             Err(e) => {
