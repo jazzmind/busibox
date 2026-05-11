@@ -1031,6 +1031,19 @@ fn handle_action_select(app: &mut App, action: &str) {
             );
             app.pending_mkcert_setup = true;
         }
+        "Run Tests" => {
+            // Reset picker state each time we enter the screen
+            app.test_service_selected = 0;
+            app.test_suite_selected = 0;
+            app.test_focus_suite = false;
+            app.test_custom_args.clear();
+            app.test_custom_input_active = false;
+            app.test_log.clear();
+            app.test_log_visible = false;
+            app.test_action_running = false;
+            app.test_action_complete = false;
+            app.screen = Screen::RunTests;
+        }
         _ => {}
     }
 }

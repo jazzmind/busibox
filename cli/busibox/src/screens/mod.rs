@@ -10,6 +10,7 @@ pub mod model_download;
 pub mod models_manage;
 pub mod profile_edit;
 pub mod profile_select;
+pub mod run_tests;
 pub mod setup_mode;
 pub mod ssh_setup;
 pub mod tailscale_setup;

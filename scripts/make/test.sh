@@ -49,11 +49,15 @@ detect_container_prefix() {
 
 DOCKER_PREFIX=$(detect_container_prefix)
 
-# Detect vault password method (shared with deploy script)
+# Detect vault password method.
+# Priority: ANSIBLE_VAULT_PASSWORD env var > ~/.vault_pass file > interactive prompt.
 get_vault_flags() {
+    local vault_pass_from_env="${REPO_ROOT}/scripts/lib/vault-pass-from-env.sh"
     local vault_pass_file="$HOME/.vault_pass"
-    
-    if [ -f "$vault_pass_file" ]; then
+
+    if [ -n "${ANSIBLE_VAULT_PASSWORD:-}" ]; then
+        echo "--vault-password-file ${vault_pass_from_env}"
+    elif [ -f "$vault_pass_file" ]; then
         echo "--vault-password-file $vault_pass_file"
     else
         echo "--ask-vault-pass"

@@ -170,6 +170,9 @@ fn main() -> Result<()> {
         if app.screen == Screen::ModelBenchmark && app.benchmark_running {
             app.benchmark_tick = app.benchmark_tick.wrapping_add(1);
         }
+        if app.screen == Screen::RunTests && app.test_action_running {
+            app.test_tick = app.test_tick.wrapping_add(1);
+        }
         if app.screen == Screen::Welcome && app.health_check_running {
             app.health_tick = app.health_tick.wrapping_add(1);
         }
@@ -386,6 +389,58 @@ fn main() -> Result<()> {
                         "Action failed — press l to view logs",
                         app::MessageKind::Error,
                     );
+                }
+            }
+        }
+
+        // Drain test updates
+        {
+            let mut test_completed = false;
+            let mut test_success = false;
+            if let Some(rx) = app.test_rx.take() {
+                use std::sync::mpsc::TryRecvError;
+                let mut put_back = true;
+                loop {
+                    match rx.try_recv() {
+                        Ok(app::TestUpdate::Log(msg)) => {
+                            app.test_log.push(msg);
+                            const MAX_LOG: usize = 10000;
+                            if app.test_log.len() > MAX_LOG {
+                                let excess = app.test_log.len() - MAX_LOG;
+                                app.test_log.drain(..excess);
+                            }
+                            if app.test_log_autoscroll {
+                                app.test_log_scroll =
+                                    app.test_log.len().saturating_sub(1);
+                            }
+                        }
+                        Ok(app::TestUpdate::Complete { success }) => {
+                            app.test_action_running = false;
+                            app.test_action_complete = true;
+                            app.test_log_scroll =
+                                app.test_log.len().saturating_sub(1);
+                            test_completed = true;
+                            test_success = success;
+                            put_back = false;
+                            break;
+                        }
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            app.test_action_running = false;
+                            put_back = false;
+                            break;
+                        }
+                    }
+                }
+                if put_back {
+                    app.test_rx = Some(rx);
+                }
+            }
+            if test_completed {
+                if test_success {
+                    app.set_message("Tests passed", app::MessageKind::Success);
+                } else {
+                    app.set_message("Tests failed — see output above", app::MessageKind::Error);
                 }
             }
         }
@@ -777,6 +832,7 @@ fn render(app: &App, f: &mut ratatui::Frame) {
         Screen::K8sSetup => screens::k8s_setup::render(f, app),
         Screen::K8sManage => screens::k8s_manage::render(f, app),
         Screen::ValidateSecrets => screens::validate_secrets::render(f, app),
+        Screen::RunTests => screens::run_tests::render(f, app),
     }
 
     // Profile header bar overlay (except Welcome and ProfileSelect)
@@ -882,6 +938,7 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
         Screen::K8sSetup => screens::k8s_setup::handle_key(app, key),
         Screen::K8sManage => screens::k8s_manage::handle_key(app, key),
         Screen::ValidateSecrets => screens::validate_secrets::handle_key(app, key),
+        Screen::RunTests => screens::run_tests::handle_key(app, key),
     }
 }
 
