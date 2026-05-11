@@ -41,6 +41,7 @@ LiteLLM configuration is managed through Ansible variables:
 |----------|---------|
 | `LITELLM_API_KEY` | API key for gateway access (from vault) |
 | `LITELLM_BASE_URL` | Gateway URL (auto-configured) |
+| `LITELLM_SALT_KEY` | Encryption key for credentials stored in LiteLLM's database — **must never change** after initial setup |
 
 Model definitions are configured in the LiteLLM config file, which maps model names to providers and endpoints.
 
@@ -48,15 +49,53 @@ For AWS Bedrock setup, see [Bedrock Quick Start](../developers/reference/bedrock
 
 ### Adding a Cloud Provider
 
-To add a cloud AI provider (e.g., OpenAI, Anthropic):
+To add a cloud AI provider (e.g., OpenAI, Anthropic, AWS Bedrock), use the **Settings > AI Models** screen in the Admin UI. This is the only supported way to save provider credentials:
 
-1. Add the API key to the Ansible vault
-2. Add the model definition to the LiteLLM configuration
-3. Redeploy LiteLLM:
+1. Navigate to **Admin > Settings > AI Models**
+2. Select your cloud provider
+3. Enter the API key or credentials
+4. Click **Save**
+
+The admin UI routes all credential saves through agent-api (`POST /llm/keys`), which:
+1. Stores the key in LiteLLM via `/credentials` and `/config/update`
+2. Persists an encrypted copy to config-api (the durable backup) so keys survive LiteLLM restarts
+
+> **Important**: Do not bypass the Admin UI by calling config-api or LiteLLM directly. Only credentials saved through the Admin UI are properly persisted and will survive restarts.
+
+### Credential Persistence and Restart Recovery
+
+Cloud provider credentials (Bedrock, OpenAI, Anthropic) are stored in three places:
+
+| Location | Durability | Purpose |
+|----------|-----------|---------|
+| LiteLLM PostgreSQL DB | Survives LiteLLM restarts (unless salt key changes) | Active routing |
+| agent-api `os.environ` | Lost on agent-api restart | Fast in-process access |
+| config-api `llm-keys` (encrypted) | Permanent until explicitly deleted | Durable backup |
+
+**Automatic restore after restart**: On the first authenticated request after a LiteLLM restart, agent-api detects that LiteLLM has no provider credentials and automatically restores them from config-api. No manual action is required.
+
+**If credentials appear to be missing** after a restart (e.g., LiteLLM OOM kill, container recreate, or salt key mismatch), force an immediate restore:
+
+```
+POST /llm/keys/verify-restore
+Authorization: Bearer <admin-token>
+```
+
+This resets the restore flag and pushes credentials from config-api back to LiteLLM. In the Admin UI this is exposed via **Settings > AI Models > Verify Restore**.
+
+### The LITELLM_SALT_KEY Warning
+
+LiteLLM encrypts all credentials stored in its database using `LITELLM_SALT_KEY`. If this key changes between restarts (e.g., from a container recreate that picks up a different value), **all stored credentials become permanently unreadable from LiteLLM's DB**.
+
+Busibox mitigates this automatically: the durable copy in config-api is used to restore credentials after any restart. However, if config-api also lost the keys (e.g., a fresh install), you will need to re-enter credentials via the Admin UI.
+
+To check for salt key issues look for `Unable to decrypt` errors in LiteLLM logs:
 
 ```bash
-make install SERVICE=litellm
+make manage SERVICE=litellm ACTION=logs
 ```
+
+If you see decrypt errors, use the **Clean Stale Data** button in Admin > Settings > AI Models (or `POST /llm/keys/clean-stale`), then re-enter your credentials.
 
 ## Local Model Runtimes
 

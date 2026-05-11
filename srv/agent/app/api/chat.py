@@ -31,6 +31,7 @@ from app.schemas.auth import Principal
 from app.services.platform_config import get_platform_insights_enabled
 from app.schemas.conversation import Attachment, MessageRead
 from app.schemas.dispatcher import DispatcherRequest, FileAttachment, UserSettings, RoutingDecision
+from app.api.llm import _ensure_litellm_keys
 from app.services.dispatcher_service import route_query
 from app.services.model_selector import select_model_and_tools, list_available_models, ModelCapabilities
 from app.services.chat_executor import execute_chat, execute_chat_stream
@@ -390,6 +391,9 @@ async def send_chat_message(
         ChatMessageResponse with assistant response and metadata
     """
     try:
+        # Verify LiteLLM has cloud provider keys; restore from config-api if not.
+        await _ensure_litellm_keys(principal)
+
         # Get or create conversation
         if payload.conversation_id:
             # Verify conversation exists and user owns it

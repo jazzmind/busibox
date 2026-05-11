@@ -159,6 +159,48 @@ make manage SERVICE=<app-name> ACTION=redeploy
 - LLM provider is down or rate-limited
 - Model not available in LiteLLM configuration
 - Token exchange failing (check AuthZ)
+- Cloud provider credentials lost after restart (see below)
+
+### Cloud Provider Credentials Disappeared (Bedrock, OpenAI, Anthropic)
+
+**Symptoms**: Agents work with local models but fail with cloud providers; LiteLLM returns "no API key" errors.
+
+**Root cause**: LiteLLM was restarted (OOM kill, container recreate, deployment) and lost its in-memory or database-stored credentials.
+
+**Automatic recovery**: Agent-api automatically restores credentials from config-api on the first authenticated request after a restart. If requests are returning provider errors, the restore may not have fired yet — simply make any authenticated agent request and check again.
+
+**Manual forced restore**:
+
+```bash
+# Force immediate restore from config-api to LiteLLM
+curl -X POST http://<agent-ip>:8000/llm/keys/verify-restore \
+  -H "Authorization: Bearer <admin-token>"
+```
+
+This triggers an immediate read of all `llm-keys` from config-api and pushes them back to LiteLLM.
+
+**Verify credentials are present after restore**:
+
+```bash
+# Check what providers agent-api reports as configured
+curl http://<agent-ip>:8000/llm/keys \
+  -H "Authorization: Bearer <admin-token>"
+```
+
+Look for `config_api_persisted: true` for each provider.
+
+**If credentials are truly gone** (not in config-api either, e.g., fresh install or manual deletion):
+1. Go to **Admin > Settings > AI Models** in the Busibox Portal
+2. Re-enter the API key for the affected provider
+3. Save — this re-persists to both LiteLLM and config-api
+
+**Diagnosing salt key issues**: If credentials are in config-api but LiteLLM still fails to use them:
+
+```bash
+make manage SERVICE=litellm ACTION=logs | grep -i decrypt
+```
+
+If you see `Unable to decrypt` errors, the `LITELLM_SALT_KEY` changed between restarts. Contact your administrator — the old encrypted values in LiteLLM's DB are unreadable. The config-api backup is still intact and will be restored on the next authenticated request.
 
 ### Slow Agent Responses
 

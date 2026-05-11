@@ -538,11 +538,46 @@ deploy_service() {
     # containers running with stale/placeholder env vars.
     local cmd="ansible-playbook -i ${inventory} ${playbook} --tags ${tag}"
 
-    # If this is an individual core sub-app (busibox-*), pass deploy_app so Ansible
-    # only deploys that specific app instead of all apps on the core-apps container.
+    # If this is an individual core sub-app (busibox-*) on Docker and the container
+    # is already running, use in-container deploy to avoid killing sibling apps.
+    # A full container recreate would destroy other apps' built artifacts.
     case "$service" in
         busibox-portal|busibox-admin|busibox-agents|busibox-chat|busibox-appbuilder|busibox-media|busibox-documents)
-            cmd="${cmd} -e deploy_app=${service}"
+            if [[ "$backend" == "docker" ]]; then
+                local container_prefix="${prefix:-${CONTAINER_PREFIX:-local}}"
+                local container="${container_prefix}-core-apps"
+                if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+                    local app_short_name="${service#busibox-}"
+                    info "Deploying ${app_short_name} inside running core-apps container (preserving sibling apps)..."
+                    if docker exec "$container" test -f /usr/local/bin/entrypoint.sh 2>/dev/null; then
+                        if docker exec "$container" /usr/local/bin/entrypoint.sh deploy "${app_short_name}"; then
+                            success "${app_short_name} deployed successfully"
+                            return 0
+                        else
+                            error "In-container deploy of ${app_short_name} failed"
+                            return 1
+                        fi
+                    else
+                        # Dev mode: use app-manager control API
+                        info "Dev mode detected, using app-manager API to rebuild ${app_short_name}..."
+                        if docker exec "$container" curl -sf -X POST http://localhost:9999/restart \
+                            -H 'Content-Type: application/json' \
+                            -d "{\"app\":\"${app_short_name}\"}" 2>&1; then
+                            success "${app_short_name} deployed successfully via app-manager"
+                            return 0
+                        else
+                            error "Failed to deploy ${app_short_name} via app-manager"
+                            return 1
+                        fi
+                    fi
+                fi
+                # Container not running — fall through to full Ansible deploy with all apps enabled
+                info "core-apps container not running, falling back to full container deploy..."
+                cmd="${cmd} -e deploy_app=${service} -e enabled_apps=all"
+                export ENABLED_APPS="all"
+            else
+                cmd="${cmd} -e deploy_app=${service}"
+            fi
             ;;
     esac
 
@@ -561,10 +596,8 @@ deploy_service() {
         if [[ "${IMAGE_SOURCE:-}" == "ghcr" ]]; then
             cmd="${cmd} -e docker_pull_images=true"
         fi
-        # When (re)deploying core-apps, enable all apps so every previously
-        # running app comes back up after the container is recreated.
-        # Without this, ENABLED_APPS defaults to "portal,admin" (auto_deploy
-        # apps only), leaving agents/chat/media/documents/appbuilder stopped.
+        # When (re)deploying core-apps as a whole, enable all apps so every
+        # previously running app comes back up after the container is recreated.
         if [[ "$service" == "core-apps" ]]; then
             cmd="${cmd} -e enabled_apps=all"
             export ENABLED_APPS="all"

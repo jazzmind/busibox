@@ -9,7 +9,7 @@ published: true
 # Authentication & Authorization
 
 **Created**: 2025-12-09  
-**Last Updated**: 2026-03-25  
+**Last Updated**: 2026-05-11  
 **Status**: Active  
 **Category**: Architecture  
 **Related Docs**:  
@@ -193,6 +193,31 @@ Only Finance Admin has write/delete scopes → they can MODIFY those documents.
 | `agent.write` | Agent API | Create/modify agents |
 | `agent.delete` | Agent API | Delete agents |
 | `agent.execute` | Agent API | Execute agent tasks |
+| `config.secrets.read` | Config API | Read raw values for sensitive config categories (e.g. `llm-keys`) |
+
+### Source-Gated Scopes
+
+Some scopes are never issued from RBAC role assignments. Instead, they are injected conditionally by authz based on the **origin of the subject token** in a token exchange. This is called **source gating**.
+
+Currently gated scope:
+
+| Scope | Injected when | Blocked when |
+|-------|--------------|--------------|
+| `config.secrets.read` | Subject token audience is `agent-api` AND target audience is `config-api` | Any other exchange path |
+
+**Why this matters**: Even an `Admin`-role user cannot retrieve raw LLM credentials directly from config-api. The credential read path is:
+
+```
+User request → agent-api (aud=agent-api token) → token exchange → config-api token (with injected config.secrets.read) → read llm-keys
+```
+
+Direct path is blocked:
+
+```
+User → token exchange → config-api token (no config.secrets.read) → /admin/config/{key}/raw → 403
+```
+
+This is implemented in `srv/authz/src/routes/oauth.py`. The constant `_AGENT_API_CONFIG_EXTRA_SCOPES = {"config.secrets.read"}` is injected only when `subject_token.aud == "agent-api"` and `token_req.audience == "config-api"`.
 
 ---
 
@@ -652,18 +677,20 @@ Authorization: Bearer <session-jwt>
 
 ### Current Implementation Status
 
-| Feature | AuthZ | Ingest | Search | Agent |
-|---------|-------|--------|--------|-------|
-| JWT validation (RS256) | N/A | ✅ | ✅ | ✅ |
-| Audience validation | N/A | ✅ | ✅ | ✅ |
-| Role extraction | ✅ | ✅ | ✅ | ✅ |
-| Scope extraction | ✅ | ✅ | ✅ | ✅ |
-| RLS enforcement (data access) | N/A | ✅ | ✅ | N/A |
-| **Scope enforcement (operations)** | N/A | ✅ | ❌ | ❌ |
+| Feature | AuthZ | Ingest | Search | Agent | Config |
+|---------|-------|--------|--------|-------|--------|
+| JWT validation (RS256) | N/A | ✅ | ✅ | ✅ | ✅ |
+| Audience validation | N/A | ✅ | ✅ | ✅ | ✅ |
+| Role extraction | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Scope extraction | ✅ | ✅ | ✅ | ✅ | ✅ |
+| RLS enforcement (data access) | N/A | ✅ | ✅ | N/A | N/A |
+| **Scope enforcement (operations)** | N/A | ✅ | ❌ | ❌ | ✅ (sensitive categories) |
+| **Source-gated scopes** | ✅ | N/A | N/A | N/A | ✅ |
 
-> **Note**: Scope-based operation authorization is designed but not yet enforced. Currently:
+> **Note**: Scope-based operation authorization is designed but not yet enforced in Search and Agent for general operations. Currently:
 > - **Data access** is enforced via role membership (PostgreSQL RLS, Milvus partitions)
-> - **Operation authorization** (scope checks) is not enforced - any authenticated user can perform any operation on data they can access
+> - **Operation authorization** (scope checks) is not enforced in Search/Agent - any authenticated user can perform any operation on data they can access
+> - **Config API sensitive categories** (`llm-keys`) do enforce the `config.secrets.read` scope via source gating
 >
 > Helper functions (`require_scope()`, `has_scope()`) exist in `srv/data` and `srv/search` but are not called by route handlers.
 
