@@ -23,7 +23,6 @@ Zero Trust mode - no client credentials. Token exchange uses subject_token
 import base64
 import os
 import uuid
-import asyncio
 
 import pytest
 import httpx
@@ -76,146 +75,28 @@ async def _exchange_token(subject_token: str, audience: str) -> dict:
         return data
 
 
+
 @pytest.fixture
-async def pvt_db_conn():
-    """Open a direct DB connection for test bootstrap helpers."""
-    host = require_env("POSTGRES_HOST", POSTGRES_HOST)
-    password = require_env("POSTGRES_PASSWORD", POSTGRES_PASSWORD)
-    user = require_env("POSTGRES_USER", POSTGRES_USER)
-    conn = await asyncpg.connect(
-        host=host,
-        port=int(POSTGRES_PORT),
-        database=POSTGRES_DB,
-        user=user,
-        password=password,
-        timeout=10.0,
-    )
-    try:
-        yield conn
-    finally:
-        await conn.close()
+def pvt_session_jwt(auth_client):
+    """
+    Return a valid session JWT for the well-known test user.
+
+    Delegates to the shared AuthTestClient (session-scoped, from conftest) which:
+    - Logs in via magic link (token returned in the test-mode API response)
+    - Bootstraps Admin role in test_authz DB if needed
+    - Caches the session JWT for the lifetime of the test session
+    """
+    return auth_client._get_session_jwt()
 
 
 @pytest.fixture
-async def pvt_session_jwt(pvt_db_conn):
+def pvt_admin_token(auth_client):
     """
-    Mint a valid session JWT for the well-known test user.
+    Return an admin-scoped authz-api token for PVT admin operations.
 
-    Uses login initiation, then fetches the latest magic-link token from DB if
-    test-mode token echo is unavailable, then consumes the link.
-
-    Also ensures the test user has an admin role so that admin PVT tests work.
+    Uses the shared AuthTestClient which ensures the test user has Admin role.
     """
-    admin_role = await pvt_db_conn.fetchrow(
-        """
-        SELECT id
-        FROM authz_roles
-        WHERE name IN ('Admin', 'DockerTestAdmin')
-        ORDER BY CASE name WHEN 'Admin' THEN 0 ELSE 1 END
-        LIMIT 1
-        """
-    )
-
-    if not admin_role:
-        admin_scopes = [
-            "*", "authz.*", "data.*", "search.*", "agent.*",
-            "workflow.*", "web_search.*", "apps.*", "libraries.*", "admin.*",
-        ]
-        admin_role = await pvt_db_conn.fetchrow(
-            """
-            INSERT INTO authz_roles (name, description, scopes)
-            VALUES ('Admin', 'Full administrative access (PVT bootstrap)', $1::text[])
-            RETURNING id
-            """,
-            admin_scopes,
-        )
-
-    async with httpx.AsyncClient() as client:
-        candidate_emails = [TEST_USER_EMAIL.lower(), "test@test.example.com"]
-        seen = set()
-        candidate_emails = [e for e in candidate_emails if not (e in seen or seen.add(e))]
-        magic_link_token = None
-
-        for test_email in candidate_emails:
-            init_resp = None
-            for attempt in range(3):
-                try:
-                    init_resp = await client.post(
-                        f"{SERVICE_URL}/auth/login/initiate",
-                        json={"email": test_email},
-                        headers=TEST_MODE_HEADERS,
-                        timeout=30.0,
-                    )
-                    break
-                except httpx.ReadTimeout:
-                    if attempt == 2:
-                        raise
-                    await asyncio.sleep(1.0)
-            assert init_resp.status_code == 200, f"Login initiation failed: {init_resp.text}"
-            init_data = init_resp.json()
-
-            magic_link_token = init_data.get("magic_link_token")
-            if magic_link_token:
-                break
-
-            row = await pvt_db_conn.fetchrow(
-                """
-                SELECT token
-                FROM authz_magic_links
-                WHERE email = $1
-                  AND used_at IS NULL
-                  AND expires_at > now()
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                test_email,
-            )
-            if row:
-                magic_link_token = row["token"]
-                break
-
-        assert magic_link_token is not None, "No fresh magic link token found for test user"
-
-        use_resp = await client.post(
-            f"{SERVICE_URL}/auth/magic-links/{magic_link_token}/use",
-            headers=TEST_MODE_HEADERS,
-            timeout=10.0,
-        )
-        assert use_resp.status_code == 200, f"Magic link use failed: {use_resp.text}"
-        use_data = use_resp.json()
-        session_jwt = use_data.get("session", {}).get("token")
-        assert session_jwt, "Missing session token after magic-link use"
-
-        assert admin_role, "Admin role must exist (bootstrapped or created by fixture)"
-        claims = jwt.decode(
-            session_jwt,
-            options={"verify_signature": False, "verify_aud": False},
-        )
-        user_id = claims.get("sub")
-        assert user_id, "Session JWT missing sub claim"
-        await pvt_db_conn.execute(
-            """
-            INSERT INTO authz_user_roles (user_id, role_id)
-            VALUES ($1::uuid, $2)
-            ON CONFLICT (user_id, role_id) DO NOTHING
-            """,
-            user_id,
-            admin_role["id"],
-        )
-
-        return session_jwt
-
-
-@pytest.fixture
-async def pvt_admin_token(pvt_session_jwt):
-    """
-    Return an admin token for admin-only PVT operations.
-
-    The pvt_session_jwt fixture already ensures the test user has an admin role,
-    so exchanging for authz-api audience produces a token with admin scopes.
-    """
-    token_data = await _exchange_token(pvt_session_jwt, "authz-api")
-    return token_data["access_token"]
+    return auth_client.get_token(audience="authz-api")
 
 
 @pytest.mark.pvt

@@ -556,9 +556,8 @@ class IngestWorker(PipelineMixin, TriggerMixin):
                     "Using custom processing configuration",
                     file_id=file_id,
                     llm_cleanup=processing_config.get("llm_cleanup_enabled"),
-                    multi_flow=processing_config.get("multi_flow_enabled"),
                     marker=processing_config.get("marker_enabled"),
-                    colpali=processing_config.get("colpali_enabled"),
+                    entity_extraction=processing_config.get("entity_extraction_enabled"),
                 )
             except json.JSONDecodeError as e:
                 logger.warning(
@@ -1206,11 +1205,11 @@ class IngestWorker(PipelineMixin, TriggerMixin):
             chunk_dicts = [c.to_dict() for c in chunks]
             self.postgres_service.insert_chunks(file_id, chunk_dicts)
             
-            # Stage 4.55: Entity Extraction for Knowledge Graph (LEGACY - DISABLED)
-            # Entity extraction is now schema-driven and runs on-demand via
-            # the /extract API after document processing completes.
-            # The config flag is ignored; this block is kept for reference only.
-            entity_extraction_enabled = False
+            # Stage 4.55: Entity Extraction for Knowledge Graph
+            # Runs automatically when entity_extraction_enabled is set in
+            # processing_config. When disabled, extraction is triggered manually
+            # via the Extract button or post-processing hooks.
+            entity_extraction_enabled = processing_config.get("entity_extraction_enabled", False)
             if entity_extraction_enabled:
                 try:
                     from processors.entity_extractor import EntityExtractor

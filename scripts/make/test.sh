@@ -98,9 +98,62 @@ get_container_ip() {
 # Extract test credentials from vault using Python YAML parsing
 # Usage: eval "$(extract_vault_credentials)"
 extract_vault_credentials() {
+    # Fast-path: if credentials were pre-injected by the TUI (which decrypts the
+    # vault locally on the admin workstation and passes them over SSH), output
+    # them directly without touching ansible-vault on this host.
+    if [[ -n "${POSTGRES_PASSWORD:-}" && -n "${JWT_SECRET:-}" ]]; then
+        echo "POSTGRES_PASSWORD='${POSTGRES_PASSWORD}'"
+        echo "TEST_DB_PASSWORD='${POSTGRES_PASSWORD}'"
+        echo "AUTHZ_MASTER_KEY='${AUTHZ_MASTER_KEY:-}'"
+        echo "MINIO_ACCESS_KEY='${MINIO_ACCESS_KEY:-}'"
+        echo "MINIO_SECRET_KEY='${MINIO_SECRET_KEY:-}'"
+        echo "TEST_USER_ID='${TEST_USER_ID:-}'"
+        echo "JWT_SECRET='${JWT_SECRET}'"
+        return 0
+    fi
+
     local vault_flags
     vault_flags="$(get_vault_flags)"
-    local vault_file="${ANSIBLE_DIR}/roles/secrets/vars/vault.yml"
+
+    # Resolve vault file:
+    # 1. VAULT_PREFIX env var (set by TUI / make variable)
+    # 2. Active profile's vault prefix (via profiles.sh)
+    # 3. Any vault file that decrypts successfully (last resort probe)
+    local vault_file=""
+    local secrets_vars_dir="${ANSIBLE_DIR}/roles/secrets/vars"
+
+    if [[ -n "${VAULT_PREFIX:-}" ]]; then
+        vault_file="${secrets_vars_dir}/vault.${VAULT_PREFIX}.yml"
+    fi
+
+    if [[ -z "$vault_file" || ! -f "$vault_file" ]]; then
+        # Try to source profiles.sh and get the active profile's vault prefix
+        local profiles_sh="${REPO_ROOT}/scripts/lib/profiles.sh"
+        if [[ -f "$profiles_sh" ]]; then
+            # shellcheck source=/dev/null
+            source "$profiles_sh" 2>/dev/null || true
+            if type profile_get_vault_prefix &>/dev/null; then
+                local vp
+                vp=$(profile_get_vault_prefix 2>/dev/null)
+                [[ -n "$vp" && "$vp" != "dev" ]] && vault_file="${secrets_vars_dir}/vault.${vp}.yml"
+            fi
+        fi
+    fi
+
+    if [[ -z "$vault_file" || ! -f "$vault_file" ]]; then
+        # Last resort: probe all vault files and use the first one that decrypts
+        while IFS= read -r -d '' candidate; do
+            if ansible-vault view "$candidate" $vault_flags > /dev/null 2>&1; then
+                vault_file="$candidate"
+                break
+            fi
+        done < <(find "${secrets_vars_dir}" -maxdepth 1 -name "vault.*.yml" ! -name "vault.example.yml" -print0 2>/dev/null)
+    fi
+
+    if [[ -z "$vault_file" || ! -f "$vault_file" ]]; then
+        echo "# No vault file found in ${secrets_vars_dir}" >&2
+        return 1
+    fi
     
     # Create temp file for decrypted vault
     local temp_vault
@@ -131,8 +184,6 @@ try:
     
     # Authz
     authz = secrets.get('authz', {})
-    
-    # Master key for envelope encryption
     master_key = authz.get('master_key', '')
     print(f"AUTHZ_MASTER_KEY='{master_key}'")
     
@@ -142,6 +193,7 @@ try:
     print(f"MINIO_SECRET_KEY='{minio.get('minio_secret_key', '') or minio.get('secret_key', '')}'")
     
     # Test credentials
+    test_creds = secrets.get('test_credentials', {})
     print(f"TEST_USER_ID='{test_creds.get('test_user_id', '')}'")
     
     # JWT secret (used as bootstrap client secret)
@@ -1177,6 +1229,51 @@ main_menu() {
     done
 }
 
+# Ensure the authz service on the given IP has AUTHZ_TEST_MODE_ENABLED=true.
+# If the flag is missing or false, it is added/updated and the service is
+# restarted.  This must run before any test suite that calls AuthTestClient so
+# X-Test-Mode: true headers actually route to the test DB.
+ensure_authz_test_mode() {
+    local authz_ip="$1"
+    info "Checking authz test mode on ${authz_ip}..."
+
+    # Read current value from the deployed .env
+    local current
+    current=$(ssh "root@${authz_ip}" "grep -E '^AUTHZ_TEST_MODE_ENABLED=' /srv/authz/.env 2>/dev/null || true")
+
+    if [[ "$current" == "AUTHZ_TEST_MODE_ENABLED=true" ]]; then
+        info "authz test mode already enabled — no restart needed"
+        return 0
+    fi
+
+    warn "Enabling AUTHZ_TEST_MODE_ENABLED=true on authz service (restart required)..."
+
+    # Add or update the flag then restart
+    ssh "root@${authz_ip}" "
+        if grep -qE '^AUTHZ_TEST_MODE_ENABLED=' /srv/authz/.env 2>/dev/null; then
+            sed -i 's|^AUTHZ_TEST_MODE_ENABLED=.*|AUTHZ_TEST_MODE_ENABLED=true|' /srv/authz/.env
+        else
+            echo 'AUTHZ_TEST_MODE_ENABLED=true' >> /srv/authz/.env
+        fi
+        systemctl restart authz-api
+        # Wait up to 30 s for the service to come back
+        for i in \$(seq 1 30); do
+            if curl -sf http://localhost:8010/health/live > /dev/null 2>&1; then
+                echo '[authz] service healthy after restart'
+                exit 0
+            fi
+            sleep 1
+        done
+        echo '[authz] WARNING: service not healthy after 30 s' >&2
+        exit 1
+    " || {
+        error "Failed to enable AUTHZ_TEST_MODE_ENABLED on authz service at ${authz_ip}"
+        exit 1
+    }
+
+    success "authz test mode enabled and service restarted"
+}
+
 # Run tests on container (non-interactive)
 run_container_tests() {
     local service="$1"
@@ -1204,6 +1301,11 @@ run_container_tests() {
     bridge_ip=$(get_container_ip bridge "$env")
     minio_ip=$(get_container_ip minio "$env")
     milvus_ip=$(get_container_ip milvus "$env")
+
+    # ALWAYS ensure authz is running in test mode before running any test suite.
+    # Without this, X-Test-Mode: true headers are silently ignored and tests hit
+    # the production database.
+    ensure_authz_test_mode "${authz_ip}"
     
     # Database configuration for pytest
     # NOTE: Pytest tests run against isolated test databases owned by busibox_test_user:
@@ -1216,7 +1318,31 @@ run_container_tests() {
     local db_user db_password
     db_user="busibox_test_user"
     db_password="${PYTEST_DB_PASSWORD:-testpassword}"
+
+    # Well-known bootstrap test user (created automatically by authz on startup
+    # when test mode is enabled).  AuthTestClient uses this ID by default.
+    # Tests that need a real user use auth_client.get_token() which bootstraps
+    # the user via magic link -- no external bootstrap script required.
+    local test_user_id="${TEST_USER_ID:-00000000-0000-0000-0000-000000000001}"
     
+    # Resolve pytest test path and extra flags from PYTEST_ARGS.
+    # When PYTEST_ARGS starts with "tests/", treat it as the test path (replacing
+    # the default "tests/" so we don't run the full suite alongside the subset).
+    # Otherwise treat it as extra pytest flags appended after "tests/".
+    local _pytest_path _pytest_extra
+    if [[ "${PYTEST_ARGS:-}" == tests/* ]]; then
+        _pytest_path="${PYTEST_ARGS}"
+        _pytest_extra=""
+    else
+        _pytest_path="tests/"
+        _pytest_extra="${PYTEST_ARGS:-}"
+    fi
+
+    # Default pytest flags: stop at first failure (-x) and show full tracebacks
+    # so the output is immediately actionable.  PYTEST_ARGS can override these
+    # by including its own --tb or -x/-v flags.
+    local _pytest_base_flags="-x -v --tb=long"
+
     case "$service" in
         authz)
             header "Authz Service Tests" 70
@@ -1235,9 +1361,11 @@ run_container_tests() {
             test_env="${test_env} AUTHZ_MASTER_KEY=${AUTHZ_MASTER_KEY}"
             test_env="${test_env} AUTHZ_SERVICE_URL=http://${authz_ip}:8010"
             test_env="${test_env} TEST_AUTHZ_URL=http://${authz_ip}:8010"
+            test_env="${test_env} AUTHZ_TEST_MODE_ENABLED=true"
+            test_env="${test_env} TEST_USER_ID=${test_user_id}"
             
             # Run tests via SSH
-            if ssh "root@${authz_ip}" "cd /srv/authz/app && source ../venv/bin/activate && export PYTHONPATH=/srv/authz/app/src && source /srv/authz/.env && export ${test_env} && python -m pytest tests/ -v --tb=short"; then
+            if ssh "root@${authz_ip}" "cd /srv/authz/app && source ../venv/bin/activate && export PYTHONPATH=/srv/authz/app/src && source /srv/authz/.env && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
                 success "Authz tests passed!"
                 save_test_result "authz" "passed"
             else
@@ -1254,27 +1382,8 @@ run_container_tests() {
             header "Data Service Tests" 70
             info "Running data tests on ${data_ip}..."
             
-            # Validate required credentials
-            if [[ -z "${TEST_USER_ID:-}" ]]; then
-                warn "TEST_USER_ID not found in vault. Running bootstrap to create test user..."
-                # Bootstrap test credentials if missing and capture TEST_USER_ID
-                local bootstrap_output
-                bootstrap_output=$(bash "${REPO_ROOT}/scripts/test/bootstrap-test-credentials.sh" "$env" 2>&1) || {
-                    error "Failed to bootstrap test credentials"
-                    echo "$bootstrap_output"
-                    exit 1
-                }
-                # Extract TEST_USER_ID from bootstrap output
-                TEST_USER_ID=$(echo "$bootstrap_output" | grep "^TEST_USER_ID=" | cut -d'=' -f2)
-                if [[ -z "${TEST_USER_ID:-}" ]]; then
-                    error "Could not extract TEST_USER_ID from bootstrap output"
-                    echo "$bootstrap_output"
-                    exit 1
-                fi
-                info "Created test user: ${TEST_USER_ID}"
-            fi
-            
             # Pytest uses test_files database (owned by busibox_test_user)
+            # AuthTestClient bootstraps the test user automatically via magic link.
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
@@ -1284,13 +1393,10 @@ run_container_tests() {
             test_env="${test_env} MINIO_SECRET_KEY=${MINIO_SECRET_KEY}"
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
-            test_env="${test_env} TEST_USER_ID=${TEST_USER_ID}"
+            test_env="${test_env} AUTHZ_TEST_MODE_ENABLED=true"
+            test_env="${test_env} TEST_USER_ID=${test_user_id}"
             
-            # Parse additional pytest args
-            local pytest_args="${PYTEST_ARGS:-}"
-            
-            # Run tests with wrapper that captures failures
-            if ssh "root@${data_ip}" "cd /srv/data && source venv/bin/activate && export PYTHONPATH=/srv/data/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}"; then
+            if ssh "root@${data_ip}" "cd /srv/data && source venv/bin/activate && export PYTHONPATH=/srv/data/src && source .env && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
                 success "Data tests passed!"
                 save_test_result "data" "passed"
             else
@@ -1307,22 +1413,8 @@ run_container_tests() {
             header "Search Service Tests" 70
             info "Running search tests on ${search_ip}..."
             
-            # Validate required credentials (use same TEST_USER_ID as data)
-            if [[ -z "${TEST_USER_ID:-}" ]]; then
-                warn "TEST_USER_ID not found. Running bootstrap to create test user..."
-                local bootstrap_output
-                bootstrap_output=$(bash "${REPO_ROOT}/scripts/test/bootstrap-test-credentials.sh" "$env" 2>&1) || {
-                    error "Failed to bootstrap test credentials"
-                    exit 1
-                }
-                TEST_USER_ID=$(echo "$bootstrap_output" | grep "^TEST_USER_ID=" | cut -d'=' -f2)
-                if [[ -z "${TEST_USER_ID:-}" ]]; then
-                    error "Could not extract TEST_USER_ID from bootstrap output"
-                    exit 1
-                fi
-            fi
-            
             # Pytest uses test_files database (owned by busibox_test_user)
+            # AuthTestClient bootstraps the test user automatically via magic link.
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
@@ -1330,13 +1422,11 @@ run_container_tests() {
             test_env="${test_env} MILVUS_HOST=${milvus_ip}"
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
-            test_env="${test_env} TEST_USER_ID=${TEST_USER_ID}"
-            
-            # Parse additional pytest args
-            local pytest_args="${PYTEST_ARGS:-}"
+            test_env="${test_env} AUTHZ_TEST_MODE_ENABLED=true"
+            test_env="${test_env} TEST_USER_ID=${test_user_id}"
             
             # Search service is deployed to /opt/search on milvus container
-            if ssh "root@${search_ip}" "cd /opt/search && source venv/bin/activate && export PYTHONPATH=/opt/search/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}"; then
+            if ssh "root@${search_ip}" "cd /opt/search && source venv/bin/activate && export PYTHONPATH=/opt/search/src && source .env && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
                 success "Search tests passed!"
                 save_test_result "search" "passed"
             else
@@ -1353,23 +1443,9 @@ run_container_tests() {
             header "Agent Service Tests" 70
             info "Running agent tests on ${agent_ip}..."
             
-            # Validate required credentials
-            if [[ -z "${TEST_USER_ID:-}" ]]; then
-                warn "TEST_USER_ID not found. Running bootstrap to create test user..."
-                local bootstrap_output
-                bootstrap_output=$(bash "${REPO_ROOT}/scripts/test/bootstrap-test-credentials.sh" "$env" 2>&1) || {
-                    error "Failed to bootstrap test credentials"
-                    exit 1
-                }
-                TEST_USER_ID=$(echo "$bootstrap_output" | grep "^TEST_USER_ID=" | cut -d'=' -f2)
-                if [[ -z "${TEST_USER_ID:-}" ]]; then
-                    error "Could not extract TEST_USER_ID from bootstrap output"
-                    exit 1
-                fi
-            fi
-            
             # Pytest uses test_agent database (not the production agent database)
             # Also set TEST_DATABASE_URL which the agent conftest.py checks first
+            # AuthTestClient bootstraps the test user automatically via magic link.
             local agent_test_db_url="postgresql+asyncpg://${db_user}:${db_password}@${postgres_ip}:5432/test_agent"
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
@@ -1378,15 +1454,13 @@ run_container_tests() {
             test_env="${test_env} TEST_DATABASE_URL=${agent_test_db_url}"
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
-            test_env="${test_env} TEST_USER_ID=${TEST_USER_ID}"
+            test_env="${test_env} AUTHZ_TEST_MODE_ENABLED=true"
+            test_env="${test_env} TEST_USER_ID=${test_user_id}"
             test_env="${test_env} DATA_URL=http://${data_ip}:8000"
             test_env="${test_env} SEARCH_URL=http://${search_ip}:8003"  # Search is on port 8003
             
-            # Parse additional pytest args
-            local pytest_args="${PYTEST_ARGS:-}"
-            
             # Agent uses .venv not venv
-            if ssh "root@${agent_ip}" "cd /srv/agent && source .venv/bin/activate && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}"; then
+            if ssh "root@${agent_ip}" "cd /srv/agent && source .venv/bin/activate && source .env && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
                 success "Agent tests passed!"
                 save_test_result "agent" "passed"
             else
@@ -1405,11 +1479,11 @@ run_container_tests() {
 
             local test_env="BRIDGE_API_URL=http://${bridge_ip}:8081"
             test_env="${test_env} BRIDGE_API_PORT=8081"
+            test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
+            test_env="${test_env} AUTHZ_TEST_MODE_ENABLED=true"
+            test_env="${test_env} TEST_USER_ID=${test_user_id}"
 
-            # Parse additional pytest args
-            local pytest_args="${PYTEST_ARGS:-}"
-
-            if ssh "root@${bridge_ip}" "cd /srv/bridge && source venv/bin/activate && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}"; then
+            if ssh "root@${bridge_ip}" "cd /srv/bridge && source venv/bin/activate && source .env && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
                 success "Bridge tests passed!"
                 save_test_result "bridge" "passed"
             else

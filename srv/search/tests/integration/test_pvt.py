@@ -54,18 +54,6 @@ def get_authz_base_url() -> str:
 
 
 @pytest.fixture(scope="module")
-def auth_client():
-    """Get an AuthTestClient for user-scoped token exchange (Zero Trust)."""
-    from testing import AuthTestClient
-    
-    client = AuthTestClient()
-    # Note: In Zero Trust, test user must already exist (created by bootstrap-test-credentials)
-    # We don't call ensure_test_user_exists() because that requires admin token
-    yield client
-    client.cleanup()
-
-
-@pytest.fixture(scope="module")
 def access_token(auth_client):
     """Get an access token for the search API using user-scoped token exchange."""
     return auth_client.get_token(audience="search-api")

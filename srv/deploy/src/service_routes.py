@@ -59,6 +59,9 @@ from .model_manager import (
     remote_download_model,
     restart_vllm_service,
     vllm_host,
+    model_registry_path,
+    model_overrides_path,
+    ssh_exec_raw,
 )
 
 # Import token exchange for agent-api calls
@@ -3921,9 +3924,71 @@ class ModelLoadRequest(BaseModel):
     port: int
 
 
+async def _get_registry() -> dict:
+    """Get model registry, falling back to SSH from Proxmox host if needed.
+
+    Use this in all async endpoints instead of calling load_registry_with_overrides()
+    directly, so that Proxmox deployments (where BUSIBOX_HOST_PATH refers to a
+    path on the host, not inside the LXC) can still access the registry.
+    """
+    registry = load_registry_with_overrides()
+    if not registry.get("available_models"):
+        registry = await _load_registry_via_proxmox_ssh()
+    return registry
+
+
+async def _load_registry_via_proxmox_ssh() -> dict:
+    """Read model_registry.yml (and overrides) from the Proxmox host via SSH.
+
+    On Proxmox deployments, deploy-api runs inside an LXC container, so
+    BUSIBOX_HOST_PATH points to a path that exists on the Proxmox *host* —
+    not inside the LXC filesystem. This helper fetches the files remotely
+    using the same SSH key that deploy-api uses for make-install commands.
+    """
+    proxmox_host = os.getenv("PROXMOX_HOST", "").strip()
+    if not proxmox_host:
+        return {}
+
+    async def _cat_remote(remote_path: str) -> dict:
+        code, out, _err = await ssh_exec_raw(proxmox_host, f"cat {remote_path}", timeout=10)
+        if code != 0 or not out.strip():
+            return {}
+        try:
+            data = yaml.safe_load(out) or {}
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    registry_path = str(model_registry_path())
+    overrides_path = str(model_overrides_path())
+
+    base, overrides = await asyncio.gather(
+        _cat_remote(registry_path),
+        _cat_remote(overrides_path),
+    )
+
+    if not base:
+        return {}
+    if not overrides:
+        return base
+
+    merged = dict(base)
+    base_models = dict(base.get("available_models", {}) or {})
+    override_models = dict(overrides.get("available_models", {}) or {})
+    base_models.update(override_models)
+    merged["available_models"] = base_models
+
+    base_purposes = dict(base.get("model_purposes", {}) or {})
+    override_purposes = dict(overrides.get("model_purposes", {}) or {})
+    base_purposes.update(override_purposes)
+    merged["model_purposes"] = base_purposes
+    return merged
+
+
 @router.get("/models/browse")
 async def models_browse(_: dict = Depends(verify_admin_token)):
-    registry = load_registry_with_overrides()
+    registry = await _get_registry()
+
     available = registry.get("available_models", {}) or {}
     cached = set(await list_cached_models())
     rows = []
@@ -3940,6 +4005,30 @@ async def models_browse(_: dict = Depends(verify_admin_token)):
             }
         )
     rows.sort(key=lambda x: (0 if x["cached"] else 1, x["model_key"]))
+
+    # Last-resort fallback: synthesise entries from currently-running vLLM
+    # processes so the Model Library is never completely blank.
+    if not rows and vllm_host():
+        active = await list_active_models(vllm_host())
+        seen: set = set()
+        for m in active:
+            model_name = m.get("model") or ""
+            if not (m.get("running") and model_name):
+                continue
+            if model_name in seen:
+                continue
+            seen.add(model_name)
+            slug = model_name.split("/")[-1].lower()
+            rows.append(
+                {
+                    "model_key": slug,
+                    "model_name": model_name,
+                    "provider": "vllm",
+                    "description": f"Detected running on port {m.get('port')} (not in registry)",
+                    "cached": True,
+                }
+            )
+
     return {"models": rows}
 
 
@@ -3950,7 +4039,7 @@ async def models_active(_: dict = Depends(verify_admin_token)):
 
 @router.post("/models/analyze")
 async def models_analyze(_: dict = Depends(verify_admin_token)):
-    registry = load_registry_with_overrides()
+    registry = await _get_registry()
     gpus = await detect_vllm_gpus()
     cached = await list_cached_models()
     current = load_model_config()
@@ -3978,7 +4067,7 @@ async def vllm_assignments(_: dict = Depends(verify_admin_token)):
 @router.post("/vllm/assignments")
 async def vllm_assign_model(req: VllmAssignmentRequest, _: dict = Depends(verify_admin_token)):
     try:
-        registry = load_registry_with_overrides()
+        registry = await _get_registry()
         config_data = load_model_config()
         updated = update_assignment(
             config_data,
@@ -3997,7 +4086,7 @@ async def vllm_assign_model(req: VllmAssignmentRequest, _: dict = Depends(verify
 @router.delete("/vllm/assignments/{model_key}")
 async def vllm_unassign_model(model_key: str, _: dict = Depends(verify_admin_token)):
     try:
-        registry = load_registry_with_overrides()
+        registry = await _get_registry()
         config_data = load_model_config()
         updated = unassign_model(config_data, registry, model_key)
         save_model_config(updated)
@@ -4008,7 +4097,7 @@ async def vllm_unassign_model(model_key: str, _: dict = Depends(verify_admin_tok
 
 @router.post("/vllm/assignments/auto")
 async def vllm_auto_assign(_: dict = Depends(verify_admin_token)):
-    registry = load_registry_with_overrides()
+    registry = await _get_registry()
     gpus = await detect_vllm_gpus()
     config_data = load_model_config()
     updated = auto_assign_models(registry, len(gpus), existing=config_data)
