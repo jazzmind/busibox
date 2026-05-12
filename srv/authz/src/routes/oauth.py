@@ -51,14 +51,21 @@ def _invalidate_key_object_cache() -> None:
     _key_object_cache.clear()
 
 
-async def _get_signing_key_objects(db) -> Tuple[str, str, object, object]:
-    """Get active signing key metadata and crypto objects with TTL caching."""
+async def _get_signing_key_objects(db=None) -> Tuple[str, str, object, object]:
+    """Get active signing key metadata and crypto objects with TTL caching.
+
+    All tokens (access, session, delegation) are always signed with the production
+    DB key (_pg), regardless of test mode. This function therefore always reads from
+    _pg so that the shared cache cannot be poisoned by test-mode callers that pass
+    the test DB.  The ``db`` parameter is retained for call-site compatibility but
+    is intentionally ignored.
+    """
     cache_key = "active_signing_key_objects"
     cached = _key_object_cache.get(cache_key)
     if cached is not None:
         return cached
 
-    row = await db.get_active_signing_key()
+    row = await _pg.get_active_signing_key()
     if not row:
         raise RuntimeError("no active signing key configured")
 
@@ -464,16 +471,13 @@ async def _ensure_bootstrap(force: bool = False) -> None:
     # 4) bootstrap essential roles
     await _ensure_bootstrap_roles()
     
-    # 5) bootstrap test user (for PVT tests in Zero Trust architecture)
-    await _ensure_bootstrap_test_user()
-    
-    # 6) bootstrap admin users from ADMIN_EMAILS config
+    # 5) bootstrap admin users from ADMIN_EMAILS config
     await _ensure_bootstrap_admin_users()
 
-    # 7) ensure Admin and User roles have bindings to core built-in apps
+    # 6) ensure Admin and User roles have bindings to core built-in apps
     await _ensure_bootstrap_core_app_bindings()
 
-    # 8) ensure test database has a signing key in test mode
+    # 7) ensure test database has a signing key in test mode
     if _pg_test:
         test_active_key = await _pg_test.get_active_signing_key()
         if not test_active_key:

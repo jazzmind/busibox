@@ -90,50 +90,17 @@ def pvt_session_jwt(auth_client):
 
 
 @pytest.fixture
-def pvt_admin_token():
+def pvt_admin_token(auth_client):
     """
     Return an admin-scoped authz-api token for PVT admin operations.
 
-    Creates its own disposable production session via magic link login and
-    exchanges it without X-Test-Mode so that role lookups hit the production
-    database where the bootstrap guarantees the test user has Admin scopes.
-    Using a separate session (not auth_client's cached one) means this fixture
-    does not interfere with other test fixtures.
+    Uses the shared AuthTestClient which bootstraps the test user with Admin
+    role in the test_authz DB and exchanges the session JWT for an authz-api
+    access token.  The token is signed with the production signing key (all
+    tokens always are), so it verifies correctly on production-DB admin routes
+    even though the session and role lookups used the test database.
     """
-    with httpx.Client() as client:
-        init_resp = client.post(
-            f"{SERVICE_URL}/auth/login/initiate",
-            json={"email": TEST_USER_EMAIL},
-            timeout=10.0,
-        )
-        assert init_resp.status_code == 200, f"Login initiate failed: {init_resp.text}"
-        magic_token = init_resp.json().get("magic_link_token")
-        assert magic_token, (
-            "No magic_link_token in response — AUTHZ_TEST_MODE_ENABLED must be true"
-        )
-
-        use_resp = client.post(
-            f"{SERVICE_URL}/auth/magic-links/{magic_token}/use",
-            timeout=10.0,
-        )
-        assert use_resp.status_code == 200, f"Magic link use failed: {use_resp.text}"
-        session_jwt = use_resp.json().get("session", {}).get("token")
-        assert session_jwt, "No session token in magic link response"
-
-        exchange_resp = client.post(
-            f"{SERVICE_URL}/oauth/token",
-            data={
-                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                "subject_token": session_jwt,
-                "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-                "audience": "authz-api",
-            },
-            timeout=10.0,
-        )
-        assert exchange_resp.status_code == 200, (
-            f"Token exchange failed: {exchange_resp.status_code} {exchange_resp.text}"
-        )
-        return exchange_resp.json()["access_token"]
+    return auth_client.get_token(audience="authz-api")
 
 
 @pytest.mark.pvt
@@ -410,10 +377,12 @@ class TestPVTSessionLifecycle:
         other fixtures (especially auth_client's cached session JWT).
         """
         async with httpx.AsyncClient() as client:
-            # Create a disposable session (no X-Test-Mode — production DB)
+            # Create a disposable session in the test DB so magic_link_token is
+            # returned in the response and operations stay within the test DB.
             init_resp = await client.post(
                 f"{SERVICE_URL}/auth/login/initiate",
                 json={"email": TEST_USER_EMAIL},
+                headers=TEST_MODE_HEADERS,
                 timeout=10.0,
             )
             assert init_resp.status_code == 200, f"Login initiate failed: {init_resp.text}"
@@ -422,16 +391,17 @@ class TestPVTSessionLifecycle:
 
             use_resp = await client.post(
                 f"{SERVICE_URL}/auth/magic-links/{magic_token}/use",
+                headers=TEST_MODE_HEADERS,
                 timeout=10.0,
             )
             assert use_resp.status_code == 200, f"Magic link use failed: {use_resp.text}"
             disposable_session = use_resp.json().get("session", {}).get("token")
             assert disposable_session, "No session token in magic link response"
 
-            # Validate the disposable session
+            # Validate the disposable session (test DB)
             validate_resp = await client.get(
                 f"{SERVICE_URL}/auth/sessions/{disposable_session}",
-                headers={"Authorization": f"Bearer {pvt_admin_token}"},
+                headers={"Authorization": f"Bearer {pvt_admin_token}", **TEST_MODE_HEADERS},
                 timeout=10.0,
             )
             assert validate_resp.status_code == 200, f"Session validate failed: {validate_resp.text}"
@@ -439,15 +409,15 @@ class TestPVTSessionLifecycle:
             # Delete the session (self-service — session JWT authorises its own deletion)
             delete_resp = await client.delete(
                 f"{SERVICE_URL}/auth/sessions/{disposable_session}",
-                headers={"Authorization": f"Bearer {disposable_session}"},
+                headers={"Authorization": f"Bearer {disposable_session}", **TEST_MODE_HEADERS},
                 timeout=10.0,
             )
             assert delete_resp.status_code in [200, 204], f"Session delete failed: {delete_resp.text}"
 
-            # Confirm the session is gone
+            # Confirm the session is gone (test DB)
             validate_again_resp = await client.get(
                 f"{SERVICE_URL}/auth/sessions/{disposable_session}",
-                headers={"Authorization": f"Bearer {pvt_admin_token}"},
+                headers={"Authorization": f"Bearer {pvt_admin_token}", **TEST_MODE_HEADERS},
                 timeout=10.0,
             )
             assert validate_again_resp.status_code in [401, 404], (
@@ -494,6 +464,110 @@ class TestPVTDelegationTokens:
                 timeout=10.0,
             )
             assert revoke_resp.status_code in [200, 204], f"Delegation revoke failed: {revoke_resp.text}"
+
+
+@pytest.mark.pvt
+class TestPVTAdminTokenDiagnostics:
+    """Diagnostic tests to understand why admin token scopes may be empty."""
+
+    @pytest.mark.asyncio
+    async def test_admin_token_has_scopes(self, pvt_admin_token):
+        """Decode the admin token and verify it contains expected scopes."""
+        claims = jwt.decode(pvt_admin_token, options={"verify_signature": False})
+        scope_str = claims.get("scope", "")
+        scopes = scope_str.split() if scope_str else []
+        assert scope_str, (
+            f"Admin token has EMPTY scope claim. Full claims: {claims}"
+        )
+        assert any(s == "authz.*" or s == "*" for s in scopes), (
+            f"Admin token missing authz.* or * scope. Got scopes: {scopes}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_admin_token_has_roles(self, pvt_admin_token):
+        """Verify the token includes role claims."""
+        claims = jwt.decode(pvt_admin_token, options={"verify_signature": False})
+        roles = claims.get("roles", [])
+        assert roles, f"Admin token has no roles. Full claims: {claims}"
+        role_names = [r.get("name") for r in roles]
+        assert "Admin" in role_names, (
+            f"Admin token missing Admin role. Got roles: {role_names}. Full claims: {claims}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_test_user_has_admin_role_in_test_db(self, pvt_session_jwt):
+        """Query the token exchange endpoint to check what roles/scopes the user gets."""
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{SERVICE_URL}/oauth/token",
+                headers=TEST_MODE_HEADERS,
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                    "subject_token": pvt_session_jwt,
+                    "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                    "audience": "authz-api",
+                },
+                timeout=10.0,
+            )
+            assert resp.status_code == 200, f"Exchange failed: {resp.text}"
+            access_token = resp.json()["access_token"]
+            claims = jwt.decode(access_token, options={"verify_signature": False})
+            scope_str = claims.get("scope", "")
+            roles = claims.get("roles", [])
+            assert scope_str, (
+                f"Freshly exchanged token has EMPTY scope. "
+                f"Roles in token: {roles}. "
+                f"Session sub: {jwt.decode(pvt_session_jwt, options={'verify_signature': False}).get('sub')}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_test_user_roles_via_admin_api(self, pvt_session_jwt):
+        """Use the admin API (with test mode) to list the test user's roles."""
+        # First get an authz-api token
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{SERVICE_URL}/oauth/token",
+                headers=TEST_MODE_HEADERS,
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                    "subject_token": pvt_session_jwt,
+                    "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                    "audience": "authz-api",
+                },
+                timeout=10.0,
+            )
+            assert resp.status_code == 200, f"Exchange failed: {resp.text}"
+            token = resp.json()["access_token"]
+
+            # Decode session to get user_id
+            session_claims = jwt.decode(pvt_session_jwt, options={"verify_signature": False})
+            user_id = session_claims["sub"]
+
+            # Try to list user roles via admin endpoint (with test mode)
+            roles_resp = await client.get(
+                f"{SERVICE_URL}/admin/users/{user_id}/roles",
+                headers={"Authorization": f"Bearer {token}", **TEST_MODE_HEADERS},
+                timeout=10.0,
+            )
+            # Report whatever we get — even failures are diagnostic
+            if roles_resp.status_code == 200:
+                user_roles = roles_resp.json()
+                role_names = [r.get("name") for r in user_roles]
+                scopes_per_role = {r.get("name"): r.get("scopes", []) for r in user_roles}
+                assert "Admin" in role_names, (
+                    f"Test user {user_id} does NOT have Admin role in test DB. "
+                    f"Has roles: {role_names}"
+                )
+                admin_scopes = scopes_per_role.get("Admin", [])
+                assert admin_scopes, (
+                    f"Admin role has EMPTY scopes in test DB. "
+                    f"All roles+scopes: {scopes_per_role}"
+                )
+            else:
+                pytest.fail(
+                    f"Cannot query user roles (status {roles_resp.status_code}): {roles_resp.text}. "
+                    f"Token claims: {jwt.decode(token, options={'verify_signature': False})}"
+                )
 
 
 @pytest.mark.pvt
