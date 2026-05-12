@@ -318,13 +318,12 @@ class AuthTestClient:
         # Get a session JWT for the test user
         session_jwt = self._get_session_jwt()
         
-        with httpx.Client() as client:
-            # Exchange session JWT for service-scoped access token
-            resp = client.post(
+        def _do_exchange(client: httpx.Client, jwt: str) -> httpx.Response:
+            return client.post(
                 f"{self.authz_url}/oauth/token",
                 data={
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                    "subject_token": session_jwt,
+                    "subject_token": jwt,
                     "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
                     "audience": audience,
                     "scope": scopes,
@@ -332,7 +331,18 @@ class AuthTestClient:
                 headers={TEST_MODE_HEADER: TEST_MODE_VALUE},
                 timeout=10.0,
             )
-            
+
+        with httpx.Client() as client:
+            # Exchange session JWT for service-scoped access token
+            resp = _do_exchange(client, session_jwt)
+
+            # If the session/user was cleaned up between calls (e.g. clean_test_data
+            # fixture ran), reset the cache and retry once with a fresh login.
+            if resp.status_code == 400 and "unknown_subject" in resp.text:
+                self._session_jwt = None
+                session_jwt = self._get_session_jwt()
+                resp = _do_exchange(client, session_jwt)
+
             if resp.status_code != 200:
                 pytest.fail(f"Failed to exchange token: {resp.status_code} - {resp.text}")
             

@@ -44,7 +44,7 @@ _TEST_MODE = os.getenv("AUTHZ_TEST_MODE_ENABLED", "false").lower() == "true"
 POSTGRES_DB = os.getenv("TEST_DB_NAME", "test_authz") if _TEST_MODE else os.getenv("POSTGRES_DB", "busibox")
 POSTGRES_USER = os.getenv("TEST_DB_USER", "busibox_test_user") if _TEST_MODE else os.getenv("POSTGRES_USER", "")
 POSTGRES_PASSWORD = os.getenv("TEST_DB_PASSWORD", "testpassword") if _TEST_MODE else os.getenv("POSTGRES_PASSWORD", "")
-TEST_USER_EMAIL = os.getenv("TEST_USER_EMAIL", "test@busibox.local")
+TEST_USER_EMAIL = os.getenv("TEST_USER_EMAIL", "test@test.example.com")
 TEST_USER_ID = os.getenv("TEST_USER_ID", "00000000-0000-0000-0000-000000000001")
 TEST_MODE_HEADERS = {"X-Test-Mode": "true"}
 
@@ -90,13 +90,50 @@ def pvt_session_jwt(auth_client):
 
 
 @pytest.fixture
-def pvt_admin_token(auth_client):
+def pvt_admin_token():
     """
     Return an admin-scoped authz-api token for PVT admin operations.
 
-    Uses the shared AuthTestClient which ensures the test user has Admin role.
+    Creates its own disposable production session via magic link login and
+    exchanges it without X-Test-Mode so that role lookups hit the production
+    database where the bootstrap guarantees the test user has Admin scopes.
+    Using a separate session (not auth_client's cached one) means this fixture
+    does not interfere with other test fixtures.
     """
-    return auth_client.get_token(audience="authz-api")
+    with httpx.Client() as client:
+        init_resp = client.post(
+            f"{SERVICE_URL}/auth/login/initiate",
+            json={"email": TEST_USER_EMAIL},
+            timeout=10.0,
+        )
+        assert init_resp.status_code == 200, f"Login initiate failed: {init_resp.text}"
+        magic_token = init_resp.json().get("magic_link_token")
+        assert magic_token, (
+            "No magic_link_token in response — AUTHZ_TEST_MODE_ENABLED must be true"
+        )
+
+        use_resp = client.post(
+            f"{SERVICE_URL}/auth/magic-links/{magic_token}/use",
+            timeout=10.0,
+        )
+        assert use_resp.status_code == 200, f"Magic link use failed: {use_resp.text}"
+        session_jwt = use_resp.json().get("session", {}).get("token")
+        assert session_jwt, "No session token in magic link response"
+
+        exchange_resp = client.post(
+            f"{SERVICE_URL}/oauth/token",
+            data={
+                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                "subject_token": session_jwt,
+                "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                "audience": "authz-api",
+            },
+            timeout=10.0,
+        )
+        assert exchange_resp.status_code == 200, (
+            f"Token exchange failed: {exchange_resp.status_code} {exchange_resp.text}"
+        )
+        return exchange_resp.json()["access_token"]
 
 
 @pytest.mark.pvt
@@ -365,25 +402,52 @@ class TestPVTSessionLifecycle:
     """Session lifecycle checks using real session JWTs."""
 
     @pytest.mark.asyncio
-    async def test_session_create_validate_delete(self, pvt_session_jwt, pvt_admin_token):
+    async def test_session_create_validate_delete(self, pvt_admin_token):
+        """
+        Verify session lifecycle using a disposable session.
+
+        Creates its own fresh session so that deleting it does not poison
+        other fixtures (especially auth_client's cached session JWT).
+        """
         async with httpx.AsyncClient() as client:
+            # Create a disposable session (no X-Test-Mode — production DB)
+            init_resp = await client.post(
+                f"{SERVICE_URL}/auth/login/initiate",
+                json={"email": TEST_USER_EMAIL},
+                timeout=10.0,
+            )
+            assert init_resp.status_code == 200, f"Login initiate failed: {init_resp.text}"
+            magic_token = init_resp.json().get("magic_link_token")
+            assert magic_token, "No magic_link_token — AUTHZ_TEST_MODE_ENABLED must be true"
+
+            use_resp = await client.post(
+                f"{SERVICE_URL}/auth/magic-links/{magic_token}/use",
+                timeout=10.0,
+            )
+            assert use_resp.status_code == 200, f"Magic link use failed: {use_resp.text}"
+            disposable_session = use_resp.json().get("session", {}).get("token")
+            assert disposable_session, "No session token in magic link response"
+
+            # Validate the disposable session
             validate_resp = await client.get(
-                f"{SERVICE_URL}/auth/sessions/{pvt_session_jwt}",
-                headers={"Authorization": f"Bearer {pvt_admin_token}", **TEST_MODE_HEADERS},
+                f"{SERVICE_URL}/auth/sessions/{disposable_session}",
+                headers={"Authorization": f"Bearer {pvt_admin_token}"},
                 timeout=10.0,
             )
             assert validate_resp.status_code == 200, f"Session validate failed: {validate_resp.text}"
 
+            # Delete the session (self-service — session JWT authorises its own deletion)
             delete_resp = await client.delete(
-                f"{SERVICE_URL}/auth/sessions/{pvt_session_jwt}",
-                headers={"Authorization": f"Bearer {pvt_session_jwt}", **TEST_MODE_HEADERS},
+                f"{SERVICE_URL}/auth/sessions/{disposable_session}",
+                headers={"Authorization": f"Bearer {disposable_session}"},
                 timeout=10.0,
             )
             assert delete_resp.status_code in [200, 204], f"Session delete failed: {delete_resp.text}"
 
+            # Confirm the session is gone
             validate_again_resp = await client.get(
-                f"{SERVICE_URL}/auth/sessions/{pvt_session_jwt}",
-                headers={"Authorization": f"Bearer {pvt_admin_token}", **TEST_MODE_HEADERS},
+                f"{SERVICE_URL}/auth/sessions/{disposable_session}",
+                headers={"Authorization": f"Bearer {pvt_admin_token}"},
                 timeout=10.0,
             )
             assert validate_again_resp.status_code in [401, 404], (
@@ -439,7 +503,7 @@ class TestPVTAdminOperations:
     @pytest.mark.asyncio
     async def test_role_crud(self, pvt_admin_token):
         role_name = f"pvt-role-{uuid.uuid4().hex[:8]}"
-        headers = {"Authorization": f"Bearer {pvt_admin_token}", **TEST_MODE_HEADERS}
+        headers = {"Authorization": f"Bearer {pvt_admin_token}"}
 
         async with httpx.AsyncClient() as client:
             create_resp = await client.post(
@@ -492,7 +556,7 @@ class TestPVTAdminOperations:
 
     @pytest.mark.asyncio
     async def test_user_list(self, pvt_admin_token):
-        headers = {"Authorization": f"Bearer {pvt_admin_token}", **TEST_MODE_HEADERS}
+        headers = {"Authorization": f"Bearer {pvt_admin_token}"}
 
         async with httpx.AsyncClient() as client:
             list_resp = await client.get(

@@ -346,9 +346,11 @@
 - name: Run PVT tests
   shell: |
     set -a
-    . {{ authz_base_dir }}/.env
+    . {{ authz_base_dir }}/.env 2>/dev/null || true
     set +a
     export PYTHONPATH={{ authz_app_dir }}/src
+    export AUTHZ_JWKS_URL="http://localhost:{{ authz_port | default(8010) }}/.well-known/jwks.json"
+    export TEST_AUTHZ_URL="http://localhost:{{ authz_port | default(8010) }}"
     cd {{ authz_app_dir }}
     {{ authz_venv_dir }}/bin/python -m pytest tests/integration/test_pvt.py -v --tb=short 2>&1
   args:

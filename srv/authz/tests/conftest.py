@@ -13,6 +13,19 @@ import importlib
 import pytest
 
 # ---------------------------------------------------------------------------
+# Derive AUTHZ_JWKS_URL when running PVT tests on the authz container itself.
+#
+# The authz service is the JWT issuer, so its own .env never sets
+# AUTHZ_JWKS_URL.  AuthTestClient needs this URL to talk to the service.
+# We derive it from TEST_AUTHZ_URL or SERVICE_PORT (both available during PVT).
+# This must happen before importing AuthTestClient so the fixture sees it.
+# ---------------------------------------------------------------------------
+if not os.getenv("AUTHZ_JWKS_URL") and not os.getenv("AUTH_JWKS_URL"):
+    _svc_port = os.getenv("SERVICE_PORT", "8010")
+    _svc_url = os.getenv("TEST_AUTHZ_URL", f"http://localhost:{_svc_port}")
+    os.environ["AUTHZ_JWKS_URL"] = f"{_svc_url}/.well-known/jwks.json"
+
+# ---------------------------------------------------------------------------
 # Shared testing library (available when busibox_common is on PYTHONPATH)
 # ---------------------------------------------------------------------------
 _has_shared_testing = False

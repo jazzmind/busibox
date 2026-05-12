@@ -1361,11 +1361,12 @@ run_container_tests() {
             test_env="${test_env} AUTHZ_MASTER_KEY=${AUTHZ_MASTER_KEY}"
             test_env="${test_env} AUTHZ_SERVICE_URL=http://${authz_ip}:8010"
             test_env="${test_env} TEST_AUTHZ_URL=http://${authz_ip}:8010"
+            test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
             test_env="${test_env} AUTHZ_TEST_MODE_ENABLED=true"
             test_env="${test_env} TEST_USER_ID=${test_user_id}"
             
             # Run tests via SSH
-            if ssh "root@${authz_ip}" "cd /srv/authz/app && source ../venv/bin/activate && export PYTHONPATH=/srv/authz/app/src && source /srv/authz/.env && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
+            if ssh "root@${authz_ip}" "cd /srv/authz/app && source ../venv/bin/activate && export PYTHONPATH=/srv/authz/app/src && source /srv/authz/.env 2>/dev/null || true && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
                 success "Authz tests passed!"
                 save_test_result "authz" "passed"
             else
@@ -1396,7 +1397,7 @@ run_container_tests() {
             test_env="${test_env} AUTHZ_TEST_MODE_ENABLED=true"
             test_env="${test_env} TEST_USER_ID=${test_user_id}"
             
-            if ssh "root@${data_ip}" "cd /srv/data && source venv/bin/activate && export PYTHONPATH=/srv/data/src && source .env && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
+            if ssh "root@${data_ip}" "cd /srv/data && source venv/bin/activate && export PYTHONPATH=/srv/data/src && source .env 2>/dev/null || true && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
                 success "Data tests passed!"
                 save_test_result "data" "passed"
             else
@@ -1426,7 +1427,7 @@ run_container_tests() {
             test_env="${test_env} TEST_USER_ID=${test_user_id}"
             
             # Search service is deployed to /opt/search on milvus container
-            if ssh "root@${search_ip}" "cd /opt/search && source venv/bin/activate && export PYTHONPATH=/opt/search/src && source .env && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
+            if ssh "root@${search_ip}" "cd /opt/search && source venv/bin/activate && export PYTHONPATH=/opt/search/src && source .env 2>/dev/null || true && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
                 success "Search tests passed!"
                 save_test_result "search" "passed"
             else
@@ -1460,7 +1461,7 @@ run_container_tests() {
             test_env="${test_env} SEARCH_URL=http://${search_ip}:8003"  # Search is on port 8003
             
             # Agent uses .venv not venv
-            if ssh "root@${agent_ip}" "cd /srv/agent && source .venv/bin/activate && source .env && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
+            if ssh "root@${agent_ip}" "cd /srv/agent && source .venv/bin/activate && source .env 2>/dev/null || true && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
                 success "Agent tests passed!"
                 save_test_result "agent" "passed"
             else
@@ -1483,7 +1484,7 @@ run_container_tests() {
             test_env="${test_env} AUTHZ_TEST_MODE_ENABLED=true"
             test_env="${test_env} TEST_USER_ID=${test_user_id}"
 
-            if ssh "root@${bridge_ip}" "cd /srv/bridge && source venv/bin/activate && source .env && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
+            if ssh "root@${bridge_ip}" "cd /srv/bridge && source venv/bin/activate && source .env 2>/dev/null || true && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
                 success "Bridge tests passed!"
                 save_test_result "bridge" "passed"
             else

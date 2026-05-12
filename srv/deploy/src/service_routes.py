@@ -61,6 +61,7 @@ from .model_manager import (
     vllm_host,
     model_registry_path,
     model_overrides_path,
+    model_config_path,
     ssh_exec_raw,
 )
 
@@ -3985,6 +3986,69 @@ async def _load_registry_via_proxmox_ssh() -> dict:
     return merged
 
 
+# ---------------------------------------------------------------------------
+# model_config.yml — SSH-aware read/write for Proxmox deployments
+# ---------------------------------------------------------------------------
+# On Proxmox, model_config.yml lives on the HOST at BUSIBOX_HOST_PATH.
+# deploy-api runs inside an LXC container, so local reads return empty.
+# We read/write the file via SSH to PROXMOX_HOST (already authorised).
+
+async def _load_config_via_proxmox_ssh() -> dict:
+    """Read model_config.yml from the Proxmox host via SSH."""
+    proxmox_host = os.getenv("PROXMOX_HOST", "").strip()
+    if not proxmox_host:
+        return {"models": {}}
+    remote_path = str(model_config_path())
+    code, out, _err = await ssh_exec_raw(proxmox_host, f"cat {remote_path}", timeout=10)
+    if code != 0 or not out.strip():
+        return {"models": {}}
+    try:
+        data = yaml.safe_load(out) or {}
+        if not isinstance(data, dict):
+            data = {}
+        if "models" not in data:
+            data["models"] = {}
+        return data
+    except Exception:
+        return {"models": {}}
+
+
+async def _save_config_via_proxmox_ssh(data: dict) -> bool:
+    """Write model_config.yml to the Proxmox host via SSH (base64-encoded to avoid shell quoting issues)."""
+    import base64 as _b64
+    proxmox_host = os.getenv("PROXMOX_HOST", "").strip()
+    if not proxmox_host:
+        return False
+    yaml_str = yaml.safe_dump(data, sort_keys=False)
+    b64 = _b64.b64encode(yaml_str.encode()).decode()
+    remote_path = str(model_config_path())
+    remote_dir = str(pathlib.Path(remote_path).parent)
+    cmd = f"mkdir -p {remote_dir} && printf '%s' '{b64}' | base64 -d > {remote_path}"
+    code, _out, _err = await ssh_exec_raw(proxmox_host, cmd, timeout=15)
+    return code == 0
+
+
+async def _get_model_config_async() -> dict:
+    """Get model config, falling back to SSH from Proxmox host if needed."""
+    config_data = load_model_config()
+    if not config_data.get("models"):
+        config_data = await _load_config_via_proxmox_ssh()
+    return config_data
+
+
+async def _save_model_config_async(data: dict) -> None:
+    """Save model config locally and/or to Proxmox host via SSH."""
+    saved_local = False
+    try:
+        save_model_config(data)
+        saved_local = True
+    except Exception:
+        pass
+    saved_remote = await _save_config_via_proxmox_ssh(data)
+    if not saved_local and not saved_remote:
+        raise HTTPException(status_code=500, detail="Failed to save model_config.yml — local write failed and PROXMOX_HOST SSH write failed")
+
+
 @router.get("/models/browse")
 async def models_browse(_: dict = Depends(verify_admin_token)):
     registry = await _get_registry()
@@ -4060,15 +4124,15 @@ async def vllm_gpus(_: dict = Depends(verify_admin_token)):
 
 @router.get("/vllm/assignments")
 async def vllm_assignments(_: dict = Depends(verify_admin_token)):
-    config_data = load_model_config()
-    return {"assignments": get_assignments(config_data), "model_config_path": str(config.busibox_host_path) + "/provision/ansible/group_vars/all/model_config.yml"}
+    config_data = await _get_model_config_async()
+    return {"assignments": get_assignments(config_data), "model_config_path": str(model_config_path())}
 
 
 @router.post("/vllm/assignments")
 async def vllm_assign_model(req: VllmAssignmentRequest, _: dict = Depends(verify_admin_token)):
     try:
         registry = await _get_registry()
-        config_data = load_model_config()
+        config_data = await _get_model_config_async()
         updated = update_assignment(
             config_data,
             registry,
@@ -4077,7 +4141,7 @@ async def vllm_assign_model(req: VllmAssignmentRequest, _: dict = Depends(verify
             req.port,
             req.tensor_parallel,
         )
-        save_model_config(updated)
+        await _save_model_config_async(updated)
         return {"success": True, "assignments": get_assignments(updated)}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -4087,9 +4151,9 @@ async def vllm_assign_model(req: VllmAssignmentRequest, _: dict = Depends(verify
 async def vllm_unassign_model(model_key: str, _: dict = Depends(verify_admin_token)):
     try:
         registry = await _get_registry()
-        config_data = load_model_config()
+        config_data = await _get_model_config_async()
         updated = unassign_model(config_data, registry, model_key)
-        save_model_config(updated)
+        await _save_model_config_async(updated)
         return {"success": True, "assignments": get_assignments(updated)}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -4099,9 +4163,9 @@ async def vllm_unassign_model(model_key: str, _: dict = Depends(verify_admin_tok
 async def vllm_auto_assign(_: dict = Depends(verify_admin_token)):
     registry = await _get_registry()
     gpus = await detect_vllm_gpus()
-    config_data = load_model_config()
+    config_data = await _get_model_config_async()
     updated = auto_assign_models(registry, len(gpus), existing=config_data)
-    save_model_config(updated)
+    await _save_model_config_async(updated)
     return {"success": True, "gpu_count": len(gpus), "assignments": get_assignments(updated)}
 
 

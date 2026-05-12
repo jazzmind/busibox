@@ -163,9 +163,11 @@ async def clean_test_data(db_pool):
                 WHERE role_id IN (SELECT id FROM authz_roles WHERE name LIKE 'TestRole_%')
                 """
             )
-            # Clean up test users (email pattern)
+            # Clean up test users created by fixtures (test_{uuid}@test.example.com)
+            # but preserve the well-known bootstrap user (test@test.example.com)
+            # that AuthTestClient uses for authentication throughout the session.
             await conn.execute(
-                "DELETE FROM authz_users WHERE email LIKE '%@test.example.com'"
+                "DELETE FROM authz_users WHERE email LIKE 'test\\_%@test.example.com'"
             )
             # Clean up test roles (name pattern)
             await conn.execute(

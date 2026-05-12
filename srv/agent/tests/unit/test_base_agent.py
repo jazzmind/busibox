@@ -485,19 +485,18 @@ class TestBaseStreamingAgentAuth:
         assert "session" in mock_stream_callback.events[0].message.lower()
     
     @pytest.mark.asyncio
-    async def test_setup_context_auth_always_required(
+    async def test_setup_context_succeeds_without_auth_when_no_scopes(
         self, test_agent_config_no_auth, mock_stream_callback
     ):
-        """Test _setup_context requires auth even for agents without auth-requiring tools."""
-        # Auth is always required regardless of tool configuration
+        """Test _setup_context succeeds without auth for agents whose tools require no scopes."""
+        # web_search has no scopes, so auth is not required
         agent = BaseStreamingAgent(test_agent_config_no_auth)
-        
+
         result = await agent._setup_context({}, mock_stream_callback)
-        
-        # Should fail without auth
-        assert result is None
-        assert mock_stream_callback.events[0].type == "error"
-        assert "Authentication" in mock_stream_callback.events[0].message
+
+        # Should succeed without auth credentials
+        assert result is not None
+        assert len(mock_stream_callback.events) == 0
 
 
 # =============================================================================
