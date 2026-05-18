@@ -3536,6 +3536,7 @@ echo "✓ User-specific values applied"
                         &repo_root,
                         &make_args,
                         vp,
+                        None,
                         on_line,
                     )
                 } else {
@@ -3753,6 +3754,7 @@ echo "✓ User-specific values applied"
                     &repo_root,
                     &make_args,
                     vp,
+                    None,
                     on_line,
                 )
             } else {

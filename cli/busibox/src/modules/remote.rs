@@ -228,6 +228,7 @@ pub fn run_local_make_quiet_with_vault_streaming<F>(
     repo_root: &Path,
     args: &str,
     vault_password: &str,
+    extra_env: Option<&[(&str, &str)]>,
     mut on_line: F,
 ) -> Result<i32>
 where
@@ -235,11 +236,17 @@ where
 {
     use std::io::BufRead;
 
-    let mut child = Command::new("make")
-        .args(args.split_whitespace())
+    let mut cmd = Command::new("make");
+    cmd.args(args.split_whitespace())
         .env("USE_MANAGER", "0")
         .env("PYTHONUNBUFFERED", "1")
-        .env("ANSIBLE_VAULT_PASSWORD", vault_password)
+        .env("ANSIBLE_VAULT_PASSWORD", vault_password);
+    if let Some(vars) = extra_env {
+        for (k, v) in vars {
+            cmd.env(k, v);
+        }
+    }
+    let mut child = cmd
         .current_dir(repo_root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

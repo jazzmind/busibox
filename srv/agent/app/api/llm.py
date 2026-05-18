@@ -11,7 +11,8 @@ Provides:
 """
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+import re
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect, status
@@ -1631,18 +1632,88 @@ def _strip_provider_prefix(model_id: str) -> str:
     return model_id
 
 
+def _looks_like_encrypted_blob(value: str) -> bool:
+    """Detect LiteLLM ciphertext when DB params cannot be decrypted."""
+    if not value:
+        return False
+    if value.startswith("encrypted:"):
+        return True
+    if len(value) < 40:
+        return False
+    # Real model IDs are usually short or contain structured punctuation.
+    if "/" in value or value.count(".") >= 2:
+        return False
+    return bool(re.fullmatch(r"[A-Za-z0-9_-]+=*", value))
+
+
+def _reverse_lookup_model_name(
+    model_id: str,
+    all_entries: List[Dict],
+    purpose_names: Set[str],
+    current_purpose: str,
+) -> str:
+    """Find a friendly model_name that shares the same underlying litellm model."""
+    if not model_id or _looks_like_encrypted_blob(model_id):
+        return ""
+
+    matches: List[str] = []
+    for entry in all_entries:
+        name = entry.get("model_name", "")
+        if not name or name == current_purpose:
+            continue
+        params = entry.get("litellm_params") or {}
+        actual = _strip_provider_prefix(params.get("model", "") or "")
+        if actual == model_id and not _looks_like_encrypted_blob(actual):
+            matches.append(name)
+
+    concrete = [n for n in matches if n not in purpose_names]
+    if concrete:
+        return concrete[0]
+    if matches:
+        return matches[0]
+    return model_id
+
+
+def _resolve_purpose_target_model_name(
+    purpose: str,
+    entry: Dict[str, Any],
+    all_entries: List[Dict[str, Any]],
+    purpose_names: Set[str],
+) -> str:
+    """Resolve a purpose entry to a human-readable backing model name."""
+    info = entry.get("model_info") or {}
+    backing = info.get("backing_model_name")
+    if backing:
+        return backing
+
+    params = entry.get("litellm_params") or {}
+    model_id = _strip_provider_prefix(params.get("model", "") or "")
+    if not model_id:
+        return ""
+
+    if _looks_like_encrypted_blob(model_id):
+        return ""
+
+    return _reverse_lookup_model_name(model_id, all_entries, purpose_names, purpose)
+
+
 def _build_purpose_map(model_entries: List[Dict]) -> Dict[str, str]:
     """
-    Build purpose -> underlying model description from model entries.
-    
+    Build purpose -> backing model_name for admin display.
+
     Accepts entries from either /model/info or /config/yaml model_list.
+    Returns friendly model names (e.g. qwen3.6-35b-a3b-vllm-fp8), not raw
+    litellm_params.model values which may be encrypted ciphertext.
     """
-    purpose_map = {}
+    purpose_names = set(CONFIGURABLE_PURPOSES)
+    purpose_map: Dict[str, str] = {}
     for entry in model_entries:
         name = entry.get("model_name", "")
-        params = entry.get("litellm_params") or {}
-        model_id = params.get("model", "")
-        purpose_map[name] = _strip_provider_prefix(model_id)
+        if not name:
+            continue
+        purpose_map[name] = _resolve_purpose_target_model_name(
+            name, entry, model_entries, purpose_names
+        )
     return purpose_map
 
 
@@ -1682,7 +1753,13 @@ def _merge_model_entries(model_info_entries: List[Dict], config_entries: List[Di
         if name in by_name:
             merged = by_name[name]
             merged_params = dict(merged.get("litellm_params", {}) or {})
-            merged_params.update(dict(entry.get("litellm_params", {}) or {}))
+            incoming_params = dict(entry.get("litellm_params", {}) or {})
+            for key, val in incoming_params.items():
+                if key == "model" and _looks_like_encrypted_blob(str(val or "")):
+                    existing = merged_params.get("model", "")
+                    if existing and not _looks_like_encrypted_blob(str(existing)):
+                        continue
+                merged_params[key] = val
             merged_info = dict(merged.get("model_info", {}) or {})
             merged_info.update(dict(entry.get("model_info", {}) or {}))
             merged["litellm_params"] = merged_params
@@ -1794,6 +1871,8 @@ async def chat_completion(
     Supports local MLX models (via purpose names like 'fast', 'agent', 'frontier')
     and cloud models (via provider-prefixed names like 'gpt-4.1', 'claude-sonnet-4').
     """
+    await _ensure_litellm_keys(principal)
+
     base_url = _get_litellm_base_url()
     headers = _get_litellm_headers()
     
@@ -3400,7 +3479,20 @@ async def get_purpose_mappings(
                 db_litellm_model = row.get("litellm_model", "") or ""
                 actual_model = db_litellm_model or _infer_litellm_model(mname)
                 if mname in CONFIGURABLE_PURPOSES:
-                    purpose_map[mname] = _strip_provider_prefix(actual_model)
+                    resolved = _resolve_purpose_target_model_name(
+                        mname,
+                        {
+                            "model_name": mname,
+                            "litellm_params": {"model": actual_model},
+                            "model_info": {"db_model": True},
+                        },
+                        merged_entries,
+                        set(CONFIGURABLE_PURPOSES),
+                    )
+                    if resolved:
+                        purpose_map[mname] = resolved
+                    elif actual_model and not _looks_like_encrypted_blob(actual_model):
+                        purpose_map[mname] = _strip_provider_prefix(actual_model)
                 if mname not in seen_names:
                     available_models.append({
                         "model_name": mname,
@@ -3560,7 +3652,7 @@ async def update_purpose_mapping(
             if target_params.get("api_base"):
                 clean_params["api_base"] = target_params["api_base"]
             
-            clean_info: Dict[str, Any] = {}
+            clean_info: Dict[str, Any] = {"backing_model_name": request.model_name}
             if target_info and target_info.get("description"):
                 clean_info["description"] = target_info["description"]
             

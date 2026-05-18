@@ -1,6 +1,11 @@
 ---
 # LiteLLM Configuration Tasks
 
+# Restart after pip/prisma install tasks (handlers are queued in install.yml)
+- name: Flush handlers after package install
+  meta: flush_handlers
+  tags: [litellm, litellm_configure, llm_litellm]
+
 - name: Check if model_config.yml exists
   stat:
     path: "{{ playbook_dir }}/group_vars/all/model_config.yml"
@@ -450,8 +455,16 @@
 
 - name: Display fast model test result
   debug:
-    msg: "{{ 'Fast model test passed - response: ' + fast_test.json.choices[0].message.content if fast_test.json is defined and fast_test.json.choices is defined else 'Fast model test skipped or failed: ' + (fast_test.json.error.message | default('No fast model configured')) }}"
+    msg: >-
+      {% if fast_test.json is defined and (fast_test.json.choices | default([]) | length > 0) %}
+      Fast model test passed - response: {{ fast_test.json.choices[0].message.content | default('(empty)', true) }}
+      {% elif fast_test.json is defined %}
+      Fast model test skipped or failed: {{ fast_test.json.error.message | default(fast_test.json | to_json) }}
+      {% else %}
+      Fast model test skipped or failed: {{ fast_test.msg | default('unknown') }}
+      {% endif %}
   when: fast_test is defined
+  failed_when: false
   tags: [litellm_configure, litellm_test]
 
 - name: Test agent chat model
@@ -478,8 +491,16 @@
 
 - name: Display agent model test result
   debug:
-    msg: "{{ 'Agent model test passed - response: ' + agent_test.json.choices[0].message.content if agent_test.json is defined and agent_test.json.choices is defined else 'Agent model test skipped or failed: ' + (agent_test.json.error.message | default('No agent model configured')) }}"
+    msg: >-
+      {% if agent_test.json is defined and (agent_test.json.choices | default([]) | length > 0) %}
+      Agent model test passed - response: {{ agent_test.json.choices[0].message.content | default('(empty)', true) }}
+      {% elif agent_test.json is defined %}
+      Agent model test skipped or failed: {{ agent_test.json.error.message | default(agent_test.json | to_json) }}
+      {% else %}
+      Agent model test skipped or failed: {{ agent_test.msg | default('unknown') }}
+      {% endif %}
   when: agent_test is defined
+  failed_when: false
   tags: [litellm_configure, litellm_test]
 
 - name: Test frontier (Bedrock Claude 4.5) model
@@ -506,8 +527,16 @@
 
 - name: Display frontier model test result
   debug:
-    msg: "{{ 'Frontier (Bedrock) model test passed - response: ' + frontier_test.json.choices[0].message.content if frontier_test.json is defined and frontier_test.json.choices is defined else 'Frontier model test FAILED: ' + (frontier_test.json.error.message | default(frontier_test.msg | default('Unknown error - check Bedrock credentials'))) }}"
+    msg: >-
+      {% if frontier_test.json is defined and (frontier_test.json.choices | default([]) | length > 0) %}
+      Frontier (Bedrock) model test passed - response: {{ frontier_test.json.choices[0].message.content | default('(empty)', true) }}
+      {% elif frontier_test.json is defined %}
+      Frontier model test FAILED: {{ frontier_test.json.error.message | default(frontier_test.json | to_json) }}
+      {% else %}
+      Frontier model test FAILED: {{ frontier_test.msg | default('Unknown error - check Bedrock credentials') }}
+      {% endif %}
   when: frontier_test is defined
+  failed_when: false
   tags: [litellm_configure, litellm_test]
 
 - name: Display Bedrock authentication warning if frontier test failed

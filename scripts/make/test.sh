@@ -1408,10 +1408,15 @@ run_container_tests() {
         _pytest_extra="-k ${_raw}"
     fi
 
-    # Default pytest flags: stop at first failure (-x) and show full tracebacks
-    # so the output is immediately actionable.  PYTEST_ARGS can override these
-    # by including its own --tb or -x/-v flags.
-    local _pytest_base_flags="-x -v --tb=long"
+    # Default pytest flags: --stepwise stops at first failure and on the next run
+    # continues from that test (skips already-passed tests in .pytest_cache).
+    # Set PYTEST_STEPWISE_RESET=1 to clear stepwise state (fresh full run).
+    # PYTEST_ARGS can override by including its own --tb / --stepwise / -v flags.
+    local _pytest_stepwise_flags="--stepwise"
+    if [[ "${PYTEST_STEPWISE_RESET:-}" == "1" ]]; then
+        _pytest_stepwise_flags="--stepwise-reset --stepwise"
+    fi
+    local _pytest_base_flags="${_pytest_stepwise_flags} -v --tb=long"
 
     case "$service" in
         authz)
@@ -1442,7 +1447,7 @@ run_container_tests() {
             else
                 error "Authz tests failed"
                 echo ""
-                warn "To rerun failed tests, check output above for pytest filter"
+                warn "Press 'r' in the TUI to resume from the failure (--stepwise), or check pytest filter above"
                 echo ""
                 save_test_result "authz" "failed"
                 # Don't exit - continue to show summary
@@ -1482,7 +1487,7 @@ run_container_tests() {
             else
                 error "Data tests failed"
                 echo ""
-                warn "To rerun failed tests, check output above for pytest filter"
+                warn "Press 'r' in the TUI to resume from the failure (--stepwise), or check pytest filter above"
                 echo ""
                 save_test_result "data" "failed"
                 # Don't exit - continue to show summary
@@ -1521,7 +1526,7 @@ run_container_tests() {
             else
                 error "Search tests failed"
                 echo ""
-                warn "To rerun failed tests, check output above for pytest filter"
+                warn "Press 'r' in the TUI to resume from the failure (--stepwise), or check pytest filter above"
                 echo ""
                 save_test_result "search" "failed"
                 # Don't exit - continue to show summary
@@ -1602,7 +1607,7 @@ run_container_tests() {
             else
                 error "Agent tests failed"
                 echo ""
-                warn "To rerun failed tests, check output above for pytest filter"
+                warn "Press 'r' in the TUI to resume from the failure (--stepwise), or check pytest filter above"
                 echo ""
                 save_test_result "agent" "failed"
                 # Don't exit - continue to show summary
@@ -1634,7 +1639,7 @@ run_container_tests() {
             else
                 error "Bridge tests failed"
                 echo ""
-                warn "To rerun failed tests, check output above for pytest filter"
+                warn "Press 'r' in the TUI to resume from the failure (--stepwise), or check pytest filter above"
                 echo ""
                 save_test_result "bridge" "failed"
                 return 1
@@ -1669,7 +1674,7 @@ run_container_tests() {
             else
                 error "Config API tests failed"
                 echo ""
-                warn "To rerun failed tests, check output above for pytest filter"
+                warn "Press 'r' in the TUI to resume from the failure (--stepwise), or check pytest filter above"
                 echo ""
                 save_test_result "config" "failed"
                 return 1
@@ -1702,7 +1707,7 @@ run_container_tests() {
                 error "Failed services: ${failed_services[*]}"
                 echo ""
                 warn "Review output above for pytest filters to rerun failed tests"
-                warn "Or use 'Run Failed Tests' option to rerun only failed services"
+                warn "In the Busibox TUI: press 'r' to resume from the last failure (--stepwise)"
                 return 1
             fi
             ;;

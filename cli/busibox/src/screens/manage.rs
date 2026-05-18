@@ -2181,7 +2181,7 @@ fn spawn_update_worker(app: &mut App, service_list: &str) {
                 Err(color_eyre::eyre::eyre!("No SSH connection"))
             }
         } else if let Some(ref vp) = vault_password {
-            remote::run_local_make_quiet_with_vault_streaming(&repo_root, &make_args, vp, on_line)
+            remote::run_local_make_quiet_with_vault_streaming(&repo_root, &make_args, vp, None, on_line)
         } else {
             remote::run_local_make_quiet_streaming(&repo_root, &make_args, on_line)
         };
@@ -2672,7 +2672,7 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
                 Err(color_eyre::eyre::eyre!("No SSH connection"))
             }
         } else if let Some(ref vp) = vault_password {
-            remote::run_local_make_quiet_with_vault_streaming(&repo_root, &make_args, vp, on_line)
+            remote::run_local_make_quiet_with_vault_streaming(&repo_root, &make_args, vp, None, on_line)
         } else {
             remote::run_local_make_quiet_streaming(&repo_root, &make_args, on_line)
         };
@@ -3195,7 +3195,7 @@ pub fn spawn_install_with_env(app: &mut App, services: &str, extra_env: &str) {
                 Err(color_eyre::eyre::eyre!("No SSH connection"))
             }
         } else if let Some(ref vp) = vault_password {
-            remote::run_local_make_quiet_with_vault_streaming(&repo_root, &make_args, vp, on_line)
+            remote::run_local_make_quiet_with_vault_streaming(&repo_root, &make_args, vp, None, on_line)
         } else {
             remote::run_local_make_quiet_streaming(&repo_root, &make_args, on_line)
         };

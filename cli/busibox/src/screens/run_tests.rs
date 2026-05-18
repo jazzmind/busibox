@@ -250,7 +250,14 @@ fn render_log_viewer(f: &mut Frame, app: &App) {
             l.contains("ERROR") || l.contains("FAILED") || l.contains("failed") || l.contains("error")
         });
         if failed {
-            Paragraph::new("Tests FAILED").style(theme::error()).alignment(Alignment::Center)
+            let hint = if app.test_can_resume {
+                "Tests FAILED — press r to resume from failure, R to restart suite"
+            } else {
+                "Tests FAILED"
+            };
+            Paragraph::new(hint)
+                .style(theme::error())
+                .alignment(Alignment::Center)
         } else {
             Paragraph::new("✓ Tests passed").style(theme::success()).alignment(Alignment::Center)
         }
@@ -310,6 +317,12 @@ fn render_log_viewer(f: &mut Frame, app: &App) {
 
     let help_text = if app.test_action_running {
         "↑/↓ Scroll  (tests running...)"
+    } else if app.test_can_resume
+        && app.test_log.iter().any(|l| {
+            l.contains("FAILED") || l.contains("ERROR") || l.contains("Tests FAILED")
+        })
+    {
+        "↑/↓ Scroll  r — resume from failure  R — restart suite  c — copy  Esc — back"
     } else {
         "↑/↓ Scroll  PgUp/PgDn  End — jump to end  c — copy output  Esc — back"
     };
@@ -392,7 +405,7 @@ fn handle_suite_key(app: &mut App, key: KeyEvent) {
             if TEST_SUITES.get(app.test_suite_selected) == Some(&"Custom Args") {
                 app.test_custom_input_active = true;
             } else {
-                spawn_test_worker(app);
+                spawn_test_worker_fresh(app);
             }
         }
         _ => {}
@@ -408,7 +421,7 @@ fn handle_custom_input_key(app: &mut App, key: KeyEvent) {
         KeyCode::Enter => {
             app.test_custom_input_active = false;
             if !app.test_custom_args.is_empty() {
-                spawn_test_worker(app);
+                spawn_test_worker_fresh(app);
             }
         }
         KeyCode::Backspace => {
@@ -456,8 +469,31 @@ fn handle_log_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('c') | KeyCode::Char('C') => {
             copy_log_to_clipboard(app);
         }
+        KeyCode::Char('r') => {
+            if !app.test_action_running && app.test_can_resume {
+                resume_test_worker(app, false);
+            }
+        }
+        KeyCode::Char('R') => {
+            if !app.test_action_running && app.test_can_resume {
+                resume_test_worker(app, true);
+            }
+        }
         _ => {}
     }
+}
+
+/// Re-run the last test command, optionally resetting pytest --stepwise cache.
+fn resume_test_worker(app: &mut App, reset_stepwise: bool) {
+    app.test_service_selected = app.test_last_service_selected;
+    app.test_suite_selected = app.test_last_suite_selected;
+    app.test_custom_args = app.test_last_custom_args.clone();
+    spawn_test_worker(app, reset_stepwise);
+}
+
+/// New run from the suite menu — reset stepwise so a changed ARGS/service starts clean.
+pub fn spawn_test_worker_fresh(app: &mut App) {
+    spawn_test_worker(app, true);
 }
 
 fn copy_log_to_clipboard(app: &mut App) {
@@ -606,7 +642,12 @@ print(f"JWT_SECRET={secrets.get('jwt_secret', '')}")
 // Worker
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub fn spawn_test_worker(app: &mut App) {
+pub fn spawn_test_worker(app: &mut App, stepwise_reset: bool) {
+    app.test_last_service_selected = app.test_service_selected;
+    app.test_last_suite_selected = app.test_suite_selected;
+    app.test_last_custom_args = app.test_custom_args.clone();
+    app.test_can_resume = false;
+
     let svc_key = TEST_SERVICES
         .get(app.test_service_selected)
         .copied()
@@ -668,6 +709,7 @@ pub fn spawn_test_worker(app: &mut App) {
     let repo_root = app.repo_root.clone();
     let custom_args = app.test_custom_args.clone();
     let vault_prefix = vault_prefix.clone();
+    let stepwise_reset = stepwise_reset;
 
     // Decrypt the vault locally so test.sh never needs ansible-vault on the
     // remote host.  Failures are soft — the remote fallback still tries.
@@ -753,6 +795,15 @@ pub fn spawn_test_worker(app: &mut App) {
         let _ = tx.send(TestUpdate::Log(format!(
             "Environment: {profile_env} ({profile_backend})"
         )));
+        if stepwise_reset {
+            let _ = tx.send(TestUpdate::Log(
+                "Pytest: --stepwise-reset (fresh run from start of suite)".to_string(),
+            ));
+        } else {
+            let _ = tx.send(TestUpdate::Log(
+                "Pytest: --stepwise (resume from last failure, skip passed tests)".to_string(),
+            ));
+        }
         let _ = tx.send(TestUpdate::Log(String::new()));
 
         let stream_tx = tx.clone();
@@ -778,16 +829,25 @@ pub fn spawn_test_worker(app: &mut App) {
                 }
                 // Always run tests against the test database — never production.
                 env_block.push_str("export AUTHZ_TEST_MODE_ENABLED='true'; ");
+                if stepwise_reset {
+                    env_block.push_str("export PYTEST_STEPWISE_RESET='1'; ");
+                }
                 let cmd = format!("{env_block}USE_MANAGER=0 make {make_args}");
                 remote::exec_remote_streaming(&ssh, &remote_path, &cmd, on_line)
             } else {
                 Err(color_eyre::eyre::eyre!("Remote profile has no SSH host configured"))
             }
         } else {
+            const STEPWISE_RESET_ENV: [(&str, &str); 1] = [("PYTEST_STEPWISE_RESET", "1")];
             remote::run_local_make_quiet_with_vault_streaming(
                 &repo_root,
                 &make_args,
                 &vault_password,
+                if stepwise_reset {
+                    Some(&STEPWISE_RESET_ENV)
+                } else {
+                    None
+                },
                 on_line,
             )
         };

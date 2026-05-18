@@ -392,7 +392,7 @@ endif
 # Direct:      make test SERVICE=authz INV=staging
 test:
 ifdef SERVICE
-	@PYTEST_ARGS="$(ARGS)" VAULT_PREFIX="$(VAULT_PREFIX)" bash scripts/make/test.sh $(SERVICE) $(INV) $(MODE)
+	@PYTEST_ARGS="$(ARGS)" PYTEST_STEPWISE_RESET="$(PYTEST_STEPWISE_RESET)" VAULT_PREFIX="$(VAULT_PREFIX)" bash scripts/make/test.sh $(SERVICE) $(INV) $(MODE)
 else
 	@bash scripts/make/test-menu.sh
 endif

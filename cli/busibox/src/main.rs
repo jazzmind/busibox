@@ -440,7 +440,11 @@ fn main() -> Result<()> {
                 if test_success {
                     app.set_message("Tests passed", app::MessageKind::Success);
                 } else {
-                    app.set_message("Tests failed — see output above", app::MessageKind::Error);
+                    app.test_can_resume = true;
+                    app.set_message(
+                        "Tests failed — press r in log view to resume from failure",
+                        app::MessageKind::Error,
+                    );
                 }
             }
         }
@@ -1153,7 +1157,7 @@ fn perform_sync_then_admin_login(app: &mut App) {
                 let repo_root = app.repo_root.clone();
                 let result = if let Some(ref vp) = vault_pw {
                     remote::run_local_make_quiet_with_vault_streaming(
-                        &repo_root, make_args, vp, |_| {},
+                        &repo_root, make_args, vp, None, |_| {},
                     )
                 } else {
                     remote::run_local_make_quiet_streaming(&repo_root, make_args, |_| {})

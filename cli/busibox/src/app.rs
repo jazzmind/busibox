@@ -363,6 +363,12 @@ pub struct App {
     pub test_action_complete: bool,
     pub test_tick: usize,
     pub test_rx: Option<mpsc::Receiver<TestUpdate>>,
+    /// Last run config (for resume / restart from log viewer).
+    pub test_last_service_selected: usize,
+    pub test_last_suite_selected: usize,
+    pub test_last_custom_args: String,
+    /// True after a failed run; enables `r` to continue with pytest --stepwise.
+    pub test_can_resume: bool,
 
     // Admin login screen state
     pub admin_login_magic_link: Option<String>,
@@ -948,6 +954,10 @@ impl App {
             test_action_complete: false,
             test_tick: 0,
             test_rx: None,
+            test_last_service_selected: 0,
+            test_last_suite_selected: 0,
+            test_last_custom_args: String::new(),
+            test_can_resume: false,
         }
     }
 
