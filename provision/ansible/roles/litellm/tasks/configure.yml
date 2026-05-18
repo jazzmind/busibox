@@ -99,6 +99,48 @@
     - reload systemd
   tags: [litellm_configure]
 
+# -------------------------------------------------------------------------
+# Fetch LLM provider keys stored in config-api's database.
+# This handles the case where keys were configured via the admin UI
+# rather than the Ansible vault.  We query the config DB directly (same
+# postgres credentials already available to this play) and decrypt values
+# using the CONFIG_ENCRYPTION_KEY — no cross-service API call needed.
+# -------------------------------------------------------------------------
+- name: Copy config-api decrypt helper to Ansible controller
+  copy:
+    src: decrypt_config_value.py
+    dest: /tmp/busibox_decrypt_config_value.py
+    mode: '0755'
+  delegate_to: localhost
+  tags: [litellm_configure]
+
+- name: Query config-api DB and decrypt llm-keys
+  shell: >
+    psql -h {{ postgres_host }} -p {{ postgres_port | default(5432) }}
+    -U {{ postgres_user }} -d config
+    -t -A -F '|'
+    -c "SELECT key, value, encrypted FROM config_entries WHERE category = 'llm-keys';"
+    | python3 /tmp/busibox_decrypt_config_value.py --batch
+  environment:
+    PGPASSWORD: "{{ secrets.postgresql.password }}"
+    CONFIG_ENCRYPTION_KEY: "{{ busibox_secrets.CONFIG_ENCRYPTION_KEY | default('') }}"
+  register: _config_api_llm_keys_raw
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  tags: [litellm_configure]
+
+- name: Set llm-keys fact from config-api
+  set_fact:
+    _config_api_llm_keys: "{{ _config_api_llm_keys_raw.stdout | default('{}') | from_json }}"
+  tags: [litellm_configure]
+
+- name: Debug - llm-keys fetched from config-api
+  debug:
+    msg: "Config-api llm-keys found: {{ _config_api_llm_keys.keys() | list }}"
+  when: _config_api_llm_keys is defined
+  tags: [litellm_configure]
+
 - name: Create LiteLLM environment file
   template:
     src: litellm.env.j2
@@ -107,6 +149,44 @@
     group: "{{ litellm_group }}"
     mode: '0640'
   notify: restart litellm
+  tags: [litellm_configure]
+
+- name: Debug - Verify AWS keys in LiteLLM environment file
+  shell: |
+    grep -E '^(AWS_|OPENAI_)' /etc/default/litellm \
+      | awk -F'=' '{
+          k=$1; v=substr($0, index($0,"=")+1);
+          printf "%s=%s...(len=%d)\n", k, substr(v,1,8), length(v)
+        }'
+  register: _litellm_env_key_check
+  changed_when: false
+  tags: [litellm_configure]
+
+- name: Debug - Show which API keys are present in env file (partial values)
+  debug:
+    msg: "{{ _litellm_env_key_check.stdout_lines }}"
+  tags: [litellm_configure]
+
+- name: Debug - Check AWS keys in running LiteLLM process environment
+  shell: |
+    PID=$(systemctl show -p MainPID litellm | cut -d= -f2)
+    if [ -n "$PID" ] && [ "$PID" != "0" ] && [ -r /proc/$PID/environ ]; then
+      tr '\0' '\n' < /proc/$PID/environ \
+        | grep -E '^(AWS_|OPENAI_)' \
+        | awk -F'=' '{
+            k=$1; v=substr($0, index($0,"=")+1);
+            printf "%s=%s...(len=%d)\n", k, substr(v,1,8), length(v)
+          }'
+    else
+      echo "Could not read process environment (PID=$PID)"
+    fi
+  register: _litellm_proc_env_check
+  changed_when: false
+  tags: [litellm_configure]
+
+- name: Debug - Show AWS keys in running LiteLLM process (partial values)
+  debug:
+    msg: "{{ _litellm_proc_env_check.stdout_lines }}"
   tags: [litellm_configure]
 
 - name: Ensure systemd knows about litellm service
@@ -356,6 +436,45 @@
   when: litellm_start_service
   tags: [litellm_configure]
 
+# -------------------------------------------------------------------------
+# Deduplicate model entries in the LiteLLM DB.
+#
+# When store_model_in_db=true, every startup adds config.yaml models as new
+# DB rows even if a row with the same model_name already exists (e.g. from an
+# admin UI remapping).  The router then load-balances across all rows with the
+# same name, so the first request might hit the wrong backend.
+#
+# Strategy: for each model_name with more than one row, keep the OLDEST entry
+# (the pre-deploy admin UI version) and delete newer duplicates (the rows just
+# added from config.yaml on this startup).
+# -------------------------------------------------------------------------
+- name: Copy model deduplication script to target
+  copy:
+    src: dedup_litellm_models.py
+    dest: /tmp/dedup_litellm_models.py
+    mode: '0755'
+  when: litellm_start_service and litellm_enable_database
+  tags: [litellm_configure]
+
+- name: Deduplicate LiteLLM model entries (validate DB entries, fall back to config)
+  shell: >
+    {{ litellm_venv_dir }}/bin/python3 /tmp/dedup_litellm_models.py
+    --host {{ litellm_host if litellm_host != '0.0.0.0' else 'localhost' }}
+    --port {{ litellm_port }}
+    --key {{ litellm_master_key }}
+    --config-yaml {{ litellm_config_dir }}/config.yaml
+  register: _litellm_dedup_result
+  changed_when: "'Deleted' in _litellm_dedup_result.stdout"
+  failed_when: false
+  when: litellm_start_service and litellm_enable_database
+  tags: [litellm_configure]
+
+- name: Display model deduplication result
+  debug:
+    msg: "{{ _litellm_dedup_result.stdout_lines | default([]) }}"
+  when: _litellm_dedup_result is defined
+  tags: [litellm_configure]
+
 - name: Check LiteLLM service status
   systemd:
     name: litellm
@@ -564,9 +683,9 @@
       - "=========================================="
       - "LiteLLM Chat Model Test Summary" 
       - "=========================================="
-      - "Fast model: {{ 'PASSED' if fast_test is defined and fast_test.json is defined and fast_test.json.choices is defined else 'SKIPPED/FAILED' }}"
-      - "Agent model: {{ 'PASSED' if agent_test is defined and agent_test.json is defined and agent_test.json.choices is defined else 'SKIPPED/FAILED' }}"
-      - "Frontier (Bedrock Claude 4.5): {{ 'PASSED ✓' if frontier_test is defined and frontier_test.json is defined and frontier_test.json.choices is defined else 'FAILED ✗ (check Bedrock credentials)' }}"
+      - "Fast model: {{ 'PASSED' if fast_test is defined and fast_test.json is defined and (fast_test.json.choices | default([]) | length > 0) else 'SKIPPED/FAILED' }}"
+      - "Agent model: {{ 'PASSED' if agent_test is defined and agent_test.json is defined and (agent_test.json.choices | default([]) | length > 0) else 'SKIPPED/FAILED' }}"
+      - "Frontier (Bedrock Claude 4.5): {{ 'PASSED ✓' if frontier_test is defined and frontier_test.json is defined and (frontier_test.json.choices | default([]) | length > 0) else 'FAILED ✗ (check Bedrock credentials)' }}"
       - ""
       - "Note: Embedding, visual-embedding, and reranking"
       - "      are served by dedicated services, not LiteLLM"
