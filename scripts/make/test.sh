@@ -91,6 +91,7 @@ get_container_ip() {
         authz)    echo "${network_base}.210" ;;
         search)   echo "${network_base}.204" ;;  # Search runs on milvus container
         bridge)   echo "${network_base}.210" ;;  # Bridge currently runs with authz-api
+        config)   echo "${network_base}.210" ;;  # Config API runs on authz container
         *)        echo "" ;;
     esac
 }
@@ -1274,6 +1275,62 @@ ensure_authz_test_mode() {
     success "authz test mode enabled and service restarted"
 }
 
+# Proxmox: agent-lxc cannot restart litellm-lxc (no docker, no SSH keys).
+# When LLM key-restore tests are selected, run prepare → restart litellm from the
+# test runner host → verify, then exclude those tests from the main pytest pass.
+orchestrate_llm_key_restore_cycle() {
+    local agent_ip="$1"
+    local litellm_ip="$2"
+    local test_env="$3"
+    local pytest_path="$4"
+    local pytest_extra="$5"
+    local pytest_base_flags="$6"
+
+    LLM_RESTART_ORCHESTRATED=0
+
+    local collect_cmd
+    collect_cmd="cd /srv/agent && source .venv/bin/activate && source .env 2>/dev/null || true && export ${test_env} && python -m pytest ${pytest_path} ${pytest_extra} --collect-only -q 2>/dev/null"
+    local collected
+    collected=$(ssh -o ConnectTimeout=15 "root@${agent_ip}" "${collect_cmd}" 2>/dev/null || true)
+
+    if ! echo "${collected}" | grep -qE 'test_keys_survive_litellm_restart'; then
+        return 0
+    fi
+
+    info "Orchestrating LLM key-restore restart (test runner → litellm-lxc systemctl restart)..."
+
+    local agent_pytest="cd /srv/agent && source .venv/bin/activate && source .env 2>/dev/null || true && export ${test_env}"
+
+    if echo "${collected}" | grep -qE '::test_keys_survive_litellm_restart_prepare$|::test_keys_survive_litellm_restart$'; then
+        info "  Step 1/3: verify providers and config-api persistence..."
+        if ! ssh -o ConnectTimeout=15 "root@${agent_ip}" \
+            "${agent_pytest} && python -m pytest tests/integration/test_llm_key_restore.py::TestLLMKeyRestoreAfterRestart::test_keys_survive_litellm_restart_prepare ${pytest_base_flags}"; then
+            error "LLM key-restore prepare step failed"
+            return 1
+        fi
+
+        info "  Step 2/3: restarting LiteLLM on ${litellm_ip}..."
+        if ! ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 "root@${litellm_ip}" "systemctl restart litellm"; then
+            error "Failed to restart litellm on ${litellm_ip} (check SSH from test runner)"
+            return 1
+        fi
+        sleep 5
+    fi
+
+    if echo "${collected}" | grep -qE '::test_keys_survive_litellm_restart_verify$|::test_keys_survive_litellm_restart$'; then
+        info "  Step 3/3: verify keys restored after restart..."
+        if ! ssh -o ConnectTimeout=15 "root@${agent_ip}" \
+            "${agent_pytest} && export LITELLM_RESTART_EXTERNAL=1 && python -m pytest tests/integration/test_llm_key_restore.py::TestLLMKeyRestoreAfterRestart::test_keys_survive_litellm_restart_verify ${pytest_base_flags}"; then
+            error "LLM key-restore verify step failed"
+            return 1
+        fi
+    fi
+
+    LLM_RESTART_ORCHESTRATED=1
+    success "LLM key-restore restart cycle completed"
+    return 0
+}
+
 # Run tests on container (non-interactive)
 run_container_tests() {
     local service="$1"
@@ -1292,13 +1349,14 @@ run_container_tests() {
     eval "$creds"
     
     # Get container IPs
-    local postgres_ip authz_ip data_ip search_ip agent_ip bridge_ip minio_ip milvus_ip
+    local postgres_ip authz_ip data_ip search_ip agent_ip bridge_ip config_ip minio_ip milvus_ip
     postgres_ip=$(get_container_ip postgres "$env")
     authz_ip=$(get_container_ip authz "$env")
     data_ip=$(get_container_ip data "$env")
     search_ip=$(get_container_ip search "$env")
     agent_ip=$(get_container_ip agent "$env")
     bridge_ip=$(get_container_ip bridge "$env")
+    config_ip=$(get_container_ip config "$env")
     minio_ip=$(get_container_ip minio "$env")
     milvus_ip=$(get_container_ip milvus "$env")
 
@@ -1326,16 +1384,28 @@ run_container_tests() {
     local test_user_id="${TEST_USER_ID:-00000000-0000-0000-0000-000000000001}"
     
     # Resolve pytest test path and extra flags from PYTEST_ARGS.
-    # When PYTEST_ARGS starts with "tests/", treat it as the test path (replacing
-    # the default "tests/" so we don't run the full suite alongside the subset).
-    # Otherwise treat it as extra pytest flags appended after "tests/".
+    # Supports shorthand patterns from the TUI / CLI:
+    #   llm                      -> pytest tests/ -k llm
+    #   integration/test_llm     -> pytest tests/integration/test_llm
+    #   tests/unit/test_foo.py   -> pytest tests/unit/test_foo.py (full path)
+    #   -k "foo and not slow"    -> pytest tests/ -k "foo and not slow"
     local _pytest_path _pytest_extra
-    if [[ "${PYTEST_ARGS:-}" == tests/* ]]; then
-        _pytest_path="${PYTEST_ARGS}"
+    local _raw="${PYTEST_ARGS:-}"
+    if [[ -z "$_raw" ]]; then
+        _pytest_path="tests/"
+        _pytest_extra=""
+    elif [[ "$_raw" == -* ]]; then
+        _pytest_path="tests/"
+        _pytest_extra="$_raw"
+    elif [[ "$_raw" == tests/* ]]; then
+        _pytest_path="$_raw"
+        _pytest_extra=""
+    elif [[ "$_raw" == */* ]]; then
+        _pytest_path="tests/${_raw}"
         _pytest_extra=""
     else
         _pytest_path="tests/"
-        _pytest_extra="${PYTEST_ARGS:-}"
+        _pytest_extra="-k ${_raw}"
     fi
 
     # Default pytest flags: stop at first failure (-x) and show full tracebacks
@@ -1382,7 +1452,16 @@ run_container_tests() {
         data)
             header "Data Service Tests" 70
             info "Running data tests on ${data_ip}..."
-            
+
+            # Sync latest test files from repo to container (no full redeploy needed)
+            info "Syncing data tests to container..."
+            rsync -rltz --delete --no-owner --no-group \
+                "${REPO_ROOT}/srv/data/tests/" \
+                "root@${data_ip}:/srv/data/tests/" || {
+                error "Failed to sync data tests"
+                return 1
+            }
+
             # Pytest uses test_files database (owned by busibox_test_user)
             # AuthTestClient bootstraps the test user automatically via magic link.
             local test_env="POSTGRES_HOST=${postgres_ip}"
@@ -1413,7 +1492,16 @@ run_container_tests() {
         search)
             header "Search Service Tests" 70
             info "Running search tests on ${search_ip}..."
-            
+
+            # Sync latest test files from repo to container (no full redeploy needed)
+            info "Syncing search tests to container..."
+            rsync -rltz --delete --no-owner --no-group \
+                "${REPO_ROOT}/srv/search/tests/" \
+                "root@${search_ip}:/opt/search/tests/" || {
+                error "Failed to sync search tests"
+                return 1
+            }
+
             # Pytest uses test_files database (owned by busibox_test_user)
             # AuthTestClient bootstraps the test user automatically via magic link.
             local test_env="POSTGRES_HOST=${postgres_ip}"
@@ -1443,7 +1531,22 @@ run_container_tests() {
         agent)
             header "Agent Service Tests" 70
             info "Running agent tests on ${agent_ip}..."
-            
+
+            # Sync latest test files from repo to container (no full redeploy needed)
+            info "Syncing agent tests to container..."
+            rsync -rltz --delete --no-owner --no-group \
+                "${REPO_ROOT}/srv/agent/tests/" \
+                "root@${agent_ip}:/srv/agent/tests/" || {
+                error "Failed to sync agent tests"
+                return 1
+            }
+            rsync -rltz --delete --no-owner --no-group \
+                "${REPO_ROOT}/srv/shared/busibox_common/" \
+                "root@${agent_ip}:/srv/agent/busibox_common/" || {
+                error "Failed to sync busibox_common for agent tests"
+                return 1
+            }
+
             # Pytest uses test_agent database (not the production agent database)
             # Also set TEST_DATABASE_URL which the agent conftest.py checks first
             # AuthTestClient bootstraps the test user automatically via magic link.
@@ -1457,11 +1560,43 @@ run_container_tests() {
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
             test_env="${test_env} AUTHZ_TEST_MODE_ENABLED=true"
             test_env="${test_env} TEST_USER_ID=${test_user_id}"
+            test_env="${test_env} CONFIG_API_URL=http://${authz_ip}:8012"
+            local litellm_ip
+            litellm_ip=$(get_container_ip litellm "$env")
+            test_env="${test_env} LITELLM_HOST=${litellm_ip}"
             test_env="${test_env} DATA_URL=http://${data_ip}:8000"
             test_env="${test_env} SEARCH_URL=http://${search_ip}:8003"  # Search is on port 8003
-            
+
+            # LLM key-restore: restart litellm from test runner (agent-lxc has no docker/SSH)
+            if ! orchestrate_llm_key_restore_cycle \
+                "${agent_ip}" "${litellm_ip}" "${test_env}" \
+                "${_pytest_path}" "${_pytest_extra}" "${_pytest_base_flags}"; then
+                save_test_result "agent" "failed"
+                return 1
+            fi
+
+            # Build pytest -k expression (quote multi-word expressions for SSH)
+            local _agent_pytest_k_expr=""
+            if [[ "${_pytest_extra}" == -k\ * ]]; then
+                _agent_pytest_k_expr="${_pytest_extra#-k }"
+            fi
+            local _agent_pytest_invoke="${_pytest_path} ${_pytest_base_flags}"
+            if [[ "${LLM_RESTART_ORCHESTRATED:-0}" == "1" ]]; then
+                test_env="${test_env} LLM_RESTART_ORCHESTRATED=1"
+                if [[ -n "${_agent_pytest_k_expr}" ]]; then
+                    _agent_pytest_k_expr="${_agent_pytest_k_expr} and not keys_survive"
+                elif [[ "${_pytest_path}" == *"test_llm_key_restore"* ]]; then
+                    _agent_pytest_k_expr="not keys_survive"
+                fi
+            fi
+            if [[ -n "${_agent_pytest_k_expr}" ]]; then
+                _agent_pytest_invoke="${_agent_pytest_invoke} -k '${_agent_pytest_k_expr}'"
+            elif [[ -n "${_pytest_extra}" ]]; then
+                _agent_pytest_invoke="${_agent_pytest_invoke} ${_pytest_extra}"
+            fi
+
             # Agent uses .venv not venv
-            if ssh "root@${agent_ip}" "cd /srv/agent && source .venv/bin/activate && source .env 2>/dev/null || true && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
+            if ssh "root@${agent_ip}" "cd /srv/agent && source .venv/bin/activate && source .env 2>/dev/null || true && export ${test_env} && python -m pytest ${_agent_pytest_invoke}"; then
                 success "Agent tests passed!"
                 save_test_result "agent" "passed"
             else
@@ -1477,6 +1612,15 @@ run_container_tests() {
         bridge)
             header "Bridge Service Tests" 70
             info "Running bridge tests on ${bridge_ip}..."
+
+            # Sync latest test files from repo to container (no full redeploy needed)
+            info "Syncing bridge tests to container..."
+            rsync -rltz --delete --no-owner --no-group \
+                "${REPO_ROOT}/srv/bridge/tests/" \
+                "root@${bridge_ip}:/srv/bridge/tests/" || {
+                error "Failed to sync bridge tests"
+                return 1
+            }
 
             local test_env="BRIDGE_API_URL=http://${bridge_ip}:8081"
             test_env="${test_env} BRIDGE_API_PORT=8081"
@@ -1496,9 +1640,44 @@ run_container_tests() {
                 return 1
             fi
             ;;
+        config)
+            header "Config API Tests" 70
+            info "Running config-api tests on ${config_ip}..."
+
+            # Sync latest test files from repo to container (no full redeploy needed)
+            info "Syncing config-api tests to container..."
+            rsync -rltz --delete --no-owner --no-group \
+                "${REPO_ROOT}/srv/config/tests/" \
+                "root@${config_ip}:/opt/config/app/tests/" || {
+                error "Failed to sync config-api tests"
+                return 1
+            }
+
+            local test_env="CONFIG_API_URL=http://${config_ip}:8012"
+            test_env="${test_env} POSTGRES_HOST=${postgres_ip}"
+            test_env="${test_env} POSTGRES_USER=${db_user}"
+            test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
+            test_env="${test_env} POSTGRES_DB=test_config"
+            test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
+            test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
+            test_env="${test_env} AUTHZ_TEST_MODE_ENABLED=true"
+            test_env="${test_env} TEST_USER_ID=${test_user_id}"
+
+            if ssh "root@${config_ip}" "cd /opt/config/app && source /opt/config/venv/bin/activate && source /opt/config/.env 2>/dev/null || true && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
+                success "Config API tests passed!"
+                save_test_result "config" "passed"
+            else
+                error "Config API tests failed"
+                echo ""
+                warn "To rerun failed tests, check output above for pytest filter"
+                echo ""
+                save_test_result "config" "failed"
+                return 1
+            fi
+            ;;
         all)
             local failed_services=()
-            for svc in authz data search agent bridge; do
+            for svc in authz data search agent bridge config; do
                 if ! run_container_tests "$svc" "$env"; then
                     failed_services+=("$svc")
                 fi

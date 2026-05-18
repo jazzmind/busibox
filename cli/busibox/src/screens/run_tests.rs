@@ -180,9 +180,13 @@ fn render_custom_args(f: &mut Frame, app: &App) {
         content,
     );
 
+    let hint = if svc_name == "All Services" {
+        "Patterns: llm  |  integration/test_llm  |  tests/unit/test_foo.py::test_bar"
+    } else {
+        "Patterns: llm  |  integration/test_llm  |  tests/unit/test_foo.py::test_bar  (within this service)"
+    };
     f.render_widget(
-        Paragraph::new("e.g.  tests/integration/test_foo.py::test_bar   or   tests/unit")
-            .style(theme::muted()),
+        Paragraph::new(hint).style(theme::muted()),
         inner[0],
     );
 

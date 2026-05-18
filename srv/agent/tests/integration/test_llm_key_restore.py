@@ -19,14 +19,14 @@ Run with:
 
 Prerequisites:
     - AGENT_API_URL env var pointing at a running agent-api
-    - LITELLM_BASE_URL env var (or discoverable via agent-api health)
+    - LITELLM_HOST (or LITELLM_IP) for Proxmox — SSH systemctl restart on litellm-lxc
+    - Docker available for docker-compose environments (optional)
     - At least one cloud provider key already configured (Bedrock or OpenAI)
-    - Docker available so we can restart the litellm container
     - Admin credentials available via the test auth_client fixture
 """
 
-import asyncio
 import os
+import shutil
 import subprocess
 import time
 import pytest
@@ -36,7 +36,9 @@ import httpx
 # Service config
 # ---------------------------------------------------------------------------
 AGENT_API_URL = os.getenv("AGENT_API_URL", "http://localhost:8000")
+LITELLM_HOST = os.getenv("LITELLM_HOST", os.getenv("LITELLM_IP", "litellm"))
 LITELLM_CONTAINER_NAME = os.getenv("LITELLM_CONTAINER_NAME", "litellm")
+LITELLM_SYSTEMD_SERVICE = os.getenv("LITELLM_SYSTEMD_SERVICE", "litellm")
 LITELLM_RESTART_TIMEOUT = int(os.getenv("LITELLM_RESTART_TIMEOUT", "90"))
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
@@ -64,24 +66,69 @@ def _get_configured_providers(headers: dict) -> list[str]:
     return [p["provider"] for p in providers if p.get("configured")]
 
 
-def _restart_litellm_container() -> bool:
-    """Restart the LiteLLM Docker container. Returns True if successful."""
+def _restart_litellm_via_ssh(host: str) -> bool:
+    """Restart LiteLLM on a Proxmox LXC via SSH + systemctl."""
+    result = subprocess.run(
+        [
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ConnectTimeout=15",
+            f"root@{host}",
+            f"systemctl restart {LITELLM_SYSTEMD_SERVICE}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    return result.returncode == 0
+
+
+def _restart_litellm_via_docker() -> bool:
+    """Restart the LiteLLM Docker container (local docker-compose dev)."""
+    if not shutil.which("docker"):
+        return False
     result = subprocess.run(
         ["docker", "compose", "restart", LITELLM_CONTAINER_NAME],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=60,
     )
-    if result.returncode != 0:
-        # Try plain docker restart as fallback (e.g. if running in a plain Docker env)
-        result2 = subprocess.run(
-            ["docker", "restart", LITELLM_CONTAINER_NAME],
+    if result.returncode == 0:
+        return True
+    result2 = subprocess.run(
+        ["docker", "restart", LITELLM_CONTAINER_NAME],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return result2.returncode == 0
+
+
+def _restart_litellm() -> bool:
+    """
+    Restart LiteLLM using the best available method.
+
+    Proxmox: SSH to litellm-lxc and systemctl restart (LITELLM_HOST from test runner).
+    Docker: docker compose restart litellm.
+    Override: set LITELLM_RESTART_CMD to a custom shell command.
+    """
+    custom_cmd = os.getenv("LITELLM_RESTART_CMD")
+    if custom_cmd:
+        result = subprocess.run(
+            custom_cmd,
+            shell=True,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=90,
         )
-        return result2.returncode == 0
-    return True
+        return result.returncode == 0
+
+    # Proxmox/LXC first — agent-lxc has no docker but shares SSH keys with peer LXCs
+    if _restart_litellm_via_ssh(LITELLM_HOST):
+        return True
+
+    return _restart_litellm_via_docker()
 
 
 def _wait_for_litellm_healthy(headers: dict, timeout: int = LITELLM_RESTART_TIMEOUT) -> bool:
@@ -92,13 +139,97 @@ def _wait_for_litellm_healthy(headers: dict, timeout: int = LITELLM_RESTART_TIME
             resp = httpx.get(f"{AGENT_API_URL}/llm/health", headers=headers, timeout=5)
             if resp.status_code == 200:
                 data = resp.json()
-                # LiteLLM is healthy if the agent can reach it
-                if data.get("litellm_reachable") or data.get("status") == "healthy":
+                # HealthResponse uses "litellm" (bool), not "litellm_reachable"
+                if data.get("litellm") or data.get("litellm_reachable"):
                     return True
         except Exception:
             pass
         time.sleep(3)
     return False
+
+
+# ---------------------------------------------------------------------------
+# Shared restart-cycle steps (used by monolithic + orchestrated Proxmox runs)
+# ---------------------------------------------------------------------------
+
+_STATE_FILE = "/tmp/busibox_llm_key_restore_state.json"
+
+
+def _prepare_restart_cycle(auth_client) -> tuple[dict, list[str]]:
+    """Steps 1-2: confirm providers and config-api persistence. Returns (headers, providers)."""
+    import json
+
+    headers = _agent_headers(auth_client)
+    initial_providers = _get_configured_providers(headers)
+    if not initial_providers:
+        pytest.skip(
+            "No cloud providers configured in LiteLLM. "
+            "Save Bedrock or OpenAI keys via Settings > AI Models before running this test."
+        )
+
+    restore_resp = httpx.post(
+        f"{AGENT_API_URL}/llm/keys/verify-restore",
+        headers=headers,
+        timeout=30,
+    )
+    assert restore_resp.status_code == 200, (
+        f"verify-restore failed: {restore_resp.status_code} {restore_resp.text}"
+    )
+    restore_data = restore_resp.json()
+    if restore_data.get("keys_found", 0) == 0:
+        pytest.skip(
+            "Keys are not persisted in config-api (keys_found=0). "
+            "Re-save provider keys via the admin UI so they are backed up to config-api, "
+            "then re-run this test."
+        )
+
+    with open(_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"providers": initial_providers}, f)
+
+    return headers, initial_providers
+
+
+def _verify_after_restart(auth_client, headers: dict | None = None, initial_providers: list[str] | None = None):
+    """Steps 4-6: wait for LiteLLM, run verify-restore, assert keys/providers restored."""
+    import json
+
+    if headers is None or initial_providers is None:
+        if os.path.isfile(_STATE_FILE):
+            with open(_STATE_FILE, encoding="utf-8") as f:
+                state = json.load(f)
+            initial_providers = state.get("providers", [])
+        else:
+            initial_providers = []
+        headers = _agent_headers(auth_client)
+
+    time.sleep(5)
+    assert _wait_for_litellm_healthy(headers), (
+        f"LiteLLM did not become healthy within {LITELLM_RESTART_TIMEOUT}s after restart. "
+        "Check LiteLLM logs on the litellm-lxc host."
+    )
+
+    restore_resp = httpx.post(
+        f"{AGENT_API_URL}/llm/keys/verify-restore",
+        headers=headers,
+        timeout=30,
+    )
+    assert restore_resp.status_code == 200, (
+        f"verify-restore after restart failed: {restore_resp.status_code} {restore_resp.text}"
+    )
+    restore_data = restore_resp.json()
+    keys_after = restore_data.get("keys_found", 0)
+    assert keys_after > 0, (
+        f"No provider keys found after LiteLLM restart + restore attempt. "
+        f"verify-restore response: {restore_data}. "
+        f"Check agent-api logs for [RESTORE] entries."
+    )
+
+    providers_after = _get_configured_providers(headers)
+    for provider in initial_providers:
+        assert provider in providers_after, (
+            f"Provider '{provider}' was configured before restart but is missing after restore. "
+            f"Providers after: {providers_after}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -108,92 +239,45 @@ def _wait_for_litellm_healthy(headers: dict, timeout: int = LITELLM_RESTART_TIME
 class TestLLMKeyRestoreAfterRestart:
     """Prove that LLM provider keys are automatically restored after a LiteLLM restart."""
 
+    def test_keys_survive_litellm_restart_prepare(self, auth_client):
+        """
+        Part 1 of restart cycle (Proxmox orchestration): verify preconditions only.
+
+        test.sh runs: this test → systemctl restart litellm on litellm-lxc → part 2.
+        """
+        _prepare_restart_cycle(auth_client)
+
+    def test_keys_survive_litellm_restart_verify(self, auth_client):
+        """
+        Part 2 of restart cycle (Proxmox orchestration): verify restore after external restart.
+
+        Requires LITELLM_RESTART_EXTERNAL=1 (set by test.sh after restarting litellm).
+        """
+        if os.getenv("LITELLM_RESTART_EXTERNAL") != "1":
+            pytest.skip("Part 2 runs after test runner restarts LiteLLM (orchestrated flow)")
+        _verify_after_restart(auth_client)
+
     def test_keys_survive_litellm_restart(self, auth_client):
         """
-        Full end-to-end restart test.
+        Full end-to-end restart test (Docker / environments where agent can restart LiteLLM).
 
-        Steps:
-        1. Confirm at least one cloud provider is configured.
-        2. Confirm keys are persisted in config-api (via verify-restore reporting keys_found > 0).
-        3. Restart LiteLLM container.
-        4. Wait for LiteLLM to be healthy again.
-        5. Reset agent-api's in-memory key state via POST /llm/keys/verify-restore.
-        6. Assert providers are still configured (restore succeeded).
+        On Proxmox, agent-lxc cannot SSH to litellm-lxc — use orchestrated prepare/verify tests
+        via test.sh instead. Skipped when LLM_RESTART_ORCHESTRATED=1.
         """
-        headers = _agent_headers(auth_client)
+        if os.getenv("LLM_RESTART_ORCHESTRATED") == "1":
+            pytest.skip("Restart cycle run via test.sh orchestration on Proxmox")
 
-        # Step 1: Verify at least one provider is configured before we start
-        initial_providers = _get_configured_providers(headers)
-        if not initial_providers:
-            pytest.skip(
-                "No cloud providers configured in LiteLLM. "
-                "Save Bedrock or OpenAI keys via Settings > AI Models before running this test."
-            )
+        headers, initial_providers = _prepare_restart_cycle(auth_client)
 
-        # Step 2: Confirm config-api has the durable copy
-        restore_resp = httpx.post(
-            f"{AGENT_API_URL}/llm/keys/verify-restore",
-            headers=headers,
-            timeout=30,
-        )
-        assert restore_resp.status_code == 200, (
-            f"verify-restore failed: {restore_resp.status_code} {restore_resp.text}"
-        )
-        restore_data = restore_resp.json()
-        keys_in_config_api = restore_data.get("keys_found", 0)
-        if keys_in_config_api == 0:
-            pytest.skip(
-                "Keys are not persisted in config-api (keys_found=0). "
-                "Re-save provider keys via the admin UI so they are backed up to config-api, "
-                "then re-run this test."
-            )
-
-        # Step 3: Restart LiteLLM
-        restarted = _restart_litellm_container()
+        restarted = _restart_litellm()
         if not restarted:
             pytest.skip(
-                f"Could not restart LiteLLM container '{LITELLM_CONTAINER_NAME}'. "
-                "Ensure Docker is available and the container name matches LITELLM_CONTAINER_NAME env var."
+                f"Could not restart LiteLLM on host '{LITELLM_HOST}'. "
+                "On Proxmox, re-run with ARGS=tests/integration/test_llm_key_restore.py "
+                "or ARGS='-k llm' (test runner orchestrates the restart)."
             )
 
-        # Give LiteLLM a moment to actually stop before we poll health
-        time.sleep(5)
-
-        # Step 4: Wait for LiteLLM to come back
-        is_healthy = _wait_for_litellm_healthy(headers)
-        assert is_healthy, (
-            f"LiteLLM did not become healthy within {LITELLM_RESTART_TIMEOUT}s after restart. "
-            "Check LiteLLM container logs."
-        )
-
-        # Step 5: Reset agent-api's in-memory key state and trigger restore
-        # This simulates what happens on the first authenticated request after restart.
-        restore_resp2 = httpx.post(
-            f"{AGENT_API_URL}/llm/keys/verify-restore",
-            headers=headers,
-            timeout=30,
-        )
-        assert restore_resp2.status_code == 200, (
-            f"verify-restore after restart failed: {restore_resp2.status_code} {restore_resp2.text}"
-        )
-        restore_data2 = restore_resp2.json()
-
-        # Step 6: Assert keys were restored
-        keys_after = restore_data2.get("keys_found", 0)
-        assert keys_after > 0, (
-            f"No provider keys found after LiteLLM restart + restore attempt. "
-            f"verify-restore response: {restore_data2}. "
-            f"This means _ensure_litellm_keys failed to restore from config-api. "
-            f"Check agent-api logs for [RESTORE] entries."
-        )
-
-        # Also verify the provider list still matches what we had before
-        providers_after = _get_configured_providers(headers)
-        for provider in initial_providers:
-            assert provider in providers_after, (
-                f"Provider '{provider}' was configured before restart but is missing after restore. "
-                f"Providers after: {providers_after}"
-            )
+        _verify_after_restart(auth_client, headers=headers, initial_providers=initial_providers)
 
     def test_verify_restore_reports_keys(self, auth_client):
         """

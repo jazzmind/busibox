@@ -345,10 +345,13 @@ async def exchange_token_zero_trust(
         if resource_id:
             exchange_data["resource_id"] = resource_id
 
+        from .test_mode import authz_request_headers
+
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
                 token_url,
                 data=exchange_data,
+                headers=authz_request_headers(),
             )
             
             if response.status_code != 200:
