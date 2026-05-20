@@ -1,4 +1,5 @@
 mod app;
+mod cli_commands;
 mod modules;
 mod screens;
 mod theme;
@@ -6,21 +7,36 @@ mod tui;
 
 use app::{App, Screen};
 use crate::modules::remote;
+use busibox_core::profiles::{AddonPack, BusiboxProfile};
 use clap::Parser;
 use color_eyre::Result;
 use crossterm::event::{self, Event, KeyEventKind};
-use std::io;
+use std::io::{self, IsTerminal};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 static QUIT_SIGNAL: AtomicBool = AtomicBool::new(false);
 
+/// Busibox is one binary that runs as either a CLI or a TUI:
+///
+/// - `busibox <subcommand> ...` → CLI mode (scriptable, no terminal needed)
+/// - `busibox` in an interactive terminal → TUI mode (full ratatui UI)
+/// - `busibox` piped / non-TTY → prints help and exits, instead of hanging
+///   on a terminal that doesn't exist
 #[derive(Parser)]
-#[command(name = "busibox", about = "Busibox Infrastructure CLI")]
+#[command(
+    name = "busibox",
+    about = "Busibox Infrastructure CLI / UI",
+    version = cli_commands::VERSION,
+    long_about = "Busibox manages a local-LLM infrastructure platform. \
+Running `busibox` in an interactive terminal launches the full text UI; \
+running with a subcommand (e.g. `busibox up --profile lite`) stays in CLI mode."
+)]
 struct Cli {
     /// Path to the busibox repository root
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     root: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -29,11 +45,136 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum Command {
-    /// Import a profile from a .busibox-export file
+    /// Print the deployment plan for a profile (does not deploy yet).
+    Up {
+        /// Profile preset: lite (default), standard, full
+        #[arg(long, default_value = "lite")]
+        profile: String,
+        /// Add-on packs (repeatable): local-models, graph, media, fleet,
+        /// rag-milvus, rag-qdrant
+        #[arg(long = "pack")]
+        packs: Vec<String>,
+    },
+    /// Read-only environment check (Docker, hardware, profile sanity).
+    Doctor {
+        #[arg(long, default_value = "lite")]
+        profile: String,
+        #[arg(long = "pack")]
+        packs: Vec<String>,
+    },
+    /// Deterministic verification suitable for CI / agents.
+    Verify {
+        #[arg(long, default_value = "lite")]
+        profile: String,
+        #[arg(long = "pack")]
+        packs: Vec<String>,
+    },
+    /// Print the version and exit.
+    Version,
+    /// Inspect Busibox profile presets.
+    #[command(subcommand)]
+    Profile(ProfileCmd),
+    /// Import a profile from a .busibox-export file.
     Import {
         /// Path to the .busibox-export file
         file: PathBuf,
     },
+}
+
+#[derive(clap::Subcommand)]
+enum ProfileCmd {
+    /// List available profile presets and add-on packs.
+    List,
+    /// Show the resolved service list for a profile.
+    Show {
+        /// Profile name (lite, standard, full)
+        name: String,
+        /// Add-on packs (repeatable)
+        #[arg(long = "pack")]
+        packs: Vec<String>,
+    },
+}
+
+/// Parse strings into `AddonPack` values, exiting 2 on the first failure.
+fn parse_packs(raw: &[String]) -> std::result::Result<Vec<AddonPack>, i32> {
+    raw.iter()
+        .map(|s| {
+            AddonPack::from_str(s).map_err(|e| {
+                eprintln!("error: {e}");
+            })
+        })
+        .collect::<std::result::Result<Vec<_>, ()>>()
+        .map_err(|_| 2)
+}
+
+fn parse_profile(raw: &str) -> std::result::Result<BusiboxProfile, i32> {
+    BusiboxProfile::from_str(raw).map_err(|e| {
+        eprintln!("error: {e}");
+        2
+    })
+}
+
+/// Dispatch a CLI subcommand and return the process exit code.  Returns
+/// `None` when the user did not give a subcommand and we should fall
+/// through to the TUI launcher.
+fn dispatch_cli(cli: &Cli, repo_root: &std::path::Path) -> Option<i32> {
+    let cmd = cli.command.as_ref()?;
+    let code = match cmd {
+        Command::Version => cli_commands::version(),
+        Command::Up { profile, packs } => {
+            let p = match parse_profile(profile) {
+                Ok(p) => p,
+                Err(c) => return Some(c),
+            };
+            let packs = match parse_packs(packs) {
+                Ok(p) => p,
+                Err(c) => return Some(c),
+            };
+            cli_commands::up_plan(p, &packs, false)
+        }
+        Command::Doctor { profile, packs } => {
+            let p = match parse_profile(profile) {
+                Ok(p) => p,
+                Err(c) => return Some(c),
+            };
+            let packs = match parse_packs(packs) {
+                Ok(p) => p,
+                Err(c) => return Some(c),
+            };
+            cli_commands::doctor(repo_root, p, &packs)
+        }
+        Command::Verify { profile, packs } => {
+            let p = match parse_profile(profile) {
+                Ok(p) => p,
+                Err(c) => return Some(c),
+            };
+            let packs = match parse_packs(packs) {
+                Ok(p) => p,
+                Err(c) => return Some(c),
+            };
+            cli_commands::verify(repo_root, p, &packs)
+        }
+        Command::Profile(ProfileCmd::List) => cli_commands::profile_list(),
+        Command::Profile(ProfileCmd::Show { name, packs }) => {
+            cli_commands::profile_show(name, packs)
+        }
+        Command::Import { file } => {
+            return Some(match handle_import_profile(repo_root, file) {
+                Ok(()) => 0,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    1
+                }
+            });
+        }
+    };
+    Some(match code {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    })
 }
 
 fn main() -> Result<()> {
@@ -49,12 +190,27 @@ fn main() -> Result<()> {
 
     let repo_root = cli
         .root
+        .clone()
         .or_else(|| modules::profile::find_repo_root().ok())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    // Handle subcommands that run without the TUI
-    if let Some(Command::Import { file }) = cli.command {
-        return handle_import_profile(&repo_root, &file);
+    // CLI mode — any subcommand short-circuits the TUI.
+    if let Some(code) = dispatch_cli(&cli, &repo_root) {
+        std::process::exit(code);
+    }
+
+    // No subcommand.  Only enter the TUI if we actually have a terminal;
+    // otherwise print help so we don't hang in CI / pipes.
+    if !io::stdout().is_terminal() || !io::stdin().is_terminal() {
+        use clap::CommandFactory;
+        let mut cmd = Cli::command();
+        eprintln!(
+            "busibox: no subcommand given and stdin/stdout is not a terminal.\n\
+             Use one of the subcommands below, or run from an interactive shell to\n\
+             enter the TUI.\n"
+        );
+        let _ = cmd.print_long_help();
+        std::process::exit(2);
     }
 
     let mut app = App::new(repo_root.clone());
