@@ -1,3 +1,4 @@
+import logging
 import uvicorn
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
@@ -5,6 +6,12 @@ from contextlib import asynccontextmanager
 from routes import admin, oauth, keystore, users, auth, audit, bindings, roles, analytics
 from services.postgres import PostgresService
 from config import Config
+
+# Ensure app-level INFO logs reach the configured handlers. Without this the
+# root logger stays at WARNING and DEV_MODE diagnostic output (magic-link URLs,
+# TOTP codes) is silently dropped, even though uvicorn's access log appears
+# because uvicorn configures its own loggers separately.
+logging.getLogger().setLevel(logging.INFO)
 
 # Import shared test mode utilities
 try:
