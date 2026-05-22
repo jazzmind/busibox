@@ -1,271 +1,162 @@
-# Busibox Quickstart Guide
+# Busibox Quickstart
 
-**Complete local LLM infrastructure platform on Proxmox**
+> **The fastest path to a running Busibox is Docker + a cloud LLM API key.**
+> No GPU, no model downloads, no Proxmox needed for a first run.
 
-For comprehensive documentation, see [`specs/001-create-an-initial/quickstart.md`](specs/001-create-an-initial/quickstart.md)
-
----
-
-## Prerequisites
-
-**Proxmox Host**:
-- Proxmox VE installed and running
-- Ubuntu 22.04 LXC template downloaded
-- Network bridge configured (vmbr0)
-- SSH access to Proxmox host
-
-**Admin Workstation**:
-- Ansible 2.15+
-- SSH access to Proxmox host and containers
-- Python 3.8+ with pip
+This guide gets you to a working Portal at `http://localhost:3000` in
+~15 minutes. For multi-host (Proxmox / Kubernetes / fleet) deployments, see
+[docs/administrators/01-quickstart.md](docs/administrators/01-quickstart.md).
 
 ---
 
-## Quick Start (Production)
+## 1. Prerequisites
 
-### 1. Provision LXC Containers (Proxmox Host)
+- **Docker + Docker Compose** (Docker Desktop 4.20+ on macOS / Windows, or
+  Docker Engine 24+ on Linux)
+- **~16 GB free disk** for images and volumes
+- **One LLM provider key**, either:
+  - OpenAI: `OPENAI_API_KEY`
+  - Anthropic: `ANTHROPIC_API_KEY`
+  - AWS Bedrock: `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` + `AWS_REGION_NAME`
+- A **GitHub personal access token** with `read:packages` scope, used to
+  install the `@jazzmind/busibox-app` shared library
+  ([create one here](https://github.com/settings/tokens))
+
+You do **not** need an NVIDIA GPU, an Apple Silicon Mac, vLLM, MLX, or
+Ollama for a first run.
+
+---
+
+## 2. Clone and configure
 
 ```bash
-# On Proxmox host
-cd /root
 git clone https://github.com/jazzmind/busibox.git
-cd busibox/provision/pct
+cd busibox
 
-# Configure your environment
-vim vars.env  # Adjust CTIDs, IPs, template, storage if needed
-
-# Create containers
-bash create_lxc_base.sh
+cp env.local.example .env.local
 ```
 
-**Creates 7 containers**:
-- `200` - proxy-lxc (10.96.200.200)
-- `201` - apps-lxc (10.96.200.201)
-- `202` - agent-lxc (10.96.200.202)
-- `203` - pg-lxc (10.96.200.203)
-- `204` - milvus-lxc (10.96.200.204)
-- `205` - files-lxc (10.96.200.205)
-- `206` - ingest-lxc (10.96.200.206)
-- `207` - litellm-lxc (10.96.200.207)
-- `208` - vllm-lxc (10.96.200.208)
-
-### 2. Deploy Services (Admin Workstation)
+Open `.env.local` and set, at minimum:
 
 ```bash
-# On your workstation
-cd provision/ansible
+# One of these — whichever provider you have a key for
+OPENAI_API_KEY=sk-...
+# ANTHROPIC_API_KEY=sk-ant-...
+# AWS_ACCESS_KEY_ID=...
+# AWS_SECRET_ACCESS_KEY=...
+# AWS_REGION_NAME=us-east-1
 
-# Configure inventory (IPs should match vars.env)
-vim inventory/hosts.yml
+# Required to install the @jazzmind/busibox-app library at build time
+GITHUB_AUTH_TOKEN=ghp_...
 
-# Test connectivity
-make ping
-
-# Deploy all services
-make all
+# Optional — first user to sign up with this email becomes admin
+ADMIN_EMAIL=admin@localhost
 ```
 
-This deploys:
-- **PostgreSQL** with schema and RLS policies
-- **MinIO** with documents bucket
-- **Milvus** with vector collection
-- **Redis** + Ingest Worker
-- **Agent API** (FastAPI)
-- **Node.js** environment
-- **Deploywatch** for auto-updates
-
-### 3. Verify Deployment
-
-```bash
-cd provision/ansible
-make verify
-```
-
-Expected output:
-```
-✓ PostgreSQL is healthy
-✓ MinIO is healthy
-✓ Milvus is healthy
-✓ Agent API is healthy (or not deployed yet)
-✓ Database schema verified
-✓ Database migrations verified
-```
-
-### 4. Access Services
-
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| **MinIO Console** | http://10.96.200.28:9001 | minioadmin /  |
-| **PostgreSQL** | 10.96.200.26:5432 | busibox_user / (see Ansible vars) |
-| **Milvus** | 10.96.200.27:19530 | (no auth) |
-| **Agent API** | http://10.96.200.30:8000/docs | (JWT required) |
-| **Redis** | 10.96.200.29:6379 | (no auth - internal) |
+The defaults for `POSTGRES_PASSWORD`, `MINIO_SECRET_KEY`,
+`AUTHZ_MASTER_KEY`, `BETTER_AUTH_SECRET`, etc. in `env.local.example` are
+**only suitable for local evaluation**. Rotate them before exposing the
+stack to anyone but yourself. The Busibox CLI does this automatically for
+non-local profiles.
 
 ---
 
-## Testing Mode
-
-Test infrastructure provisioning safely without affecting production:
+## 3. Start the stack
 
 ```bash
-# Create test environment (IDs 301-307, TEST- prefix)
-bash test-infrastructure.sh full
-
-# Or step-by-step:
-bash test-infrastructure.sh provision  # Create & configure
-bash test-infrastructure.sh verify     # Health checks
-bash test-infrastructure.sh cleanup    # Clean up
+make docker-up
 ```
 
-See [`docs/testing.md`](docs/testing.md) for details.
+This pulls and starts:
+
+- **Infrastructure**: PostgreSQL, Redis, MinIO, Milvus, Neo4j
+- **APIs**: AuthZ, Data, Search, Agent, Docs, Embedding, Deploy
+- **LLM gateway**: LiteLLM (configured with whichever provider key you set)
+- **Frontend**: nginx + the `core-apps` container running the Portal and
+  Agents apps
+
+First boot takes 5–15 minutes depending on your network and CPU.
+
+When `docker compose ps` shows everything `healthy`, open
+**<http://localhost:3000>** and sign up. The first account that matches
+`ADMIN_EMAIL` (or the first account at all if `ADMIN_EMAIL` is unset) is
+granted admin.
 
 ---
 
-## Post-Deployment Configuration
-
-### Change Default Passwords
-
-**MinIO** (files-lxc):
-```bash
-ssh root@10.96.200.28
-vim /srv/minio/.env
-# Change MINIO_ROOT_USER and MINIO_ROOT_PASSWORD
-docker compose -f /srv/minio/docker-compose.yml restart
-```
-
-**PostgreSQL** (pg-lxc):
-```bash
-ssh root@10.96.200.26
-sudo -u postgres psql
-ALTER USER busibox_user WITH PASSWORD 'new_secure_password';
-```
-
-**JWT Secret** (agent-lxc):
-```bash
-ssh root@10.96.200.30
-vim /srv/agent/.env
-# Change JWT_SECRET_KEY to a secure random value
-systemctl restart agent-api
-```
-
-### Configure LLM Provider
-
-The platform uses liteLLM as a unified gateway. Configure your LLM provider:
-
-**Option 1: Ollama (Local)**
-```bash
-# Install Ollama on agent-lxc or separate container
-curl -fsSL https://ollama.com/install.sh | sh
-ollama serve
-
-# Update agent API config
-vim /srv/agent/.env
-# Set LITELLM_BASE_URL=http://localhost:11434
-```
-
-**Option 2: OpenAI**
-```bash
-# Update agent API config
-vim /srv/agent/.env
-# Set LITELLM_API_KEY=sk-...
-# Set LITELLM_BASE_URL=https://api.openai.com/v1
-```
-
-**Option 3: Custom Provider**
-```bash
-# Configure liteLLM on agent-lxc
-vim /etc/litellm/config.yaml
-# Add your provider configuration
-systemctl restart litellm
-```
-
-### Initialize First User
+## 4. Verify
 
 ```bash
-# Connect to PostgreSQL
-psql -h 10.96.200.26 -U busibox_user -d busibox
+# Watch service health
+docker compose ps
 
-# Create admin user
-INSERT INTO users (username, email, password_hash, is_active)
-VALUES ('admin', 'admin@example.com', 'hash_here', true);
+# Tail a service log
+docker compose logs -f authz-api
 
-# Assign admin role
-INSERT INTO user_roles (user_id, role_id)
-VALUES (
-  (SELECT id FROM users WHERE username = 'admin'),
-  (SELECT id FROM roles WHERE name = 'admin')
-);
+# Hit a health endpoint
+curl -s http://localhost:8001/health   # AuthZ
+curl -s http://localhost:8000/health   # Agent
 ```
+
+Try the platform end-to-end:
+
+1. Sign up at <http://localhost:3000>.
+2. Upload a PDF or text file via the Portal.
+3. Wait for ingestion (the Data API extracts, chunks, and embeds it).
+4. Ask the Agent a question that should be answered from the file.
+5. Confirm citations point back to your document.
+
+---
+
+## 5. Bring your own model (optional)
+
+The first-run path uses your cloud API key through LiteLLM, which means
+**Busibox itself is fully local but inference happens at your provider**.
+For air-gapped or fully on-prem deployments, install the local-model
+add-on pack — it adds Ollama / vLLM / MLX backends behind the same
+LiteLLM gateway, so your application code does not change.
+
+See [docs/administrators/local-models-addon.md](docs/administrators/local-models-addon.md)
+for the design and supported hardware.
+
+---
+
+## 6. Going further
+
+| You want to… | Go to |
+|---|---|
+| Configure SSO, custom domain, TLS | `docs/administrators/03-configure.md` |
+| Deploy to Proxmox LXC | `docs/administrators/02-install.md` and the `busibox` CLI |
+| Deploy to Kubernetes | `docs/administrators/11-kubernetes.md` |
+| Build a custom app on Busibox | `docs/administrators/04-apps.md` |
+| Add a new bridge channel (Telegram, Slack, …) | `docs/administrators/10-bridge-api-integrations.md` |
+| Run the security test suite | `make test-security` (see `tests/security/`) |
+| Contribute | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| Report a vulnerability | [SECURITY.md](SECURITY.md) |
 
 ---
 
 ## Troubleshooting
 
-### Services Not Starting
+**A service is stuck in `starting`.** First boots are slow because the
+PostgreSQL schema, Milvus collections, and Neo4j constraints are all
+being created. Give it 5–15 minutes; then check `docker compose logs <svc>`.
 
-```bash
-# Check service status
-ssh root@<container-ip>
-systemctl status <service-name>
+**`@jazzmind/busibox-app` install fails.** You need a GitHub PAT with
+`read:packages` scope set as `GITHUB_AUTH_TOKEN`. The default
+`ghp_your_github_token` placeholder will fail with a 401.
 
-# View logs
-journalctl -u <service-name> -n 50 -f
-```
+**Agent returns "no LLM provider configured".** Confirm one of
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or the AWS Bedrock variables is set
+in `.env.local`, then `make docker-up` again to apply.
 
-### Health Checks Failing
+**"password authentication failed" against Postgres.** You changed
+`POSTGRES_PASSWORD` after the volume was created. Either revert the
+password or run `docker compose down -v` to wipe state and start fresh
+(this **deletes** uploaded documents and search indexes).
 
-```bash
-# Run health checks manually
-ssh root@10.96.200.26
-/usr/local/bin/minio-health-check && echo "MinIO OK"
-
-ssh root@10.96.200.27
-/usr/local/bin/milvus-health-check && echo "Milvus OK"
-
-ssh root@10.96.200.30
-/usr/local/bin/agent-api-health-check && echo "Agent OK"
-```
-
-### Database Connection Errors
-
-```bash
-# Test from agent container
-ssh root@10.96.200.30
-psql -h 10.96.200.26 -U busibox_user -d busibox -c "SELECT 1"
-```
-
-### Ansible Connection Errors
-
-```bash
-# Test SSH connectivity
-ssh root@10.96.200.26
-
-# Check Ansible inventory
-cd provision/ansible
-ansible -i inventory/hosts.yml all -m ping
-```
+For more, see `docs/administrators/08-troubleshooting.md`.
 
 ---
 
-## Next Steps
-
-1. **Upload Test File**: Use Agent API `/files/upload` endpoint
-2. **Verify Ingestion**: Check Redis streams and Milvus collection
-3. **Test Search**: Use Agent API `/search` endpoint
-4. **Configure OpenWebUI**: Point to Agent API LLM gateway
-5. **Deploy Custom Apps**: Add to deploywatch configuration
-
----
-
-## Additional Resources
-
-- **Architecture**: [`docs/architecture.md`](docs/architecture.md)
-- **Testing Guide**: [`docs/testing.md`](docs/testing.md)
-- **Full Quickstart**: [`specs/001-create-an-initial/quickstart.md`](specs/001-create-an-initial/quickstart.md)
-- **API Documentation**: http://10.96.200.30:8000/docs (after deployment)
-- **Constitution**: [`.specify/memory/constitution.md`](.specify/memory/constitution.md)
-
----
-
-**Version**: 1.0.0  
-**Last Updated**: 2025-10-14
+**Version**: 0.1.0

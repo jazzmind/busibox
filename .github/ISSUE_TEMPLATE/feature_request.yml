@@ -1,0 +1,52 @@
+name: Feature request
+description: Suggest an enhancement or new capability
+title: "[feature] "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Busibox is early-stage (v0.1.x), so we're
+        especially interested in proposals that align with the existing
+        architecture (Zero-Trust auth, RLS, Docker / Proxmox / K8s parity,
+        single-tenant multi-user model).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do that Busibox makes hard or impossible today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Sketch the change. APIs, UI, config, schema — whichever applies.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you ruled out, and why.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Approximate scope
+      options:
+        - Small — one file or a doc change
+        - Medium — touches one service or a couple of integrations
+        - Large — new service, new schema, or cross-cutting refactor
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Links to prior art, related issues, willingness to send a PR.
