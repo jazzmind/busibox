@@ -700,11 +700,13 @@ class BaseStreamingAgent(StreamingAgent):
             return
 
         if self._should_disable_thinking():
-            model_settings.setdefault("extra_body", {}).setdefault(
-                "chat_template_kwargs", {}
-            )["enable_thinking"] = False
+            backend = get_settings().llm_backend.lower()
+            if backend in ("mlx", "vllm"):
+                model_settings.setdefault("extra_body", {}).setdefault(
+                    "chat_template_kwargs", {}
+                )["enable_thinking"] = False
             logger.info(
-                "Thinking settings [disabled]: model=%s", model_name,
+                "Thinking settings [disabled]: model=%s backend=%s", model_name, backend,
             )
             return
 
@@ -2237,10 +2239,12 @@ class BaseStreamingAgent(StreamingAgent):
                 "type": "json_schema",
                 "json_schema": response_schema,
             },
-            "extra_body": {
-                "chat_template_kwargs": {"enable_thinking": False},
-            },
         }
+        _so_backend = get_settings().llm_backend.lower()
+        if _so_backend in ("mlx", "vllm"):
+            kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
 
         max_attempts = 2
         last_error: Optional[str] = None
