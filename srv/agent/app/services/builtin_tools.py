@@ -786,7 +786,7 @@ BUILTIN_TOOL_METADATA = {
     },
     "calendar_tool_list": {
         "name": "calendar_list_events",
-        "description": "List upcoming Google Calendar events for the configured calendar account.",
+        "description": "List upcoming calendar events from the user's connected Google or Microsoft calendar.",
         "entrypoint": "app.tools.calendar_tool:calendar_list_events",
         "scopes": [],
         "version": 1,
@@ -811,9 +811,63 @@ BUILTIN_TOOL_METADATA = {
             }
         }
     },
+    "delegate_tool": {
+        "name": "delegate_to_agent",
+        "description": (
+            "Invoke another specialist agent synchronously and return its output. "
+            "Use for multi-agent orchestration: delegate sub-tasks to agents such as "
+            "briefing-agent, scheduler-agent, or debrief-agent. "
+            "One of agent_id or agent_name is required."
+        ),
+        "entrypoint": "app.tools.delegate_tool:delegate_to_agent",
+        "scopes": [],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "UUID of the target agent (preferred).",
+                    },
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Name of the target agent (used when agent_id is not known).",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Task or question to send to the delegated agent.",
+                    },
+                    "context": {
+                        "type": "object",
+                        "description": "Optional key/value context merged into the agent payload.",
+                    },
+                    "tier": {
+                        "type": "string",
+                        "enum": ["simple", "complex", "batch"],
+                        "description": "Execution tier: simple (30 s), complex (5 min), batch (30 min).",
+                        "default": "simple",
+                    },
+                },
+                "required": ["prompt"],
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "run_id": {"type": "string"},
+                    "agent_id": {"type": "string"},
+                    "agent_name": {"type": "string"},
+                    "output": {"description": "Agent output (text or structured)"},
+                    "status": {"type": "string"},
+                    "error": {"type": "string"},
+                },
+            },
+        },
+    },
     "calendar_tool_create": {
         "name": "calendar_create_event",
-        "description": "Create a Google Calendar event with summary and start/end RFC3339 datetimes.",
+        "description": "Create a calendar event (Google or Microsoft) with summary, start/end RFC3339 datetimes, and optional attendees.",
         "entrypoint": "app.tools.calendar_tool:calendar_create_event",
         "scopes": [],
         "version": 1,
@@ -834,6 +888,116 @@ BUILTIN_TOOL_METADATA = {
                 "properties": {
                     "success": {"type": "boolean"},
                     "event": {"type": "object"},
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    },
+    "email_tool_list_recent": {
+        "name": "email_list_recent",
+        "description": "List recent emails from the user's connected inbox (Gmail or Outlook).",
+        "entrypoint": "app.tools.email_tool:email_list_recent",
+        "scopes": [],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "hours": {"type": "integer", "description": "How many hours back to look", "default": 24},
+                    "max_results": {"type": "integer", "description": "Max emails to return (max 50)", "default": 20}
+                },
+                "required": []
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "messages": {"type": "array"},
+                    "count": {"type": "integer"},
+                    "provider": {"type": "string"},
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    },
+    "email_tool_search": {
+        "name": "email_search",
+        "description": "Search the user's email inbox by keywords, sender, subject, or date range.",
+        "entrypoint": "app.tools.email_tool:email_search",
+        "scopes": [],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Free-text search keywords"},
+                    "max_results": {"type": "integer", "description": "Max emails to return (max 50)", "default": 20},
+                    "from_email": {"type": "string", "description": "Filter by sender email"},
+                    "subject": {"type": "string", "description": "Filter by subject keywords"},
+                    "days_back": {"type": "integer", "description": "How many days back to search", "default": 30}
+                },
+                "required": ["query"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "messages": {"type": "array"},
+                    "count": {"type": "integer"},
+                    "provider": {"type": "string"},
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    },
+    "email_tool_read": {
+        "name": "email_read",
+        "description": "Read the full content of a specific email message by its ID.",
+        "entrypoint": "app.tools.email_tool:email_read",
+        "scopes": [],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string", "description": "Email message ID from email_list_recent or email_search"}
+                },
+                "required": ["message_id"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "messages": {"type": "array"},
+                    "subject": {"type": "string"},
+                    "count": {"type": "integer"},
+                    "provider": {"type": "string"},
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    },
+    "calendar_tool_availability": {
+        "name": "calendar_get_availability",
+        "description": "Get the user's free/busy calendar availability for a time range. Returns a list of busy slots.",
+        "entrypoint": "app.tools.calendar_tool:calendar_get_availability",
+        "scopes": [],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "time_min": {"type": "string", "description": "RFC3339 start of range, e.g. 2026-02-18T09:00:00Z"},
+                    "time_max": {"type": "string", "description": "RFC3339 end of range, e.g. 2026-02-18T17:00:00Z"}
+                },
+                "required": ["time_min", "time_max"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "slots": {"type": "array"},
+                    "provider": {"type": "string"},
                     "error": {"type": "string"}
                 }
             }
@@ -1056,6 +1220,11 @@ def get_tool_executor(tool_name: str) -> Optional[Callable]:
         "memory_save": ("app.tools.memory_tool", "memory_save"),
         "calendar_list_events": ("app.tools.calendar_tool", "calendar_list_events"),
         "calendar_create_event": ("app.tools.calendar_tool", "calendar_create_event"),
+        "calendar_get_availability": ("app.tools.calendar_tool", "calendar_get_availability"),
+        "email_list_recent": ("app.tools.email_tool", "email_list_recent"),
+        "email_search": ("app.tools.email_tool", "email_search"),
+        "email_read": ("app.tools.email_tool", "email_read"),
+        "delegate_to_agent": ("app.tools.delegate_tool", "delegate_to_agent"),
         # Workforce tools
         "workforce_search_employees": ("app.tools.workforce_tool", "workforce_search_employees"),
         "workforce_get_stats": ("app.tools.workforce_tool", "workforce_get_stats"),
@@ -1124,6 +1293,11 @@ def get_tool_object(tool_name: str) -> Optional[Any]:
         "memory_save": ("app.tools.memory_tool", "memory_save_tool"),
         "calendar_list_events": ("app.tools.calendar_tool", "calendar_list_events_tool"),
         "calendar_create_event": ("app.tools.calendar_tool", "calendar_create_event_tool"),
+        "calendar_get_availability": ("app.tools.calendar_tool", "calendar_get_availability_tool"),
+        "email_list_recent": ("app.tools.email_tool", "email_list_recent_tool"),
+        "email_search": ("app.tools.email_tool", "email_search_tool"),
+        "email_read": ("app.tools.email_tool", "email_read_tool"),
+        "delegate_to_agent": ("app.tools.delegate_tool", "delegate_to_agent_tool"),
         # Workforce tools
         "workforce_search_employees": ("app.tools.workforce_tool", "workforce_search_employees_tool"),
         "workforce_get_stats": ("app.tools.workforce_tool", "workforce_get_stats_tool"),

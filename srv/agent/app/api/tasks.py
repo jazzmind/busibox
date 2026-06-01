@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_principal
-from app.db.session import get_session
+from app.db.session import get_session, SessionLocal
 from app.models.domain import TaskExecution
 from app.schemas.auth import Principal
 from app.schemas.task import (
@@ -43,6 +43,36 @@ from app.services.task_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+
+def _hot_register_task(task, session_factory) -> None:
+    """
+    Immediately register or update a cron task with the APScheduler.
+
+    Called after creating, updating, or resuming a task so that the schedule
+    takes effect without requiring a service restart.
+    """
+    from app.services.scheduler import task_scheduler
+
+    try:
+        if task.trigger_type == "cron" and task.status == "active":
+            cron = (task.trigger_config or {}).get("cron")
+            if cron:
+                # Cancel any existing job for this task (handles updates)
+                task_scheduler.cancel_task(task.id)
+                task_scheduler.schedule_task(task.id, cron, session_factory)
+                logger.info(f"[hot-reg] Registered cron task {task.id} ({cron})")
+        elif task.trigger_type == "one_time" and task.status == "active":
+            run_at = (task.trigger_config or {}).get("run_at")
+            if run_at:
+                from datetime import datetime
+                if isinstance(run_at, str):
+                    run_at = datetime.fromisoformat(run_at)
+                task_scheduler.cancel_task(task.id)
+                task_scheduler.schedule_task_one_time(task.id, run_at, session_factory)
+                logger.info(f"[hot-reg] Registered one-time task {task.id} at {run_at}")
+    except Exception as e:
+        logger.warning(f"[hot-reg] Failed to hot-register task {task.id}: {e}")
 
 
 async def _save_task_insight(
@@ -307,6 +337,9 @@ async def create_agent_task(
             },
         )
         
+        # Hot-register: schedule immediately so the task fires without a restart
+        _hot_register_task(task, SessionLocal)
+        
         # Include webhook_secret on creation so client can store it
         return task_to_read(task, base_url, include_secret=True)
         
@@ -436,6 +469,9 @@ async def update_agent_task(
     
     logger.info(f"Updated task {task_id}")
     
+    # Hot-register updated schedule (handles cron expression changes)
+    _hot_register_task(task, SessionLocal)
+    
     base_url = _get_base_url(request)
     return task_to_read(task, base_url)
 
@@ -464,6 +500,13 @@ async def delete_agent_task(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task {task_id} not found",
         )
+    
+    # Cancel any scheduled job for this task
+    try:
+        from app.services.scheduler import task_scheduler
+        task_scheduler.cancel_task(task_id)
+    except Exception as e:
+        logger.warning(f"[hot-reg] Failed to cancel task {task_id}: {e}")
     
     logger.info(f"Deleted task {task_id}")
 
@@ -497,6 +540,13 @@ async def pause_agent_task(
             detail=f"Task {task_id} not found",
         )
     
+    # Remove from scheduler immediately
+    try:
+        from app.services.scheduler import task_scheduler
+        task_scheduler.cancel_task(task_id)
+    except Exception as e:
+        logger.warning(f"[hot-reg] Failed to cancel paused task {task_id}: {e}")
+    
     logger.info(f"Paused task {task_id}")
     
     base_url = _get_base_url(request)
@@ -529,6 +579,9 @@ async def resume_agent_task(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task {task_id} not found",
         )
+    
+    # Hot-register: reschedule the task immediately on resume
+    _hot_register_task(task, SessionLocal)
     
     logger.info(f"Resumed task {task_id}")
     
