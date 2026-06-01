@@ -235,6 +235,175 @@ def create_app(
             logger.error("[API] agent roundtrip test failed: %s", exc, exc_info=True)
             raise HTTPException(status_code=502, detail=str(exc))
 
+    @app.post("/api/v1/test/imap")
+    async def test_imap():
+        """Test IMAP connection using current dynamic/env config."""
+        from .config_api_client import get_dynamic_bool, get_dynamic_str, get_dynamic_int
+        from .email_inbound_client import EmailInboundClient
+
+        imap_host = get_dynamic_str("IMAP_HOST", settings.imap_host or "")
+        imap_port = get_dynamic_int("IMAP_PORT", settings.imap_port)
+        imap_user = get_dynamic_str("IMAP_USER", settings.imap_user or "")
+        imap_pass = get_dynamic_str("IMAP_PASSWORD", settings.imap_password or "")
+        imap_folder = get_dynamic_str("IMAP_FOLDER", settings.imap_folder)
+        imap_ssl = get_dynamic_bool("IMAP_USE_SSL", settings.imap_use_ssl)
+
+        if not imap_host:
+            raise HTTPException(status_code=400, detail="IMAP host is not configured")
+        if not imap_user:
+            raise HTTPException(status_code=400, detail="IMAP user is not configured")
+        if not imap_pass:
+            raise HTTPException(status_code=400, detail="IMAP password is not configured")
+
+        import asyncio
+        import imaplib
+
+        def _do_imap_test():
+            try:
+                if imap_ssl:
+                    conn = imaplib.IMAP4_SSL(imap_host, imap_port)
+                else:
+                    conn = imaplib.IMAP4(imap_host, imap_port)
+                conn.login(imap_user, imap_pass)
+                status, data = conn.select(imap_folder, readonly=True)
+                if status != "OK":
+                    conn.logout()
+                    return False, f"Folder '{imap_folder}' not accessible: {data}"
+                status2, data2 = conn.search(None, "UNSEEN")
+                unseen_count = len(data2[0].split()) if status2 == "OK" and data2[0] else 0
+                conn.logout()
+                return True, f"Connected successfully. Folder '{imap_folder}' has {unseen_count} unread message(s)."
+            except imaplib.IMAP4.error as e:
+                return False, f"IMAP authentication/protocol error: {e}"
+            except OSError as e:
+                return False, f"Connection failed: {e}"
+            except Exception as e:
+                return False, f"Unexpected error: {e}"
+
+        started = time.perf_counter()
+        try:
+            loop = asyncio.get_running_loop()
+            ok, message = await loop.run_in_executor(None, _do_imap_test)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            if ok:
+                return {"ok": True, "message": message, "latency_ms": latency_ms}
+            raise HTTPException(status_code=502, detail=message)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error("[API] IMAP test failed: %s", exc, exc_info=True)
+            raise HTTPException(status_code=502, detail=str(exc))
+
+    @app.get("/api/v1/email/inbox")
+    async def get_email_inbox(limit: int = Query(default=20, ge=1, le=100)):
+        """Fetch recent messages from the configured IMAP inbox."""
+        from .config_api_client import get_dynamic_bool, get_dynamic_str, get_dynamic_int
+        import asyncio
+        import imaplib
+        import email as email_lib
+        from email.header import decode_header as _decode_header
+
+        imap_host = get_dynamic_str("IMAP_HOST", settings.imap_host or "")
+        imap_port = get_dynamic_int("IMAP_PORT", settings.imap_port)
+        imap_user = get_dynamic_str("IMAP_USER", settings.imap_user or "")
+        imap_pass = get_dynamic_str("IMAP_PASSWORD", settings.imap_password or "")
+        imap_folder = get_dynamic_str("IMAP_FOLDER", settings.imap_folder)
+        imap_ssl = get_dynamic_bool("IMAP_USE_SSL", settings.imap_use_ssl)
+
+        if not imap_host or not imap_user or not imap_pass:
+            raise HTTPException(status_code=400, detail="IMAP not configured")
+
+        def _decode_str(value) -> str:
+            if value is None:
+                return ""
+            parts = _decode_header(str(value))
+            result = []
+            for text, charset in parts:
+                if isinstance(text, bytes):
+                    try:
+                        result.append(text.decode(charset or "utf-8", errors="replace"))
+                    except Exception:
+                        result.append(text.decode("utf-8", errors="replace"))
+                else:
+                    result.append(str(text))
+            return " ".join(result)
+
+        def _fetch_inbox():
+            try:
+                if imap_ssl:
+                    conn = imaplib.IMAP4_SSL(imap_host, imap_port)
+                else:
+                    conn = imaplib.IMAP4(imap_host, imap_port)
+                conn.login(imap_user, imap_pass)
+                conn.select(imap_folder, readonly=True)
+                status, data = conn.search(None, "ALL")
+                msg_ids = data[0].split() if status == "OK" and data[0] else []
+                # Most recent first
+                msg_ids = list(reversed(msg_ids[-limit:]))
+
+                messages = []
+                for mid in msg_ids:
+                    try:
+                        _, msg_data = conn.fetch(mid, "(RFC822.HEADER FLAGS)")
+                        if not msg_data or not msg_data[0]:
+                            continue
+                        raw = msg_data[0][1] if isinstance(msg_data[0], tuple) else None
+                        flags_part = msg_data[1] if len(msg_data) > 1 else b""
+                        if raw is None:
+                            continue
+                        msg = email_lib.message_from_bytes(raw)
+                        flags = str(flags_part)
+                        messages.append({
+                            "id": mid.decode(),
+                            "subject": _decode_str(msg.get("Subject", "(no subject)")),
+                            "from": _decode_str(msg.get("From", "")),
+                            "date": str(msg.get("Date", "")),
+                            "seen": "\\Seen" in flags,
+                        })
+                    except Exception:
+                        continue
+
+                conn.logout()
+                return messages
+            except imaplib.IMAP4.error as e:
+                raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=str(e))
+
+        loop = asyncio.get_running_loop()
+        messages = await loop.run_in_executor(None, _fetch_inbox)
+        return {"ok": True, "messages": messages, "count": len(messages)}
+
+    @app.post("/api/v1/test/imap-send")
+    async def test_imap_send():
+        """Send a test email to the configured IMAP inbound address via outbound SMTP/Resend."""
+        from .config_api_client import get_dynamic_str
+
+        imap_user = get_dynamic_str("IMAP_USER", settings.imap_user or "")
+        if not imap_user:
+            raise HTTPException(status_code=400, detail="IMAP user (inbound address) is not configured")
+
+        email_client = EmailClient(settings)
+        try:
+            await email_client.send(
+                to=imap_user,
+                subject="Busibox inbound email test",
+                html=(
+                    "<p>This is a test message from Busibox to verify the inbound email loop.</p>"
+                    "<p>If you can see this in your IMAP inbox, outbound delivery is working correctly.</p>"
+                    "<p>Reply to this email to test the full inbound processing flow.</p>"
+                ),
+                text=(
+                    "This is a test message from Busibox to verify the inbound email loop.\n\n"
+                    "If you can see this in your IMAP inbox, outbound delivery is working correctly.\n"
+                    "Reply to this email to test the full inbound processing flow."
+                ),
+            )
+            return {"ok": True, "message": f"Test email sent to {imap_user}. Check your IMAP inbox."}
+        except Exception as exc:
+            logger.error("[API] IMAP send test failed: %s", exc, exc_info=True)
+            raise HTTPException(status_code=502, detail=str(exc))
+
     @app.post("/api/v1/link/initiate")
     async def initiate_link(req: LinkInitiateRequest):
         """

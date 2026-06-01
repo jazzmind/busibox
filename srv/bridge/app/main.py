@@ -38,6 +38,96 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+import random as _random
+
+# ── Fun thinking messages (Telegram-only status updates) ─────────────────────
+
+_THINKING_INITIAL = [
+    "🤔 Hmm, let me think about that...",
+    "🧠 Consulting my inner wisdom...",
+    "☕ Brewing up a response...",
+    "🎩 Let me put on my thinking cap...",
+    "⚡ Processing at the speed of thought...",
+    "🔮 Peering into the oracle...",
+    "🌀 Spinning up the neural circuits...",
+    "💡 A brilliant idea is forming...",
+    "🦉 Channeling my inner owl...",
+    "🚀 Launching cognitive subroutines...",
+]
+
+_THINKING_WEB_SEARCH = [
+    "🌐 Scouring the internet...",
+    "🔍 Asking the oracle (aka the web)...",
+    "🕳️ Down the rabbit hole we go...",
+    "📡 Pinging the hivemind...",
+    "🌊 Surfing the information superhighway...",
+    "🕵️ On the case — searching far and wide...",
+]
+
+_THINKING_DOC_SEARCH = [
+    "📚 Digging through the archives...",
+    "🗂️ Flipping through the files...",
+    "📖 Consulting the library of all things...",
+    "🔬 Examining the documents...",
+    "📜 Unrolling the scrolls...",
+]
+
+_THINKING_TOOL = [
+    "🔧 Pulling some levers behind the curtain...",
+    "🛠️ Rummaging through my toolbox...",
+    "✨ Working some magic...",
+    "⚙️ Cranking the gears...",
+    "🎛️ Adjusting the dials...",
+    "🧪 Running an experiment...",
+    "🤖 Deploying the robots...",
+]
+
+_THINKING_MEMORY = [
+    "🧶 Untangling my memories...",
+    "💭 Rifling through the mind palace...",
+    "🗄️ Checking the long-term storage...",
+]
+
+_THINKING_CALENDAR = [
+    "📅 Checking the calendar...",
+    "🗓️ Consulting the schedule...",
+    "⏰ Looking at the agenda...",
+]
+
+_THINKING_EMAIL = [
+    "📬 Checking the inbox...",
+    "✉️ Reading the mail...",
+    "📧 Sifting through emails...",
+]
+
+_THINKING_GENERIC = [
+    "⚙️ Doing important stuff...",
+    "🔩 Tightening some bolts...",
+    "🎯 Zeroing in on an answer...",
+    "🎲 Rolling the dice of intelligence...",
+    "🌟 Channeling cosmic knowledge...",
+]
+
+
+def _get_thinking_message(event_type: str, tool_name: str = "", raw_msg: str = "") -> str:
+    """Return a fun status message for a Telegram thinking indicator."""
+    tool_lower = tool_name.lower()
+    if "web_search" in tool_lower or "search_web" in tool_lower:
+        return _random.choice(_THINKING_WEB_SEARCH)
+    if "document" in tool_lower or "doc_search" in tool_lower:
+        return _random.choice(_THINKING_DOC_SEARCH)
+    if "memory" in tool_lower:
+        return _random.choice(_THINKING_MEMORY)
+    if "calendar" in tool_lower:
+        return _random.choice(_THINKING_CALENDAR)
+    if "email" in tool_lower or "mail" in tool_lower:
+        return _random.choice(_THINKING_EMAIL)
+    if event_type == "thought":
+        return _random.choice(_THINKING_INITIAL)
+    if event_type in ("tool_start", "tool_result"):
+        return _random.choice(_THINKING_TOOL)
+    return _random.choice(_THINKING_GENERIC)
+
 
 class RateLimiter:
     """Simple sender-scoped rate limiter."""
@@ -315,9 +405,20 @@ class MessageProcessor:
         send_typing_start = request["send_typing_start"]
         send_typing_stop = request["send_typing_stop"]
         cancel_event = request.get("cancel_event")
+        edit_message = request.get("edit_message")
+        delete_message = request.get("delete_message")
 
         if send_typing_start:
             await send_typing_start()
+
+        # Send an immediate "thinking" placeholder for channels that support it
+        initial_status_id: int | None = None
+        if edit_message is not None and delete_message is not None:
+            try:
+                initial_status_id = await send_message(_random.choice(_THINKING_INITIAL))
+            except Exception:
+                pass
+
         try:
             await self._process_streaming(
                 text=request["text"],
@@ -332,6 +433,7 @@ class MessageProcessor:
                 delete_message=request.get("delete_message"),
                 format_content=request.get("format_content"),
                 agent_id=request.get("agent_id"),
+                initial_status_id=initial_status_id,
             )
         except StaleTokenError:
             external_sender = request.get("external_sender", "")
@@ -370,6 +472,7 @@ class MessageProcessor:
                     delete_message=request.get("delete_message"),
                     format_content=request.get("format_content"),
                     agent_id=request.get("agent_id"),
+                    initial_status_id=initial_status_id,
                 )
             except Exception as e:
                 logger.error("Error processing %s message after token refresh: %s", channel, e, exc_info=True)
@@ -396,6 +499,7 @@ class MessageProcessor:
         delete_message: Callable[[int], Awaitable[None]] | None = None,
         format_content: Callable[[str], str] | None = None,
         agent_id: str | None = None,
+        initial_status_id: int | None = None,
     ) -> str:
         """
         Stream agent events and deliver user-visible content chunks incrementally.
@@ -405,6 +509,7 @@ class MessageProcessor:
         a single editable status message that is deleted once real content arrives.
 
         send_message may return an int (message_id) on channels that support it.
+        initial_status_id: pre-sent thinking placeholder message ID to edit in place.
         """
         partial_buffer = ""
         collected_messages: List[str] = []
@@ -413,7 +518,8 @@ class MessageProcessor:
         debounce_seconds = 0.5
 
         # Editable status message tracking (Telegram only)
-        status_message_id: int | None = None
+        # Start from the pre-sent placeholder if one was provided
+        status_message_id: int | None = initial_status_id
         supports_status_msg = edit_message is not None and delete_message is not None
 
         def _apply_format(raw: str) -> str:
@@ -463,17 +569,25 @@ class MessageProcessor:
                 raise RuntimeError(detail)
 
             if event_type in ("thought", "tool_start", "tool_result"):
-                telemetry_msg = str(event.get("message") or "").strip()
-                if not telemetry_msg:
-                    continue
                 if supports_status_msg:
-                    status_text = f"💭 {telemetry_msg}"
+                    # Extract tool name for message selection
+                    tool_name = str(event.get("tool") or event.get("tool_name") or "")
+                    fun_msg = _get_thinking_message(event_type, tool_name)
                     if status_message_id is not None:
-                        await edit_message(status_message_id, status_text)
+                        try:
+                            await edit_message(status_message_id, fun_msg)
+                        except Exception:
+                            pass
                     else:
-                        status_message_id = await send_message(status_text)
+                        try:
+                            status_message_id = await send_message(fun_msg)
+                        except Exception:
+                            pass
                 else:
-                    await send_message(telemetry_msg)
+                    # Non-Telegram channels: send raw telemetry if available
+                    telemetry_msg = str(event.get("message") or "").strip()
+                    if telemetry_msg:
+                        await send_message(telemetry_msg)
                 continue
 
             if event_type not in ("content", "complete", "message_complete"):
@@ -1121,6 +1235,7 @@ class EmailInboundBot:
         binding: Dict[str, str],
         email_client: EmailClient,
         agent_client: AgentClient,
+        agent_id: str | None = None,
     ) -> None:
         chunks: List[str] = []
 
@@ -1135,6 +1250,7 @@ class EmailInboundBot:
             send_typing_start=None,
             send_typing_stop=None,
             agent_client=agent_client,
+            agent_id=agent_id,
         )
         if not chunks:
             return
@@ -1151,14 +1267,37 @@ class EmailInboundBot:
         allowed_senders = set(self.settings.get_email_allowed_senders())
         email_client = EmailClient(self.settings)
 
+        # Prefer dynamic config (set by admin UI via /api/v1/config/reload) over env vars
+        from .config_api_client import get_dynamic_str, get_dynamic_bool, get_dynamic_int
+        imap_host = get_dynamic_str("IMAP_HOST", self.settings.imap_host or "")
+        imap_port = get_dynamic_int("IMAP_PORT", self.settings.imap_port)
+        imap_user = get_dynamic_str("IMAP_USER", self.settings.imap_user or "")
+        imap_pass = get_dynamic_str("IMAP_PASSWORD", self.settings.imap_password or "")
+        imap_folder = get_dynamic_str("IMAP_FOLDER", self.settings.imap_folder)
+        imap_ssl = get_dynamic_bool("IMAP_USE_SSL", self.settings.imap_use_ssl)
+
+        if not imap_host or not imap_user or not imap_pass:
+            logger.warning(
+                "EmailInboundBot: IMAP not fully configured (host=%r user=%r password=%s); stopping.",
+                imap_host, imap_user, "set" if imap_pass else "missing",
+            )
+            return
+
         inbound = EmailInboundClient(
-            host=self.settings.imap_host or "",
-            port=self.settings.imap_port,
-            username=self.settings.imap_user or "",
-            password=self.settings.imap_password or "",
-            folder=self.settings.imap_folder,
-            use_ssl=self.settings.imap_use_ssl,
+            host=imap_host,
+            port=imap_port,
+            username=imap_user,
+            password=imap_pass,
+            folder=imap_folder,
+            use_ssl=imap_ssl,
         )
+
+        from .config_api_client import get_channel_agent_id
+        email_agent_id = get_channel_agent_id(
+            "email",
+            self.settings.default_agent_id,
+            "",
+        ) or None
 
         async with AgentClient(
             base_url=str(self.settings.agent_api_url),
@@ -1199,6 +1338,7 @@ class EmailInboundBot:
                                 binding=pending.binding,
                                 email_client=email_client,
                                 agent_client=agent_client,
+                                agent_id=email_agent_id,
                             )
                             continue
                         # Code didn't match — fall through to normal flow
@@ -1233,6 +1373,7 @@ class EmailInboundBot:
                         binding=binding,
                         email_client=email_client,
                         agent_client=agent_client,
+                        agent_id=email_agent_id,
                     )
                     continue
 
@@ -1258,9 +1399,12 @@ async def run_api_server(settings: Settings, whatsapp_handler: Callable[[dict], 
 
 
 async def run_signal_bot(settings: Settings, processor: MessageProcessor):
-    if not settings.signal_enabled:
+    from .config_api_client import get_dynamic_bool, get_dynamic_str
+    enabled = get_dynamic_bool("SIGNAL_ENABLED", settings.signal_enabled)
+    if not enabled:
         return
-    if not settings.signal_phone_number:
+    phone = get_dynamic_str("SIGNAL_PHONE_NUMBER", settings.signal_phone_number)
+    if not phone:
         logger.warning("Signal enabled but SIGNAL_PHONE_NUMBER not set")
         return
     if not settings.delegation_token:
@@ -1270,22 +1414,35 @@ async def run_signal_bot(settings: Settings, processor: MessageProcessor):
 
 
 async def run_telegram_bot(settings: Settings, processor: MessageProcessor):
-    if not settings.telegram_enabled:
+    from .config_api_client import get_dynamic_bool, get_dynamic_str
+    enabled = get_dynamic_bool("TELEGRAM_ENABLED", settings.telegram_enabled)
+    if not enabled:
         return
-    if not settings.telegram_bot_token:
+    token = get_dynamic_str("TELEGRAM_BOT_TOKEN", settings.telegram_bot_token)
+    if not token:
         logger.warning("Telegram enabled but TELEGRAM_BOT_TOKEN not set")
         return
     if not settings.delegation_token:
         logger.warning(
             "Telegram enabled without DELEGATION_TOKEN; /link works, but non-linked chats will be blocked until linked."
         )
+    # Pass a settings-like proxy so TelegramBot picks up dynamic token if different from env
+    if token != settings.telegram_bot_token:
+        from dataclasses import replace as _dc_replace
+        import copy
+        settings = copy.copy(settings)
+        settings.telegram_bot_token = token
+        settings.telegram_enabled = True
     await TelegramBot(settings, processor).run()
 
 
 async def run_discord_bot(settings: Settings, processor: MessageProcessor):
-    if not settings.discord_enabled:
+    from .config_api_client import get_dynamic_bool, get_dynamic_str
+    enabled = get_dynamic_bool("DISCORD_ENABLED", settings.discord_enabled)
+    if not enabled:
         return
-    if not settings.discord_bot_token:
+    token = get_dynamic_str("DISCORD_BOT_TOKEN", settings.discord_bot_token)
+    if not token:
         logger.warning("Discord enabled but DISCORD_BOT_TOKEN not set")
         return
     if not settings.delegation_token:
@@ -1295,11 +1452,11 @@ async def run_discord_bot(settings: Settings, processor: MessageProcessor):
 
 
 async def run_email_inbound_bot(settings: Settings, processor: MessageProcessor):
-    if not settings.email_inbound_enabled:
+    from .config_api_client import get_dynamic_bool, get_dynamic_str
+    enabled = get_dynamic_bool("EMAIL_INBOUND_ENABLED", settings.email_inbound_enabled)
+    if not enabled:
         return
-    if not settings.imap_host or not settings.imap_user or not settings.imap_password:
-        logger.warning("Inbound email enabled but IMAP credentials are incomplete")
-        return
+    # Credentials are checked inside EmailInboundBot.run() via dynamic config
     await EmailInboundBot(settings, processor).run()
 
 

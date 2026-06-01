@@ -198,6 +198,20 @@ def get_dynamic_str(key: str, fallback: str) -> str:
     return str(val) if val is not None else fallback
 
 
+def get_dynamic_int(key: str, fallback: int) -> int:
+    """Return an integer from the dynamic config, falling back to the env value."""
+    cfg = _dynamic_channel_config
+    if cfg is None:
+        return fallback
+    val = cfg.get(key)
+    if val is None:
+        return fallback
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return fallback
+
+
 def get_channel_agent_id(channel: str, default_agent_id: str, settings_agent_id: str = "") -> str:
     """
     Resolve the agent ID for a given channel.
@@ -212,6 +226,7 @@ def get_channel_agent_id(channel: str, default_agent_id: str, settings_agent_id:
         "signal": "SIGNAL_AGENT_ID",
         "discord": "DISCORD_AGENT_ID",
         "whatsapp": "WHATSAPP_AGENT_ID",
+        "email": "EMAIL_AGENT_ID",
     }
     env_key = key_map.get(channel, "")
     dynamic = get_dynamic_str(env_key, "") if env_key else ""
