@@ -25,7 +25,7 @@ from .channel_identity import ChannelIdentityResolver
 from .config import Settings, get_settings
 from .discord_client import DiscordClient
 from .email_client import EmailClient
-from .email_inbound_client import EmailInboundClient, InboundEmailMessage
+from .email_inbound_client import EmailInboundClient, POP3InboundClient, InboundEmailMessage
 from .signal_client import SignalClient, SignalMessage
 from .telegram_client import TelegramClient, TelegramMessage
 from .telegram_formatter import markdown_to_telegram_html
@@ -1276,21 +1276,34 @@ class EmailInboundBot:
         imap_folder = get_dynamic_str("IMAP_FOLDER", self.settings.imap_folder)
         imap_ssl = get_dynamic_bool("IMAP_USE_SSL", self.settings.imap_use_ssl)
 
+        protocol = get_dynamic_str("EMAIL_INBOUND_PROTOCOL", self.settings.email_inbound_protocol)
+
         if not imap_host or not imap_user or not imap_pass:
             logger.warning(
-                "EmailInboundBot: IMAP not fully configured (host=%r user=%r password=%s); stopping.",
-                imap_host, imap_user, "set" if imap_pass else "missing",
+                "EmailInboundBot: inbound email not fully configured (protocol=%r host=%r user=%r password=%s); stopping.",
+                protocol, imap_host, imap_user, "set" if imap_pass else "missing",
             )
             return
 
-        inbound = EmailInboundClient(
-            host=imap_host,
-            port=imap_port,
-            username=imap_user,
-            password=imap_pass,
-            folder=imap_folder,
-            use_ssl=imap_ssl,
-        )
+        if protocol == "pop3":
+            logger.info("EmailInboundBot: using POP3 client (%s:%s)", imap_host, imap_port)
+            inbound = POP3InboundClient(
+                host=imap_host,
+                port=imap_port,
+                username=imap_user,
+                password=imap_pass,
+                use_ssl=imap_ssl,
+            )
+        else:
+            logger.info("EmailInboundBot: using IMAP client (%s:%s)", imap_host, imap_port)
+            inbound = EmailInboundClient(
+                host=imap_host,
+                port=imap_port,
+                username=imap_user,
+                password=imap_pass,
+                folder=imap_folder,
+                use_ssl=imap_ssl,
+            )
 
         from .config_api_client import get_channel_agent_id
         email_agent_id = get_channel_agent_id(

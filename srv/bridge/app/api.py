@@ -237,10 +237,10 @@ def create_app(
 
     @app.post("/api/v1/test/imap")
     async def test_imap():
-        """Test IMAP connection using current dynamic/env config."""
+        """Test inbound email (IMAP or POP3) connection using current dynamic/env config."""
         from .config_api_client import get_dynamic_bool, get_dynamic_str, get_dynamic_int
-        from .email_inbound_client import EmailInboundClient
 
+        protocol = get_dynamic_str("EMAIL_INBOUND_PROTOCOL", settings.email_inbound_protocol)
         imap_host = get_dynamic_str("IMAP_HOST", settings.imap_host or "")
         imap_port = get_dynamic_int("IMAP_PORT", settings.imap_port)
         imap_user = get_dynamic_str("IMAP_USER", settings.imap_user or "")
@@ -249,14 +249,33 @@ def create_app(
         imap_ssl = get_dynamic_bool("IMAP_USE_SSL", settings.imap_use_ssl)
 
         if not imap_host:
-            raise HTTPException(status_code=400, detail="IMAP host is not configured")
+            raise HTTPException(status_code=400, detail="Server host is not configured")
         if not imap_user:
-            raise HTTPException(status_code=400, detail="IMAP user is not configured")
+            raise HTTPException(status_code=400, detail="Username is not configured")
         if not imap_pass:
-            raise HTTPException(status_code=400, detail="IMAP password is not configured")
+            raise HTTPException(status_code=400, detail="Password is not configured")
 
         import asyncio
         import imaplib
+        import poplib as poplib_mod
+
+        def _do_pop3_test():
+            try:
+                if imap_ssl:
+                    conn = poplib_mod.POP3_SSL(imap_host, imap_port)
+                else:
+                    conn = poplib_mod.POP3(imap_host, imap_port)
+                conn.user(imap_user)
+                conn.pass_(imap_pass)
+                count, _ = conn.stat()
+                conn.quit()
+                return True, f"POP3 connected successfully. Mailbox has {count} message(s)."
+            except poplib_mod.error_proto as e:
+                return False, f"POP3 authentication/protocol error: {e}"
+            except OSError as e:
+                return False, f"Connection failed: {e}"
+            except Exception as e:
+                return False, f"Unexpected error: {e}"
 
         def _do_imap_test():
             try:
@@ -280,10 +299,11 @@ def create_app(
             except Exception as e:
                 return False, f"Unexpected error: {e}"
 
+        test_fn = _do_pop3_test if protocol == "pop3" else _do_imap_test
         started = time.perf_counter()
         try:
             loop = asyncio.get_running_loop()
-            ok, message = await loop.run_in_executor(None, _do_imap_test)
+            ok, message = await loop.run_in_executor(None, test_fn)
             latency_ms = int((time.perf_counter() - started) * 1000)
             if ok:
                 return {"ok": True, "message": message, "latency_ms": latency_ms}
@@ -291,18 +311,20 @@ def create_app(
         except HTTPException:
             raise
         except Exception as exc:
-            logger.error("[API] IMAP test failed: %s", exc, exc_info=True)
+            logger.error("[API] inbound email test failed: %s", exc, exc_info=True)
             raise HTTPException(status_code=502, detail=str(exc))
 
     @app.get("/api/v1/email/inbox")
     async def get_email_inbox(limit: int = Query(default=20, ge=1, le=100)):
-        """Fetch recent messages from the configured IMAP inbox."""
+        """Fetch recent messages from the configured inbound email inbox (IMAP or POP3)."""
         from .config_api_client import get_dynamic_bool, get_dynamic_str, get_dynamic_int
         import asyncio
         import imaplib
+        import poplib as poplib_mod
         import email as email_lib
         from email.header import decode_header as _decode_header
 
+        protocol = get_dynamic_str("EMAIL_INBOUND_PROTOCOL", settings.email_inbound_protocol)
         imap_host = get_dynamic_str("IMAP_HOST", settings.imap_host or "")
         imap_port = get_dynamic_int("IMAP_PORT", settings.imap_port)
         imap_user = get_dynamic_str("IMAP_USER", settings.imap_user or "")
@@ -311,7 +333,7 @@ def create_app(
         imap_ssl = get_dynamic_bool("IMAP_USE_SSL", settings.imap_use_ssl)
 
         if not imap_host or not imap_user or not imap_pass:
-            raise HTTPException(status_code=400, detail="IMAP not configured")
+            raise HTTPException(status_code=400, detail="Inbound email not configured")
 
         def _decode_str(value) -> str:
             if value is None:
@@ -328,7 +350,41 @@ def create_app(
                     result.append(str(text))
             return " ".join(result)
 
-        def _fetch_inbox():
+        def _fetch_pop3_inbox():
+            try:
+                if imap_ssl:
+                    conn = poplib_mod.POP3_SSL(imap_host, imap_port)
+                else:
+                    conn = poplib_mod.POP3(imap_host, imap_port)
+                conn.user(imap_user)
+                conn.pass_(imap_pass)
+                count, _ = conn.stat()
+                # Fetch headers for most recent `limit` messages
+                start = max(1, count - limit + 1)
+                messages = []
+                for i in range(count, start - 1, -1):
+                    try:
+                        # TOP n 0 returns headers only (0 body lines)
+                        resp, raw_lines, _ = conn.top(i, 0)
+                        raw = b"\r\n".join(raw_lines)
+                        msg = email_lib.message_from_bytes(raw)
+                        messages.append({
+                            "id": str(i),
+                            "subject": _decode_str(msg.get("Subject", "(no subject)")),
+                            "from": _decode_str(msg.get("From", "")),
+                            "date": str(msg.get("Date", "")),
+                            "seen": False,  # POP3 has no seen flag
+                        })
+                    except Exception:
+                        continue
+                conn.quit()
+                return messages
+            except poplib_mod.error_proto as e:
+                raise HTTPException(status_code=502, detail=f"POP3 error: {e}")
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=str(e))
+
+        def _fetch_imap_inbox():
             try:
                 if imap_ssl:
                     conn = imaplib.IMAP4_SSL(imap_host, imap_port)
@@ -370,9 +426,10 @@ def create_app(
             except Exception as e:
                 raise HTTPException(status_code=502, detail=str(e))
 
+        fetch_fn = _fetch_pop3_inbox if protocol == "pop3" else _fetch_imap_inbox
         loop = asyncio.get_running_loop()
-        messages = await loop.run_in_executor(None, _fetch_inbox)
-        return {"ok": True, "messages": messages, "count": len(messages)}
+        messages = await loop.run_in_executor(None, fetch_fn)
+        return {"ok": True, "messages": messages, "count": len(messages), "protocol": protocol}
 
     @app.post("/api/v1/test/imap-send")
     async def test_imap_send():
@@ -399,7 +456,7 @@ def create_app(
                     "Reply to this email to test the full inbound processing flow."
                 ),
             )
-            return {"ok": True, "message": f"Test email sent to {imap_user}. Check your IMAP inbox."}
+            return {"ok": True, "message": f"Test email sent to {imap_user}. Check your inbound inbox."}
         except Exception as exc:
             logger.error("[API] IMAP send test failed: %s", exc, exc_info=True)
             raise HTTPException(status_code=502, detail=str(exc))
