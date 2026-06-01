@@ -196,6 +196,7 @@ class MessageProcessor:
         edit_message: Callable[[int, str], Awaitable[None]] | None = None,
         delete_message: Callable[[int], Awaitable[None]] | None = None,
         format_content: Callable[[str], str] | None = None,
+        agent_id: str | None = None,
     ) -> None:
         text = text.strip()
         if not text:
@@ -261,6 +262,7 @@ class MessageProcessor:
             "edit_message": edit_message,
             "delete_message": delete_message,
             "format_content": format_content,
+            "agent_id": agent_id,
         }
 
         # Email flow expects synchronous completion in-process to capture chunks.
@@ -329,6 +331,7 @@ class MessageProcessor:
                 edit_message=request.get("edit_message"),
                 delete_message=request.get("delete_message"),
                 format_content=request.get("format_content"),
+                agent_id=request.get("agent_id"),
             )
         except StaleTokenError:
             external_sender = request.get("external_sender", "")
@@ -366,6 +369,7 @@ class MessageProcessor:
                     edit_message=request.get("edit_message"),
                     delete_message=request.get("delete_message"),
                     format_content=request.get("format_content"),
+                    agent_id=request.get("agent_id"),
                 )
             except Exception as e:
                 logger.error("Error processing %s message after token refresh: %s", channel, e, exc_info=True)
@@ -391,6 +395,7 @@ class MessageProcessor:
         edit_message: Callable[[int, str], Awaitable[None]] | None = None,
         delete_message: Callable[[int], Awaitable[None]] | None = None,
         format_content: Callable[[str], str] | None = None,
+        agent_id: str | None = None,
     ) -> str:
         """
         Stream agent events and deliver user-visible content chunks incrementally.
@@ -444,7 +449,7 @@ class MessageProcessor:
             enable_web_search=True,
             enable_doc_search=True,
             model=self.settings.default_model,
-            agent_id=self.settings.default_agent_id or None,
+            agent_id=agent_id or self.settings.default_agent_id or None,
             delegation_token_override=delegation_token_override,
             attachments=attachments,
             channel=channel,
@@ -524,6 +529,7 @@ class MessageProcessor:
         edit_message: Callable[[int, str], Awaitable[None]] | None = None,
         delete_message: Callable[[int], Awaitable[None]] | None = None,
         format_content: Callable[[str], str] | None = None,
+        agent_id: str | None = None,
     ) -> None:
         """
         Process an inbound voice/audio message by asking the chat agent to
@@ -546,6 +552,7 @@ class MessageProcessor:
             edit_message=edit_message,
             delete_message=delete_message,
             format_content=format_content,
+            agent_id=agent_id,
         )
 
     async def _exchange_access_token(
@@ -642,6 +649,7 @@ class MessageProcessor:
         edit_message: Callable[[int, str], Awaitable[None]] | None = None,
         delete_message: Callable[[int], Awaitable[None]] | None = None,
         format_content: Callable[[str], str] | None = None,
+        agent_id: str | None = None,
     ) -> None:
         binding = await self._resolve_sender_binding(channel, external_sender)
         subject_token = ""
@@ -682,6 +690,7 @@ class MessageProcessor:
             edit_message=edit_message,
             delete_message=delete_message,
             format_content=format_content,
+            agent_id=agent_id,
         )
 
     def _split_response(self, response: str) -> List[str]:
@@ -717,11 +726,16 @@ class SignalBot:
         signal_client: SignalClient,
         agent_client: AgentClient,
     ) -> None:
+        from .config_api_client import get_channel_agent_id
         sender = message.sender
         allowed = self.settings.get_allowed_phone_numbers()
         if allowed and sender not in allowed:
             logger.warning("Rejected Signal sender: %s", sender[:6])
             return
+
+        signal_agent_id = get_channel_agent_id(
+            "signal", self.settings.default_agent_id, self.settings.signal_agent_id
+        ) or None
 
         text = message.message or ""
         if not text.strip() and message.attachments:
@@ -740,6 +754,7 @@ class SignalBot:
                     send_typing_start=lambda: signal_client.send_typing_indicator(sender),
                     send_typing_stop=lambda: signal_client.send_typing_indicator(sender, stop=True),
                     agent_client=agent_client,
+                    agent_id=signal_agent_id,
                 )
                 return
 
@@ -751,6 +766,7 @@ class SignalBot:
             send_typing_start=lambda: signal_client.send_typing_indicator(sender),
             send_typing_stop=lambda: signal_client.send_typing_indicator(sender, stop=True),
             agent_client=agent_client,
+            agent_id=signal_agent_id,
         )
 
     async def run(self):
@@ -841,6 +857,13 @@ class TelegramBot:
                 delegation_token=self.settings.delegation_token,
                 default_agent_id=self.settings.default_agent_id or None,
             ) as agent_client:
+                from .config_api_client import get_channel_agent_id
+                telegram_agent_id = get_channel_agent_id(
+                    "telegram",
+                    self.settings.default_agent_id,
+                    self.settings.telegram_agent_id,
+                ) or None
+
                 async for msg in telegram_client.poll_messages(
                     interval=self.settings.telegram_poll_interval,
                     timeout=self.settings.telegram_poll_timeout,
@@ -864,6 +887,7 @@ class TelegramBot:
                             edit_message=cbs["edit_message"],
                             delete_message=cbs["delete_message"],
                             format_content=cbs["format_content"],
+                            agent_id=telegram_agent_id,
                         )
                         continue
 
@@ -882,6 +906,7 @@ class TelegramBot:
                             edit_message=cbs["edit_message"],
                             delete_message=cbs["delete_message"],
                             format_content=cbs["format_content"],
+                            agent_id=telegram_agent_id,
                         )
                         continue
 
@@ -896,6 +921,7 @@ class TelegramBot:
                         edit_message=cbs["edit_message"],
                         delete_message=cbs["delete_message"],
                         format_content=cbs["format_content"],
+                        agent_id=telegram_agent_id,
                     )
 
     def stop(self):
@@ -938,6 +964,11 @@ class DiscordBot:
         agent_client: AgentClient,
         channel_id: str,
     ) -> None:
+        from .config_api_client import get_channel_agent_id
+        discord_agent_id = get_channel_agent_id(
+            "discord", self.settings.default_agent_id, self.settings.discord_agent_id
+        ) or None
+
         async for msg in discord_client.poll_messages(
             channel_id=channel_id,
             interval=self.settings.discord_poll_interval,
@@ -952,6 +983,7 @@ class DiscordBot:
                 send_typing_start=None,
                 send_typing_stop=None,
                 agent_client=agent_client,
+                agent_id=discord_agent_id,
             )
 
     def stop(self):
@@ -970,6 +1002,11 @@ class WhatsAppWebhookBot:
         messages = WhatsAppClient.parse_webhook_messages(payload)
         if not messages:
             return
+
+        from .config_api_client import get_channel_agent_id
+        whatsapp_agent_id = get_channel_agent_id(
+            "whatsapp", self.settings.default_agent_id, self.settings.whatsapp_agent_id
+        ) or None
 
         async with AgentClient(
             base_url=str(self.settings.agent_api_url),
@@ -993,6 +1030,7 @@ class WhatsAppWebhookBot:
                         send_typing_start=None,
                         send_typing_stop=None,
                         agent_client=agent_client,
+                        agent_id=whatsapp_agent_id,
                     )
 
 
@@ -1301,18 +1339,26 @@ class PollingManager:
         self._crash_count: Dict[str, int] = {}
 
     def _channel_should_run(self, name: str) -> bool:
+        from .config_api_client import get_dynamic_bool, get_dynamic_str
         s = self.settings
         if name == "signal":
-            return bool(s.signal_enabled and s.signal_phone_number)
+            enabled = get_dynamic_bool("SIGNAL_ENABLED", s.signal_enabled)
+            phone = get_dynamic_str("SIGNAL_PHONE_NUMBER", s.signal_phone_number)
+            return bool(enabled and phone)
         if name == "telegram":
-            return bool(s.telegram_enabled and s.telegram_bot_token)
+            enabled = get_dynamic_bool("TELEGRAM_ENABLED", s.telegram_enabled)
+            token = get_dynamic_str("TELEGRAM_BOT_TOKEN", s.telegram_bot_token)
+            return bool(enabled and token)
         if name == "discord":
-            return bool(s.discord_enabled and s.discord_bot_token)
+            enabled = get_dynamic_bool("DISCORD_ENABLED", s.discord_enabled)
+            token = get_dynamic_str("DISCORD_BOT_TOKEN", s.discord_bot_token)
+            return bool(enabled and token)
         if name == "email_inbound":
-            return bool(
-                s.email_inbound_enabled
-                and s.imap_host and s.imap_user and s.imap_password
-            )
+            enabled = get_dynamic_bool("EMAIL_INBOUND_ENABLED", s.email_inbound_enabled)
+            imap_host = get_dynamic_str("IMAP_HOST", s.imap_host or "")
+            imap_user = get_dynamic_str("IMAP_USER", s.imap_user or "")
+            imap_pass = get_dynamic_str("IMAP_PASSWORD", s.imap_password or "")
+            return bool(enabled and imap_host and imap_user and imap_pass)
         return False
 
     def _create_coro(self, name: str):

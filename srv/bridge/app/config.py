@@ -98,6 +98,12 @@ class Settings(BaseSettings):
     enable_doc_search: bool = Field(True, description="Enable document search")
     default_model: str = Field("auto", description="Default model selection")
     default_agent_id: str = Field("chat-agent", description="Default agent ID for inbound bridge messages")
+
+    # Per-channel agent overrides (empty = use default_agent_id)
+    telegram_agent_id: str = Field("", description="Agent ID for Telegram channel (empty = default)")
+    signal_agent_id: str = Field("", description="Agent ID for Signal channel (empty = default)")
+    discord_agent_id: str = Field("", description="Agent ID for Discord channel (empty = default)")
+    whatsapp_agent_id: str = Field("", description="Agent ID for WhatsApp channel (empty = default)")
     max_message_length: int = Field(4000, description="Max message length for Signal")
 
     # Rate limiting

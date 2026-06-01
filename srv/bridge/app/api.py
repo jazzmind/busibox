@@ -156,19 +156,48 @@ def create_app(
     @app.get("/health")
     async def health():
         from .main import get_polling_status
+        from .config_api_client import get_dynamic_bool, get_dynamic_channel_config
+
+        has_dynamic = get_dynamic_channel_config() is not None
 
         return {
             "status": "ok",
             "service": "bridge",
             "email_provider": email_client.provider,
             "email_enabled": settings.email_enabled,
-            "signal_enabled": settings.signal_enabled,
-            "telegram_enabled": settings.telegram_enabled,
-            "discord_enabled": settings.discord_enabled,
-            "whatsapp_enabled": settings.whatsapp_enabled,
+            "signal_enabled": get_dynamic_bool("SIGNAL_ENABLED", settings.signal_enabled),
+            "telegram_enabled": get_dynamic_bool("TELEGRAM_ENABLED", settings.telegram_enabled),
+            "discord_enabled": get_dynamic_bool("DISCORD_ENABLED", settings.discord_enabled),
+            "whatsapp_enabled": get_dynamic_bool("WHATSAPP_ENABLED", settings.whatsapp_enabled),
             "default_agent_id": settings.default_agent_id or None,
             "polling": get_polling_status(),
+            "config_source": "dynamic" if has_dynamic else "env",
         }
+
+    @app.post("/api/v1/config/reload")
+    async def reload_config(request: Request):
+        """
+        Push updated bridge channel config from admin UI.
+
+        Accepts a flat dict of env-var-name → value pairs (e.g.
+        TELEGRAM_ENABLED, TELEGRAM_BOT_TOKEN).  The PollingManager picks up
+        the new values on its next supervision cycle (within 5 seconds).
+
+        This endpoint is internal-only (container network, no external exposure).
+        """
+        from .config_api_client import set_dynamic_channel_config
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Body must be a JSON object")
+
+        set_dynamic_channel_config(body)
+        logger.info("[CONFIG-RELOAD] Channel config updated with %d keys", len(body))
+        return {"success": True, "keys_updated": len(body)}
 
     @app.post("/api/v1/test/agent-roundtrip")
     async def test_agent_roundtrip(req: AgentRoundtripRequest):

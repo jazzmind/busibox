@@ -154,3 +154,72 @@ def clear_config_cache() -> None:
     global _cached_config, _cached_at
     _cached_config = None
     _cached_at = 0
+
+
+# ---------------------------------------------------------------------------
+# Dynamic channel config override
+# ---------------------------------------------------------------------------
+# When the admin UI saves settings to config-api, it pushes the new values
+# here so the PollingManager can pick them up immediately without a restart.
+# Keys are env-var names (TELEGRAM_ENABLED, TELEGRAM_BOT_TOKEN, etc.).
+
+_dynamic_channel_config: Optional[dict] = None
+
+
+def set_dynamic_channel_config(raw: dict) -> None:
+    """Store admin-pushed channel config overrides in memory."""
+    global _dynamic_channel_config
+    _dynamic_channel_config = dict(raw)
+    logger.info("[CONFIG-API] Dynamic channel config updated: %s", list(raw.keys()))
+
+
+def get_dynamic_channel_config() -> Optional[dict]:
+    """Return the current in-memory channel config override, or None if not set."""
+    return _dynamic_channel_config
+
+
+def get_dynamic_bool(key: str, fallback: bool) -> bool:
+    """Return a boolean from the dynamic config, falling back to the env value."""
+    cfg = _dynamic_channel_config
+    if cfg is None:
+        return fallback
+    val = cfg.get(key)
+    if val is None:
+        return fallback
+    return str(val).lower() == "true"
+
+
+def get_dynamic_str(key: str, fallback: str) -> str:
+    """Return a string from the dynamic config, falling back to the env value."""
+    cfg = _dynamic_channel_config
+    if cfg is None:
+        return fallback
+    val = cfg.get(key)
+    return str(val) if val is not None else fallback
+
+
+def get_channel_agent_id(channel: str, default_agent_id: str, settings_agent_id: str = "") -> str:
+    """
+    Resolve the agent ID for a given channel.
+
+    Priority order:
+      1. Dynamic config override (TELEGRAM_AGENT_ID, etc.)
+      2. Settings env var (telegram_agent_id, etc.)
+      3. Default agent ID (default_agent_id / DEFAULT_AGENT_ID)
+    """
+    key_map = {
+        "telegram": "TELEGRAM_AGENT_ID",
+        "signal": "SIGNAL_AGENT_ID",
+        "discord": "DISCORD_AGENT_ID",
+        "whatsapp": "WHATSAPP_AGENT_ID",
+    }
+    env_key = key_map.get(channel, "")
+    dynamic = get_dynamic_str(env_key, "") if env_key else ""
+    if dynamic:
+        return dynamic
+    if settings_agent_id:
+        return settings_agent_id
+    dynamic_default = get_dynamic_str("DEFAULT_AGENT_ID", "")
+    if dynamic_default:
+        return dynamic_default
+    return default_agent_id or "chat-agent"
