@@ -49,6 +49,36 @@ TEST_MODE_HEADER = "X-Test-Mode"
 # In-memory PKCE/state store (process-local; fine for single-process authz)
 _oauth_state_store: Dict[str, Dict[str, Any]] = {}
 
+# ---------------------------------------------------------------------------
+# Dynamic OAuth integration credentials (updated at runtime via admin API)
+# Overrides env-var config without requiring a restart.
+# ---------------------------------------------------------------------------
+_dynamic_integration_config: Dict[str, str] = {}
+
+
+def set_dynamic_integration_config(cfg: Dict[str, str]) -> None:
+    """Update in-memory OAuth integration credentials (called by admin endpoint)."""
+    global _dynamic_integration_config
+    _dynamic_integration_config = {k: v for k, v in cfg.items() if v}
+    logger.info("[integrations] Dynamic config updated: %s", list(_dynamic_integration_config.keys()))
+
+
+def _dyn(key: str, fallback: Optional[str]) -> Optional[str]:
+    """Return dynamic config value if set, otherwise fall back to env-var value."""
+    return _dynamic_integration_config.get(key) or fallback
+
+
+def _google_enabled() -> bool:
+    cid = _dyn("GOOGLE_INTEGRATION_CLIENT_ID", config.google_integration_client_id)
+    csec = _dyn("GOOGLE_INTEGRATION_CLIENT_SECRET", config.google_integration_client_secret)
+    return bool(cid and csec)
+
+
+def _microsoft_enabled() -> bool:
+    cid = _dyn("MICROSOFT_INTEGRATION_CLIENT_ID", config.microsoft_integration_client_id)
+    csec = _dyn("MICROSOFT_INTEGRATION_CLIENT_SECRET", config.microsoft_integration_client_secret)
+    return bool(cid and csec)
+
 NONCE_SIZE = 12  # AES-GCM nonce bytes
 
 
@@ -130,17 +160,17 @@ def _provider_cfg(provider: str) -> Dict[str, Any]:
     cfg = dict(PROVIDERS[provider])
 
     if provider == "google":
-        client_id = config.google_integration_client_id
-        client_secret = config.google_integration_client_secret
+        client_id = _dyn("GOOGLE_INTEGRATION_CLIENT_ID", config.google_integration_client_id)
+        client_secret = _dyn("GOOGLE_INTEGRATION_CLIENT_SECRET", config.google_integration_client_secret)
         if not client_id:
             raise HTTPException(status_code=503, detail="Google integration not configured")
         cfg["client_id"] = client_id
         cfg["client_secret"] = client_secret
 
     elif provider == "microsoft":
-        client_id = config.microsoft_integration_client_id
-        client_secret = config.microsoft_integration_client_secret
-        tenant = config.microsoft_integration_tenant_id or "common"
+        client_id = _dyn("MICROSOFT_INTEGRATION_CLIENT_ID", config.microsoft_integration_client_id)
+        client_secret = _dyn("MICROSOFT_INTEGRATION_CLIENT_SECRET", config.microsoft_integration_client_secret)
+        tenant = _dyn("MICROSOFT_INTEGRATION_TENANT_ID", config.microsoft_integration_tenant_id) or "common"
         if not client_id:
             raise HTTPException(status_code=503, detail="Microsoft integration not configured")
         cfg["client_id"] = client_id
@@ -182,9 +212,9 @@ async def list_integrations(request: Request):
 
     result = []
     for provider in PROVIDERS:
-        if provider == "google" and not config.google_integration_enabled:
+        if provider == "google" and not _google_enabled():
             continue
-        if provider == "microsoft" and not config.microsoft_integration_enabled:
+        if provider == "microsoft" and not _microsoft_enabled():
             continue
 
         row = connected.get(provider)
@@ -491,4 +521,90 @@ async def get_integration_token(provider: str, request: Request):
         "provider": provider,
         "email": row["email"],
         "scopes": list(row["scopes"]),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Admin endpoint: read/write OAuth integration credentials
+# ---------------------------------------------------------------------------
+
+_MASKED = "********"
+
+_INTEGRATION_KEYS = [
+    "GOOGLE_INTEGRATION_CLIENT_ID",
+    "GOOGLE_INTEGRATION_CLIENT_SECRET",
+    "MICROSOFT_INTEGRATION_CLIENT_ID",
+    "MICROSOFT_INTEGRATION_CLIENT_SECRET",
+    "MICROSOFT_INTEGRATION_TENANT_ID",
+]
+
+
+class IntegrationConfigUpdate(BaseModel):
+    google_client_id: Optional[str] = None
+    google_client_secret: Optional[str] = None
+    microsoft_client_id: Optional[str] = None
+    microsoft_client_secret: Optional[str] = None
+    microsoft_tenant_id: Optional[str] = None
+
+
+@router.get("/admin/integration-config")
+async def get_integration_config(request: Request):
+    """
+    Admin: return current OAuth integration credential status.
+    Secret values are masked; client IDs and tenant ID are returned plaintext.
+    """
+    await require_auth(request, required_scopes=[])
+
+    def _val(key: str) -> Optional[str]:
+        return _dynamic_integration_config.get(key) or getattr(config, {
+            "GOOGLE_INTEGRATION_CLIENT_ID": "google_integration_client_id",
+            "GOOGLE_INTEGRATION_CLIENT_SECRET": "google_integration_client_secret",
+            "MICROSOFT_INTEGRATION_CLIENT_ID": "microsoft_integration_client_id",
+            "MICROSOFT_INTEGRATION_CLIENT_SECRET": "microsoft_integration_client_secret",
+            "MICROSOFT_INTEGRATION_TENANT_ID": "microsoft_integration_tenant_id",
+        }.get(key, ""), None)
+
+    def _is_secret(key: str) -> bool:
+        return "SECRET" in key
+
+    return {
+        "google_enabled": _google_enabled(),
+        "microsoft_enabled": _microsoft_enabled(),
+        "google_client_id": _val("GOOGLE_INTEGRATION_CLIENT_ID") or None,
+        "google_client_secret": _MASKED if _val("GOOGLE_INTEGRATION_CLIENT_SECRET") else None,
+        "microsoft_client_id": _val("MICROSOFT_INTEGRATION_CLIENT_ID") or None,
+        "microsoft_client_secret": _MASKED if _val("MICROSOFT_INTEGRATION_CLIENT_SECRET") else None,
+        "microsoft_tenant_id": _val("MICROSOFT_INTEGRATION_TENANT_ID") or "common",
+    }
+
+
+@router.post("/admin/integration-config")
+async def update_integration_config(body: IntegrationConfigUpdate, request: Request):
+    """
+    Admin: update OAuth integration credentials in memory.
+    Called by the admin UI after it saves credentials to config-api.
+    """
+    await require_auth(request, required_scopes=[])
+
+    new_cfg: Dict[str, str] = {}
+    if body.google_client_id is not None:
+        new_cfg["GOOGLE_INTEGRATION_CLIENT_ID"] = body.google_client_id
+    if body.google_client_secret is not None and body.google_client_secret != _MASKED:
+        new_cfg["GOOGLE_INTEGRATION_CLIENT_SECRET"] = body.google_client_secret
+    if body.microsoft_client_id is not None:
+        new_cfg["MICROSOFT_INTEGRATION_CLIENT_ID"] = body.microsoft_client_id
+    if body.microsoft_client_secret is not None and body.microsoft_client_secret != _MASKED:
+        new_cfg["MICROSOFT_INTEGRATION_CLIENT_SECRET"] = body.microsoft_client_secret
+    if body.microsoft_tenant_id is not None:
+        new_cfg["MICROSOFT_INTEGRATION_TENANT_ID"] = body.microsoft_tenant_id
+
+    # Merge with existing dynamic config (don't clear keys not included in this update)
+    merged = dict(_dynamic_integration_config)
+    merged.update(new_cfg)
+    set_dynamic_integration_config(merged)
+
+    return {
+        "ok": True,
+        "google_enabled": _google_enabled(),
+        "microsoft_enabled": _microsoft_enabled(),
     }
