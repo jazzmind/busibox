@@ -1465,11 +1465,12 @@ k8s-connect-status:
 # management. Gradually replaces bash scripts with native Rust.
 #
 # Usage:
-#   make busibox-build    # Compile the CLI binary
-#   make busibox          # Build and run the CLI
+#   make busibox-build              # Compile the CLI binary
+#   make busibox                    # Build and run the CLI (TUI)
+#   make busibox ARGS="import <f>"  # Run a CLI subcommand (e.g. import)
 
 busibox-build:
 	@bash scripts/make/busibox-cli.sh build
 
 busibox:
-	@bash scripts/make/busibox-cli.sh run
+	@bash scripts/make/busibox-cli.sh run $(ARGS)

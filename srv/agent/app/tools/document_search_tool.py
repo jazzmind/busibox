@@ -11,13 +11,17 @@ logger = structlog.get_logger()
 
 HIGH_RELEVANCY_THRESHOLD = 0.85
 ADAPTIVE_MULTIPLIER = 2
+# Results that score below this fraction of the top hit are dropped even if they
+# cleared the absolute min_score floor.  Keeps multi-source answers (secondary
+# hits at ≥0.7x the best score) while excluding off-topic docs.
+RELATIVE_SCORE_RATIO = 0.7
 
 
 class DocumentSearchInput(BaseModel):
     """Input schema for document search tool."""
     query: str = Field(description="Search query to find relevant documents")
     limit: int = Field(default=10, description="Maximum number of results (default 10, max 50)")
-    min_score: float = Field(default=0.35, description="Minimum relevancy score to include (0-1, default 0.35)")
+    min_score: float = Field(default=0.5, description="Minimum relevancy score to include (0-1, default 0.5)")
     mode: str = Field(default="hybrid", description="Search mode: hybrid, semantic, or keyword")
     file_ids: Optional[List[str]] = Field(default=None, description="Optional list of file IDs to filter")
     expand_graph: bool = Field(default=False, description="Expand graph relationships (adds latency, default false)")
@@ -47,7 +51,7 @@ async def search_documents(
     ctx: RunContext[BusiboxDeps],
     query: str,
     limit: int = 10,
-    min_score: float = 0.35,
+    min_score: float = 0.5,
     mode: str = "hybrid",
     file_ids: Optional[List[str]] = None,
     expand_graph: bool = False,
@@ -187,6 +191,26 @@ async def search_documents(
                 results=[],
             )
         
+        # Relative gate: drop any result that is far below the best hit.
+        # This removes off-topic documents that cleared the absolute floor but are
+        # clearly weaker than the top match (e.g. dredging docs for a per-diem query).
+        if relevant_results:
+            relevant_results.sort(key=lambda r: r.get("score", 0.0), reverse=True)
+            top_score = relevant_results[0].get("score", 0.0)
+            relative_cutoff = max(min_score, top_score * RELATIVE_SCORE_RATIO)
+            before_gate = len(relevant_results)
+            relevant_results = [r for r in relevant_results if r.get("score", 0.0) >= relative_cutoff]
+            if len(relevant_results) != before_gate:
+                logger.info(
+                    "document_search: relative gate applied",
+                    extra={
+                        "top_score": round(top_score, 4),
+                        "cutoff": round(relative_cutoff, 4),
+                        "kept": len(relevant_results),
+                        "dropped": before_gate - len(relevant_results),
+                    },
+                )
+
         formatted_results = []
         context_parts = []
         
