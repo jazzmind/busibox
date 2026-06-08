@@ -13,6 +13,7 @@ from api.middleware.jwt_auth import ScopeChecker
 from shared.config import Config
 from api.services.minio_service import MinIOService
 from processors.html_renderer import HTMLRenderer
+from api.routes.files import check_file_access
 
 logger = structlog.get_logger()
 
@@ -24,40 +25,37 @@ require_data_read = ScopeChecker("data.read")
 
 async def _get_file_metadata(postgres_service, file_uuid, user_uuid, fields, request=None):
     """
-    Helper to get file metadata using async PostgreSQL.
-    
-    Args:
-        postgres_service: PostgresService instance (async)
-        file_uuid: File UUID (string or UUID object)
-        user_uuid: User UUID (string or UUID object)
-        fields: List of field names to select
-        request: Optional FastAPI Request for RLS context
-        
-    Returns:
-        Dict with file data or None if not found
+    Get file metadata, enforcing visibility + role access (not owner-only).
+
+    Uses check_file_access so that shared/authenticated documents are accessible
+    to non-owners who hold the required roles, matching the behaviour of all
+    other file endpoints (GET /files/{id}, download, chunks, etc.).
     """
     import uuid as uuid_mod
-    field_list = ", ".join(fields)
-    
-    # Handle both string and UUID inputs
+
     file_id = file_uuid if isinstance(file_uuid, uuid_mod.UUID) else uuid_mod.UUID(file_uuid)
     user_id = user_uuid if isinstance(user_uuid, uuid_mod.UUID) else uuid_mod.UUID(user_uuid)
-    
+
     async with postgres_service.acquire(request) as conn:
-        # Use owner_id for RLS check, not user_id
-        row = await conn.fetchrow(
-            f"""SELECT {field_list}
-               FROM data_files 
-               WHERE file_id = $1 AND owner_id = $2""",
-            file_id,
-            user_id
-        )
-        
-        if not row:
+        has_access, file_dict, _ = await check_file_access(conn, file_id, str(user_id), request)
+        if not has_access or file_dict is None:
             return None
-        
-        # Convert row to dict
-        return dict(row)
+
+        # check_file_access returns a superset of fields; fetch the specific
+        # columns the caller requested so the rest of the handler works unchanged.
+        requested = set(fields)
+        available = set(file_dict.keys())
+        missing = requested - available
+
+        if missing:
+            row = await conn.fetchrow(
+                f"SELECT {', '.join(missing)} FROM data_files WHERE file_id = $1",
+                file_id,
+            )
+            if row:
+                file_dict = {**file_dict, **dict(row)}
+
+        return file_dict
 
 
 @router.get("/{fileId}/markdown", dependencies=[Depends(require_data_read)])
