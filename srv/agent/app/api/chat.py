@@ -1188,20 +1188,22 @@ async def send_chat_message_stream_agentic(
                         "source": event.source,
                         "message": event.message,
                     }
-                    # Persist structured intent-routing diagnostics for later analysis.
-                    if (
-                        event.type == "thought"
-                        and isinstance(event.data, dict)
-                        and event.data.get("phase") == "intent_routing"
-                    ):
-                        thought_item["data"] = {
-                            "phase": "intent_routing",
-                            "action_type": event.data.get("action_type"),
-                            "needs_tools": event.data.get("needs_tools"),
-                            "confidence": event.data.get("confidence"),
-                            "routing_source": event.data.get("routing_source"),
-                            "follow_up_question": event.data.get("follow_up_question"),
-                        }
+                    # Persist structured data for diagnostics and UI re-rendering.
+                    if event.type == "thought" and isinstance(event.data, dict):
+                        phase = event.data.get("phase")
+                        if phase == "intent_routing":
+                            thought_item["data"] = {
+                                "phase": "intent_routing",
+                                "action_type": event.data.get("action_type"),
+                                "needs_tools": event.data.get("needs_tools"),
+                                "confidence": event.data.get("confidence"),
+                                "routing_source": event.data.get("routing_source"),
+                                "follow_up_question": event.data.get("follow_up_question"),
+                            }
+                        elif phase:
+                            # Preserve phase for all other thought types (e.g. model_reasoning)
+                            # so the UI can re-render the thinking section after completion.
+                            thought_item["data"] = {"phase": phase}
                     thoughts.append(thought_item)
                 
                 # Build run event log for RunRecord

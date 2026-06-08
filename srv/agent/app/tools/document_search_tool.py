@@ -185,9 +185,11 @@ async def search_documents(
             if page_num:
                 source_parts.append(f"p.{page_num}")
             source_ref = ", ".join(source_parts)
+            # Citation URL includes page number so the UI can scroll directly to it.
+            citation_url = f"doc:{fid}:{page_num}" if page_num else f"doc:{fid}"
 
             context_parts.append(
-                f"--- Source {idx} [{source_ref}] (score:{score:.2f}, file_id:{fid}) ---\n{result.get('text', '')}"
+                f"--- Source {idx} [{source_ref}] (score:{score:.2f}, file_id:{fid}, citation_url:{citation_url}) ---\n{result.get('text', '')}"
             )
         
         full_context = (
@@ -199,8 +201,9 @@ async def search_documents(
         full_context += "\n\n".join(context_parts)
         full_context += (
             "\n\nWhen citing information from these sources, always include "
-            "a citation using this format: [Source: filename, p.N](doc:file_id) — "
-            "for example: [Source: report.pdf, p.5](doc:abc-123-def)"
+            "a citation using this format: [Source: filename, p.N](doc:file_id:page_number) — "
+            "for example: [Source: report.pdf, p.5](doc:abc-123-def:5). "
+            "Use the citation_url value from each source's header."
         )
 
         graph_context_str: Optional[str] = None
@@ -242,7 +245,7 @@ The tool performs hybrid search (combining semantic and keyword matching) for be
 Results are automatically filtered based on user permissions (RLS).
 
 IMPORTANT: When you use information from search results in your response, always cite the 
-source using this format: [Source: filename, p.N](doc:file_id)
+source using the citation_url from the result header: [Source: filename, p.N](doc:file_id:page_number)
 
 Example: "What does the compliance document say about data retention?"
 """,
