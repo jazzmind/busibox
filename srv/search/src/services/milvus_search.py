@@ -141,17 +141,25 @@ class MilvusSearchService:
         
         # Build candidate partitions
         candidates = [f"personal_{user_id}"]
+        role_candidates: List[str] = []
         if readable_role_ids:
-            candidates.extend([f"role_{role_id}" for role_id in readable_role_ids])
+            role_candidates = [f"role_{role_id}" for role_id in readable_role_ids]
+            candidates.extend(role_candidates)
         
         # Filter to only existing partitions
         accessible = [p for p in candidates if p in existing]
+        missing = [p for p in candidates if p not in existing]
         
-        logger.debug(
-            "Built accessible partitions",
+        # Elevated to INFO so we can confirm scope during diagnostics.
+        logger.info(
+            "get_accessible_partitions: partition resolution",
             user_id=user_id,
+            readable_role_ids=readable_role_ids or [],
+            role_candidate_count=len(role_candidates),
             candidate_count=len(candidates),
             accessible_count=len(accessible),
+            accessible_partitions=accessible,
+            missing_partitions=missing,
         )
         
         return accessible

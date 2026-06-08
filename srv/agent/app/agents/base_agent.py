@@ -2416,12 +2416,27 @@ class BaseStreamingAgent(StreamingAgent):
 
         if any(t in self.config.tools for t in ("document_search", "web_search")):
             parts.append("")
-            parts.append("## Search Result Relevance")
+            parts.append("## Search Result Relevance and Citations")
             parts.append(
                 "When you receive results from document_search or web_search, critically evaluate "
                 "whether they are actually relevant to the user's query. If the results are about "
                 "a completely different topic, IGNORE them — do not summarize or reference irrelevant "
                 "results. Only use results that genuinely answer or inform the user's question."
+            )
+        if "document_search" in self.config.tools:
+            parts.append("")
+            parts.append("## Mandatory Document Citations")
+            parts.append(
+                "EVERY sentence or claim that uses information from document_search results MUST "
+                "include an inline citation immediately after the claim. Use EXACTLY this markdown "
+                "format and nothing else:\n"
+                "  [Source: filename, p.N](doc:file_id:page_number)\n"
+                "Example: \"The policy requires annual reviews. [Source: policy.pdf, p.3](doc:abc-123:3)\"\n"
+                "Rules:\n"
+                "- Use the citation_url provided in the tool result for each source.\n"
+                "- Do NOT omit citations. Do NOT use bare URLs or vague references.\n"
+                "- If you cite multiple sources in one sentence, add each citation inline.\n"
+                "- If no relevant documents were found, say so clearly without fabricating citations."
             )
 
         attachment_section = self._build_attachment_context_section(context)

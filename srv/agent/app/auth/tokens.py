@@ -165,6 +165,32 @@ async def exchange_token(
     if not result:
         raise ValueError(f"Token exchange failed for audience {audience}")
     
+    # Diagnostic: log role count in the exchanged search-api token so we can
+    # confirm that shared-library role UUIDs are present in Milvus queries.
+    if audience == "search-api":
+        try:
+            import base64, json as _json
+            _parts = result.access_token.split(".")
+            if len(_parts) >= 2:
+                _padded = _parts[1] + "=" * (-len(_parts[1]) % 4)
+                _claims = _json.loads(base64.urlsafe_b64decode(_padded))
+                _raw_roles = _claims.get("roles", [])
+                _role_ids = [
+                    r.get("id") if isinstance(r, dict) else r
+                    for r in _raw_roles
+                ]
+                logger.info(
+                    "search-api token exchange: roles in issued token",
+                    extra={
+                        "user_id": principal.sub,
+                        "role_count": len(_role_ids),
+                        "role_ids": _role_ids,
+                        "resource_id_used": resource_id,
+                    },
+                )
+        except Exception as _diag_err:
+            logger.debug("search-api token diagnostic decode failed: %s", _diag_err)
+
     # Use the actual expires_in from authz response instead of calculating client-side
     # This ensures the cached token expiry matches the actual JWT expiry
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=result.expires_in)

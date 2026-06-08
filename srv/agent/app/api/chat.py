@@ -1153,6 +1153,9 @@ async def send_chat_message_stream_agentic(
             thoughts = []
             run_events = []
             selected_agent_id = None
+            # Citations gathered from document_search tool results, keyed by file_id.
+            # Stored as a dict to deduplicate (keep highest score, earliest page).
+            citations_by_file: Dict[str, Any] = {}
             
             # Run agentic dispatcher
             dispatcher_metadata: Dict[str, Any] = dict(payload.metadata or {})
@@ -1205,6 +1208,26 @@ async def send_chat_message_stream_agentic(
                             # so the UI can re-render the thinking section after completion.
                             thought_item["data"] = {"phase": phase}
                     thoughts.append(thought_item)
+
+                # Accumulate document_search results for deterministic citation list.
+                if (
+                    event.type == "tool_result"
+                    and event.source == "document_search"
+                    and isinstance(event.data, dict)
+                ):
+                    for item in event.data.get("results", []):
+                        fid = item.get("file_id") or item.get("fileId")
+                        if not fid:
+                            continue
+                        new_score = float(item.get("score", 0.0))
+                        page = item.get("page_number") or item.get("pageNumber") or None
+                        if fid not in citations_by_file or new_score > citations_by_file[fid]["score"]:
+                            citations_by_file[fid] = {
+                                "file_id": fid,
+                                "filename": item.get("filename", ""),
+                                "page_number": page,
+                                "score": new_score,
+                            }
                 
                 # Build run event log for RunRecord
                 run_events.append({
@@ -1223,14 +1246,23 @@ async def send_chat_message_stream_agentic(
             # Join without separator - content chunks are already properly formatted
             response_text = "".join(full_content) if full_content else "No response generated."
             
+            # Build routing_decision payload.  Always include citations even when
+            # no thoughts/agents present, so the frontend can render source chips.
+            collected_citations = sorted(
+                citations_by_file.values(), key=lambda c: -c["score"]
+            )
+            routing_payload: Dict[str, Any] = {}
+            if thoughts or available_agents:
+                routing_payload["thoughts"] = thoughts
+                routing_payload["selected_agents"] = available_agents
+            if collected_citations:
+                routing_payload["citations"] = collected_citations
+
             assistant_message = Message(
                 conversation_id=conversation.id,
                 role="assistant",
                 content=response_text,
-                routing_decision={
-                    "thoughts": thoughts,
-                    "selected_agents": available_agents,
-                } if thoughts or available_agents else None,
+                routing_decision=routing_payload if routing_payload else None,
             )
             session.add(assistant_message)
             
