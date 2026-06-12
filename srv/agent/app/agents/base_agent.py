@@ -54,6 +54,7 @@ from app.agents.streaming_agent import StreamingAgent, StreamCallback
 from app.clients.busibox import BusiboxClient
 from app.config.settings import get_settings
 from app.schemas.auth import Principal
+from app.schemas.run import ALLOWED_IMAGE_MEDIA_TYPES
 from app.schemas.streaming import StreamEvent, thought, tool_start, tool_result, content, error, complete, clarify_parallel, progress
 from app.services.attachment_resolver import attachment_resolver
 from app.services.token_service import get_or_exchange_token
@@ -600,6 +601,8 @@ class AgentContext:
     # Optional per-run token budget override.
     max_tokens: Optional[int] = None
     # Base64 images for multimodal structured-output calls (from /runs/invoke).
+    # Shape is enforced by RunInvoke._validate_images for /runs/invoke;
+    # _build_user_content skips malformed entries from unvalidated paths.
     # Each item: {"media_type": "image/jpeg", "data": "<base64>"}
     images: List[Dict[str, str]] = field(default_factory=list)
     # Deduplication cache for tool calls: maps (tool_name, args_json) -> result
@@ -1713,6 +1716,7 @@ class BaseStreamingAgent(StreamingAgent):
                             response_schema=context.response_schema,
                             max_tokens=context.max_tokens or self.config.max_tokens,
                             message_history=plain_history,
+                            images=context.images or None,
                         )
                         context.tool_results["llm_response"] = structured_output
                     except Exception as fallback_err:
@@ -2151,15 +2155,28 @@ class BaseStreamingAgent(StreamingAgent):
 
     @staticmethod
     def _build_user_content(prompt: str, images: Optional[List[Dict[str, str]]]) -> Any:
-        """Plain string when no images; OpenAI content-part list otherwise."""
+        """Plain string when no images; OpenAI content-part list otherwise.
+
+        Entries that don't match the validated shape (see
+        RunInvoke._validate_images) are skipped: /runs/invoke enforces the
+        shape upstream, but POST /runs payloads are unvalidated.
+        """
         if not images:
             return prompt
         parts: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
         for img in images:
+            if not isinstance(img, dict):
+                continue
+            media_type = img.get("media_type")
+            data = img.get("data")
+            if media_type not in ALLOWED_IMAGE_MEDIA_TYPES or not isinstance(data, str) or not data:
+                continue
             parts.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:{img['media_type']};base64,{img['data']}"},
+                "image_url": {"url": f"data:{media_type};base64,{data}"},
             })
+        if len(parts) == 1:
+            return prompt
         return parts
 
     @staticmethod

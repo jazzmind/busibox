@@ -86,3 +86,69 @@ async def test_images_become_content_parts():
         "type": "image_url",
         "image_url": {"url": "data:image/jpeg;base64,aGVsbG8="},
     }
+
+
+class _FlakyCompletions:
+    """Returns schema-invalid JSON on call 1, valid JSON on call 2."""
+
+    def __init__(self, captured):
+        self._captured = captured
+        self.calls = 0
+
+    async def create(self, **kwargs):
+        self._captured.append(kwargs)
+        self.calls += 1
+
+        class _Msg:
+            content = json.dumps({"wrong_field": 1}) if self.calls == 1 else json.dumps({"merchant": "Starbucks"})
+
+        class _Choice:
+            message = _Msg()
+
+        class _Resp:
+            choices = [_Choice()]
+
+        return _Resp()
+
+
+class _FlakyAsyncOpenAI:
+    captured = []
+
+    def __init__(self, *args, **kwargs):
+        class _Chat:
+            completions = _FlakyCompletions(_FlakyAsyncOpenAI.captured)
+
+        self.chat = _Chat()
+
+
+async def test_retry_resends_image_content(monkeypatch):
+    _FlakyAsyncOpenAI.captured = []
+    monkeypatch.setattr("openai.AsyncOpenAI", _FlakyAsyncOpenAI)
+    agent = RecordExtractorAgent()
+    images = [{"media_type": "image/jpeg", "data": "aGVsbG8="}]
+    result = await agent._call_structured_output(
+        prompt="extract", system_prompt="sys", response_schema=SCHEMA,
+        max_tokens=100, images=images,
+    )
+    assert json.loads(result) == {"merchant": "Starbucks"}
+    assert len(_FlakyAsyncOpenAI.captured) == 2
+    retry_messages = _FlakyAsyncOpenAI.captured[1]["messages"]
+    user_turns = [m for m in retry_messages if m["role"] == "user" and isinstance(m["content"], list)]
+    assert len(user_turns) == 1
+    assert user_turns[0]["content"][1]["image_url"]["url"] == "data:image/jpeg;base64,aGVsbG8="
+
+
+async def test_malformed_image_entries_are_skipped():
+    agent = RecordExtractorAgent()
+    images = [
+        42,
+        {"data": "aGVsbG8="},
+        {"media_type": "application/pdf", "data": "aGVsbG8="},
+        {"media_type": "image/jpeg", "data": ""},
+    ]
+    await agent._call_structured_output(
+        prompt="extract", system_prompt="sys", response_schema=SCHEMA,
+        max_tokens=100, images=images,
+    )
+    user_msg = _FakeAsyncOpenAI.captured[0]["messages"][-1]
+    assert isinstance(user_msg["content"], str)
