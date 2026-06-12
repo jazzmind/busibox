@@ -44,6 +44,24 @@ AGENT_LIMITS = {
 }
 
 
+def redact_images_for_persistence(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Replace base64 image data with size metadata before DB persistence.
+
+    Megabytes of base64 do not belong in the runs table; the in-memory payload
+    keeps the real data for execution.
+    """
+    images = payload.get("images")
+    if not images:
+        return payload
+    redacted = dict(payload)
+    redacted["images"] = [
+        {"media_type": img.get("media_type"), "size_b64": len(img.get("data") or "")}
+        for img in images
+        if isinstance(img, dict)
+    ]
+    return redacted
+
+
 def get_agent_timeout(agent_tier: str = "simple") -> int:
     """Get timeout for agent tier (Simple: 30s, Complex: 5min, Batch: 30min)."""
     return AGENT_LIMITS.get(agent_tier, AGENT_LIMITS["simple"])["timeout"]
@@ -192,7 +210,7 @@ async def create_run(
     run_record = RunRecord(
         agent_id=agent_id,
         status="pending",
-        input=payload,
+        input=redact_images_for_persistence(payload),
         created_by=principal.sub,
         definition_snapshot=definition_snapshot,
         events=[],
@@ -324,6 +342,7 @@ async def create_run(
                         "agent_id": str(agent_id),
                         "response_schema": payload.get("response_schema"),
                         "max_tokens": payload.get("max_tokens"),
+                        "images": payload.get("images") or [],
                     }
                     logger.info(
                         f"Calling BaseStreamingAgent.run() with context: "
