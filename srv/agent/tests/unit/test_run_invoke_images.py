@@ -46,3 +46,24 @@ def test_empty_data_rejected():
 def test_images_must_be_a_list():
     with pytest.raises(ValidationError, match="must be a list"):
         RunInvoke(agent_name="record-extractor", input={"prompt": "x", "images": "nope"})
+
+
+def test_exactly_four_images_accepted():
+    imgs = [{"media_type": "image/png", "data": "aGVsbG8="}] * 4
+    inv = _invoke(imgs)
+    assert len(inv.input["images"]) == 4
+
+
+def test_data_at_exact_size_limit_accepted():
+    inv = _invoke([{"media_type": "image/jpeg", "data": "A" * 7_000_000}])
+    assert len(inv.input["images"]) == 1
+
+
+def test_explicit_none_images_is_valid():
+    inv = _invoke(None)
+    assert inv.input["images"] is None
+
+
+def test_non_dict_list_item_rejected():
+    with pytest.raises(ValidationError, match="must be an object"):
+        _invoke(["aGVsbG8="])
