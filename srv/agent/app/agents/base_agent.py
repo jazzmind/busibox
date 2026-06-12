@@ -599,6 +599,9 @@ class AgentContext:
     current_query: Optional[str] = None
     # Optional per-run token budget override.
     max_tokens: Optional[int] = None
+    # Base64 images for multimodal structured-output calls (from /runs/invoke).
+    # Each item: {"media_type": "image/jpeg", "data": "<base64>"}
+    images: List[Dict[str, str]] = field(default_factory=list)
     # Deduplication cache for tool calls: maps (tool_name, args_json) -> result
     _tool_call_dedup: Dict[str, Any] = field(default_factory=dict)
 
@@ -998,7 +1001,8 @@ class BaseStreamingAgent(StreamingAgent):
             agent_context.attachment_metadata = context.get("attachment_metadata", []) or []
             agent_context.response_schema = context.get("response_schema")
             agent_context.max_tokens = context.get("max_tokens")
-        
+            agent_context.images = context.get("images") or []
+
         # Check what scopes this agent's tools require
         scopes = self.config.get_required_scopes()
         requires_auth = len(scopes) > 0
@@ -2100,6 +2104,7 @@ class BaseStreamingAgent(StreamingAgent):
             response_schema=response_schema,
             max_tokens=context.max_tokens or self.config.max_tokens,
             message_history=message_history,
+            images=context.images or None,
         )
 
     @staticmethod
@@ -2145,6 +2150,19 @@ class BaseStreamingAgent(StreamingAgent):
         return cleaned
 
     @staticmethod
+    def _build_user_content(prompt: str, images: Optional[List[Dict[str, str]]]) -> Any:
+        """Plain string when no images; OpenAI content-part list otherwise."""
+        if not images:
+            return prompt
+        parts: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for img in images:
+            parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{img['media_type']};base64,{img['data']}"},
+            })
+        return parts
+
+    @staticmethod
     def _fixup_arrays(data: Any, schema: Dict[str, Any]) -> Any:
         """Deduplicate and truncate arrays that exceed maxItems.
 
@@ -2188,6 +2206,7 @@ class BaseStreamingAgent(StreamingAgent):
         response_schema: Dict[str, Any],
         max_tokens: Optional[int] = None,
         message_history: Optional[List[Dict[str, str]]] = None,
+        images: Optional[List[Dict[str, str]]] = None,
     ) -> str:
         """
         Call the LLM directly via the OpenAI client with response_format enforced.
@@ -2223,13 +2242,14 @@ class BaseStreamingAgent(StreamingAgent):
             max_tokens = await _get_model_max_output_tokens(model_name)
 
         effective_prompt = "/no_think\n" + prompt
+        user_content = self._build_user_content(effective_prompt, images)
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
         ]
         if message_history:
             messages.extend(message_history)
-        messages.append({"role": "user", "content": effective_prompt})
+        messages.append({"role": "user", "content": user_content})
 
         kwargs: Dict[str, Any] = {
             "model": model_name,
@@ -2278,7 +2298,7 @@ class BaseStreamingAgent(StreamingAgent):
                     if message_history:
                         retry_messages.extend(message_history)
                     retry_messages.extend([
-                        {"role": "user", "content": effective_prompt},
+                        {"role": "user", "content": user_content},
                         {"role": "assistant", "content": raw_content},
                         {"role": "user", "content": (
                             "/no_think\n"
@@ -2308,7 +2328,7 @@ class BaseStreamingAgent(StreamingAgent):
                     if message_history:
                         retry_messages.extend(message_history)
                     retry_messages.extend([
-                        {"role": "user", "content": effective_prompt},
+                        {"role": "user", "content": user_content},
                         {"role": "assistant", "content": content},
                         {"role": "user", "content": (
                             "/no_think\n"
