@@ -587,10 +587,12 @@ fn main() -> Result<()> {
             match rx.try_recv() {
                 Ok(app::ValidateSecretsUpdate::Results {
                     keys,
+                    values,
                     local_error,
                     remote_error,
                 }) => {
                     app.validate_secrets_results = keys;
+                    app.validate_secrets_values = values;
                     app.validate_secrets_loading = false;
                     if let Some(err) = local_error {
                         app.validate_secrets_error = Some(err);
@@ -1353,7 +1355,10 @@ fn perform_validate_secrets(app: &mut App) {
 
     // Reset screen state
     app.validate_secrets_results.clear();
+    app.validate_secrets_values.clear();
     app.validate_secrets_scroll = 0;
+    app.validate_secrets_selected = 0;
+    app.validate_secrets_show_secret = None;
     app.validate_secrets_loading = true;
     app.validate_secrets_error = None;
     app.validate_secrets_vault_file = vault_file;
@@ -1385,6 +1390,7 @@ fn perform_validate_secrets(app: &mut App) {
             Ok(None) => {
                 let _ = tx.send(app::ValidateSecretsUpdate::Results {
                     keys: vec![],
+                    values: std::collections::HashMap::new(),
                     local_error: Some(format!("vault.{vault_prefix}.yml not found")),
                     remote_error: None,
                 });
@@ -1393,6 +1399,7 @@ fn perform_validate_secrets(app: &mut App) {
             Err(e) => {
                 let _ = tx.send(app::ValidateSecretsUpdate::Results {
                     keys: vec![],
+                    values: std::collections::HashMap::new(),
                     local_error: Some(format!("{e}")),
                     remote_error: None,
                 });
@@ -1481,6 +1488,7 @@ fn perform_validate_secrets(app: &mut App) {
 
         let _ = tx.send(app::ValidateSecretsUpdate::Results {
             keys: results,
+            values: vault_values,
             local_error: None,
             remote_error,
         });

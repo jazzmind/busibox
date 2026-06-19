@@ -793,11 +793,17 @@ async def token(request: Request):
             # User's roles that are also bound to this app
             user_app_roles = [r for r in roles if r["id"] in app_role_binding_ids]
 
-            # Auto-granted: app-bound roles the user does NOT directly hold
+            # Auto-granted: ONLY data-partition roles (name starts with "app:")
+            # that the user does not directly hold.  Real access roles
+            # (Admin, Power-User, named teams) must never be auto-granted —
+            # they control menu visibility, Admin Dashboard links, and RLS
+            # bypass policies, so fabricating them for every app user is a
+            # privilege-escalation bug.
             auto_granted = [
                 {"id": b["id"], "name": b["name"], "scopes": b.get("scopes")}
                 for b in app_role_bindings
                 if b["id"] not in user_role_ids
+                and str(b.get("name", "")).startswith("app:")
             ]
 
             app_roles = user_app_roles + auto_granted

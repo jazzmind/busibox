@@ -261,11 +261,16 @@ pub struct App {
     // Validate secrets screen state
     pub validate_secrets_results: Vec<crate::modules::remote::SecretKeyStatus>,
     pub validate_secrets_scroll: usize,
+    pub validate_secrets_selected: usize,
     pub validate_secrets_loading: bool,
     pub validate_secrets_rx: Option<mpsc::Receiver<ValidateSecretsUpdate>>,
     pub validate_secrets_vault_file: String,
     pub validate_secrets_is_remote: bool,
     pub validate_secrets_error: Option<String>,
+    /// Decrypted plaintext values keyed by key_path (e.g. "postgresql.password").
+    pub validate_secrets_values: std::collections::HashMap<String, String>,
+    /// Key path whose value is currently shown in the "View Secret" popup.
+    pub validate_secrets_show_secret: Option<String>,
 
     // Profile state
     pub profiles: Option<ProfilesFile>,
@@ -645,6 +650,7 @@ pub enum K8sManageUpdate {
 pub enum ValidateSecretsUpdate {
     Results {
         keys: Vec<crate::modules::remote::SecretKeyStatus>,
+        values: std::collections::HashMap<String, String>,
         local_error: Option<String>,
         remote_error: Option<String>,
     },
@@ -884,11 +890,14 @@ impl App {
             k8s_cluster_rx: None,
             validate_secrets_results: Vec::new(),
             validate_secrets_scroll: 0,
+            validate_secrets_selected: 0,
             validate_secrets_loading: false,
             validate_secrets_rx: None,
             validate_secrets_vault_file: String::new(),
             validate_secrets_is_remote: false,
             validate_secrets_error: None,
+            validate_secrets_values: std::collections::HashMap::new(),
+            validate_secrets_show_secret: None,
             profiles: None,
             profile_selected: 0,
             profile_lock: None,

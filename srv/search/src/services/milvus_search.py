@@ -140,7 +140,8 @@ class MilvusSearchService:
         existing = self.get_existing_partitions()
         
         # Build candidate partitions
-        candidates = [f"personal_{user_id}"]
+        # Always include: personal_{user_id} + authenticated (visible to all logged-in users)
+        candidates = [f"personal_{user_id}", "authenticated"]
         role_candidates: List[str] = []
         if readable_role_ids:
             role_candidates = [f"role_{role_id}" for role_id in readable_role_ids]
