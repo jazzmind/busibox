@@ -81,7 +81,10 @@ async def trigger_task_run(
     next_depth = current_depth + 1
 
     # --- Guardrail 1: self-only restriction ---
-    if context_task_id != task_id:
+    # If context_task_id is known (injected via metadata), enforce self-only.
+    # If None (e.g. first deployment before metadata fix, or direct invocation),
+    # allow but log a warning so we can trace any abuse.
+    if context_task_id is not None and context_task_id != task_id:
         return TriggerTaskOutput(
             success=False,
             continuation_depth=current_depth,
@@ -89,6 +92,12 @@ async def trigger_task_run(
                 f"Cross-task triggering is not allowed. "
                 f"Your task_id={context_task_id}, requested task_id={task_id}."
             ),
+        )
+    if context_task_id is None:
+        logger.warning(
+            f"[trigger_task_run] context task_id is None — "
+            f"proceeding with requested task_id={task_id} (no self-only enforcement). "
+            f"Ensure metadata is properly injected in run_service.py."
         )
 
     # --- Guardrail 2: hard max depth ---

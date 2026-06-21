@@ -913,76 +913,40 @@ async def run_agent_task(
                 message="Workflow execution started. Connect to SSE stream for live progress.",
             )
         else:
-            # Execute agent
-            run_record = await create_run(
-                session=session,
-                principal=principal,
+            # Execute agent asynchronously — pre-create the run record and return
+            # immediately so the caller (and UI) can track the run_id right away.
+            from app.services.run_service import create_run_background
+            
+            principal_for_run = Principal(
+                sub=task.user_id,
+                scopes=task.delegation_scopes or [],
+                token=task.delegation_token,
+            )
+            
+            run_record = await create_run_background(
+                principal=principal_for_run,
                 agent_id=task.agent_id,
                 payload=payload,
                 scopes=task.delegation_scopes or [],
                 purpose="task-manual-execution",
-                agent_tier="complex",  # Tasks use complex tier (10 min timeout) for LLM processing
+                agent_tier="complex",
             )
             
-            # Update execution with run result
-            output_summary = None
-            if run_record.output:
-                if isinstance(run_record.output, dict):
-                    output_summary = run_record.output.get("summary") or str(run_record.output)[:500]
-                else:
-                    output_summary = str(run_record.output)[:500]
-            
-            success = run_record.status in ("completed", "succeeded")
-            
+            # Link the pre-created run to the execution record immediately
             await update_task_execution(
                 session=session,
                 execution_id=execution.id,
                 run_id=run_record.id,
-                status=run_record.status,
-                output_summary=output_summary,
-                error=run_record.output.get("error") if isinstance(run_record.output, dict) and not success else None,
+                status="running",
             )
             
-            await update_task_after_execution(
-                session=session,
-                task_id=task_id,
-                execution=execution,
-                success=success,
-            )
-            
-            # Send notification for agent execution
-            await _send_task_notification(
-                session=session,
-                task=task,
-                execution=execution,
-                success=success,
-                output_summary=output_summary,
-            )
-            
-            # Save insight from execution output (for duplicate detection)
-            if success and output_summary:
-                await _save_task_insight(
-                    task=task,
-                    execution=execution,
-                    output_summary=output_summary,
-                    authorization=principal.token,  # Use the caller's token for fresh auth
-                )
-            
-            # Save output to library if configured
-            await _save_task_output_to_library(
-                task=task,
-                execution=execution,
-                output_summary=output_summary,
-                success=success,
-                authorization=principal.token,  # Use the caller's token for fresh auth
-            )
-
+            # Return immediately — agent executes in background
             return TaskRunResponse(
                 execution_id=execution.id,
                 task_id=task_id,
                 run_id=run_record.id,
-                status=run_record.status,
-                message=f"Task execution {run_record.status}",
+                status="running",
+                message="Task started in background. Track progress via run_id.",
             )
         
     except Exception as e:
