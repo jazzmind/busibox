@@ -715,6 +715,9 @@ async def run_agent_task(
         "prompt": task.prompt,
         **(task.input_config or {}),
         **(input_data or {}),
+        "_task_id": str(task_id),
+        "_execution_id": str(execution.id),
+        "_continuation_depth": 0,  # initial manual run; incremented by trigger_task_run
     }
     
     # For workflows, also include 'query' mapped from 'prompt' for compatibility

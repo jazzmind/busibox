@@ -1225,6 +1225,7 @@ def get_tool_executor(tool_name: str) -> Optional[Callable]:
         "email_search": ("app.tools.email_tool", "email_search"),
         "email_read": ("app.tools.email_tool", "email_read"),
         "delegate_to_agent": ("app.tools.delegate_tool", "delegate_to_agent"),
+        "trigger_task_run": ("app.tools.trigger_task_tool", "trigger_task_run"),
         # Workforce tools
         "workforce_search_employees": ("app.tools.workforce_tool", "workforce_search_employees"),
         "workforce_get_stats": ("app.tools.workforce_tool", "workforce_get_stats"),
@@ -1298,6 +1299,7 @@ def get_tool_object(tool_name: str) -> Optional[Any]:
         "email_search": ("app.tools.email_tool", "email_search_tool"),
         "email_read": ("app.tools.email_tool", "email_read_tool"),
         "delegate_to_agent": ("app.tools.delegate_tool", "delegate_to_agent_tool"),
+        "trigger_task_run": ("app.tools.trigger_task_tool", "trigger_task_run_tool"),
         # Workforce tools
         "workforce_search_employees": ("app.tools.workforce_tool", "workforce_search_employees_tool"),
         "workforce_get_stats": ("app.tools.workforce_tool", "workforce_get_stats_tool"),

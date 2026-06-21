@@ -463,11 +463,20 @@ async def _execute_task_in_background(
         )
         
         async with SessionLocal() as session:
+            # Forward continuation depth from the webhook payload if present
+            webhook_payload = input_data.get("webhook_payload", {}) or {}
+            continuation_depth = webhook_payload.get("_continuation_depth", input_data.get("_continuation_depth", 0))
             run = await create_run(
                 session=session,
                 principal=principal,
                 agent_id=task.agent_id,
-                payload={"prompt": input_data.get("prompt", task.prompt), **input_data},
+                payload={
+                    "prompt": input_data.get("prompt", task.prompt),
+                    **input_data,
+                    "_task_id": str(task.id),
+                    "_execution_id": str(execution_id),
+                    "_continuation_depth": continuation_depth,
+                },
                 scopes=task.delegation_scopes or ["agent.execute", "data.write", "data.read", "search.read"],
                 purpose="webhook-task",
                 agent_tier="complex",

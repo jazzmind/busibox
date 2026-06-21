@@ -322,6 +322,10 @@ async def create_run(
                         "session": session,
                         "user_id": principal.sub,
                         "agent_id": str(agent_id),
+                        "run_id": str(run_record.id),
+                        "task_id": payload.get("_task_id"),
+                        "execution_id": payload.get("_execution_id"),
+                        "continuation_depth": payload.get("_continuation_depth", 0),
                         "response_schema": payload.get("response_schema"),
                         "max_tokens": payload.get("max_tokens"),
                     }
@@ -341,7 +345,16 @@ async def create_run(
                     )
                 else:
                     # PydanticAI Agent uses deps
-                    deps = BusiboxDeps(principal=principal, busibox_client=client)
+                    deps = BusiboxDeps(
+                        principal=principal,
+                        busibox_client=client,
+                        metadata={
+                            "run_id": str(run_record.id),
+                            "task_id": payload.get("_task_id"),
+                            "execution_id": payload.get("_execution_id"),
+                            "continuation_depth": payload.get("_continuation_depth", 0),
+                        },
+                    )
                     logger.info(f"Calling PydanticAI Agent.run() with deps")
                     result = await asyncio.wait_for(
                         agent.run(prompt, deps=deps), timeout=timeout

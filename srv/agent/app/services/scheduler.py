@@ -532,6 +532,9 @@ class TaskSchedulerService:
                         payload = {
                             "prompt": task.prompt,
                             **(task.input_config or {}),
+                            "_task_id": str(task.id),
+                            "_execution_id": str(execution.id),
+                            "_continuation_depth": 0,  # initial cron run; incremented by trigger_task_run
                         }
                         
                         # For workflows, also include 'query' mapped from 'prompt' for compatibility

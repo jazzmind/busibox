@@ -330,6 +330,7 @@ TOOL_SCOPES: Dict[str, List[str]] = {
     "get_weather": [],  # No auth needed
     "rag_query": ["rag.read"],
     "create_task": ["task.write"],  # Create tasks
+    "trigger_task_run": ["task.execute"],  # Self-continuation: trigger own task run
     "send_notification": [],  # No special auth needed (uses configured providers)
     "generate_image": ["data.write"],
     "transcribe_audio": ["data.read"],
@@ -376,6 +377,7 @@ TOOL_CLASSES: Dict[str, Dict[str, Any]] = {
     "text_to_speech": {"class": "slow", "timeout": 180},
     "send_notification": {"class": "slow", "timeout": 30},
     "create_task": {"class": "slow", "timeout": 30},
+    "trigger_task_run": {"class": "fast", "timeout": 15},
 }
 
 TOOL_CLASS_DEFAULT: Dict[str, Any] = {"class": "slow", "timeout": 60}
