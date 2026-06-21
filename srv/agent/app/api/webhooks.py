@@ -455,11 +455,14 @@ async def _execute_task_in_background(
             logger.warning(f"Task {task.id} has no agent_id, skipping execution")
             return
         
-        # Create a principal from the task's user_id
+        # Restore app_id so exchange_token passes resource_id to authz,
+        # auto-granting the app:<name> role in the downstream data-api token.
+        task_app_id = (task.input_config or {}).get("__app_id__")
         principal = Principal(
             sub=task.user_id,
             scopes=task.delegation_scopes or ["agent.execute"],
             token=task.delegation_token or "",
+            app_id=task_app_id,
         )
         
         async with SessionLocal() as session:

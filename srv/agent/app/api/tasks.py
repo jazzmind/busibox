@@ -917,10 +917,15 @@ async def run_agent_task(
             # immediately so the caller (and UI) can track the run_id right away.
             from app.services.run_service import create_run_background
             
+            # Restore app_id so exchange_token passes resource_id to authz,
+            # which auto-grants the app:<name> role in the downstream data-api token.
+            # Without this, data-api RLS silently returns 0 rows for app-scoped docs.
+            task_app_id = (task.input_config or {}).get("__app_id__")
             principal_for_run = Principal(
                 sub=task.user_id,
                 scopes=task.delegation_scopes or [],
                 token=task.delegation_token,
+                app_id=task_app_id,
             )
             
             run_record = await create_run_background(
