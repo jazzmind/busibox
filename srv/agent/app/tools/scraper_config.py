@@ -16,6 +16,7 @@ market-intel, and any future app that needs robust web access.
 """
 
 import asyncio
+import contextvars
 import hashlib
 import json
 import logging
@@ -528,15 +529,51 @@ class ProxyConfig:
         return entry
 
 
+# =============================================================================
+# Runtime tool configuration (set by agent context, replaces env vars)
+# =============================================================================
+
+_RUNTIME_TOOL_CONFIG: contextvars.ContextVar[dict] = contextvars.ContextVar(
+    "scraper_runtime_tool_config", default={}
+)
+
+
+def set_scraper_tool_config(config: dict) -> None:
+    """Inject runtime scraper config for the current coroutine context.
+
+    Called by the agent setup code after loading ToolConfig from the DB.
+    Overrides environment variables for proxy and camoufox settings so
+    operators can configure the scraper through the agent-manager UI
+    without touching server environment variables.
+
+    Supported keys:
+        camoufox_enabled (bool): enable Tier 3 camoufox scraping
+        proxy_url (str): full proxy URL (e.g. http://user:pass@host:port)
+        proxy_username (str): proxy username (overrides proxy_url credentials)
+        proxy_password (str): proxy password (overrides proxy_url credentials)
+        proxy_rotate (bool): rotate proxy identity on each request
+    """
+    _RUNTIME_TOOL_CONFIG.set(config)
+
+
+def _get_runtime_config() -> dict:
+    return _RUNTIME_TOOL_CONFIG.get()
+
+
 def get_proxy_config() -> ProxyConfig:
-    """Load proxy config from environment. Zero env vars = no proxy, which is the default."""
-    url = os.getenv("SCRAPER_PROXY_URL") or None
-    return ProxyConfig(
-        url=url,
-        username=os.getenv("SCRAPER_PROXY_USERNAME") or None,
-        password=os.getenv("SCRAPER_PROXY_PASSWORD") or None,
-        rotate=(os.getenv("SCRAPER_PROXY_ROTATE") or "").lower() in ("1", "true", "yes"),
-    )
+    """Load proxy config from runtime tool config, then environment variables.
+
+    Priority order:
+        1. Runtime tool config (set via agent-manager tool configuration)
+        2. Environment variables SCRAPER_PROXY_* (legacy/fallback)
+    """
+    runtime = _get_runtime_config()
+    url = runtime.get("proxy_url") or os.getenv("SCRAPER_PROXY_URL") or None
+    username = runtime.get("proxy_username") or os.getenv("SCRAPER_PROXY_USERNAME") or None
+    password = runtime.get("proxy_password") or os.getenv("SCRAPER_PROXY_PASSWORD") or None
+    rotate_env = (os.getenv("SCRAPER_PROXY_ROTATE") or "").lower() in ("1", "true", "yes")
+    rotate = runtime.get("proxy_rotate", rotate_env)
+    return ProxyConfig(url=url, username=username, password=password, rotate=rotate)
 
 
 # =============================================================================
@@ -544,7 +581,15 @@ def get_proxy_config() -> ProxyConfig:
 # =============================================================================
 
 def camoufox_enabled() -> bool:
-    """Whether Tier 3 (Camoufox) is available. Requires ENABLE_CAMOUFOX=true."""
+    """Whether Tier 3 (Camoufox) is available.
+
+    Priority order:
+        1. Runtime tool config key ``camoufox_enabled`` (set via agent-manager)
+        2. ENABLE_CAMOUFOX environment variable (legacy/fallback)
+    """
+    runtime = _get_runtime_config()
+    if "camoufox_enabled" in runtime:
+        return bool(runtime["camoufox_enabled"])
     return (os.getenv("ENABLE_CAMOUFOX") or "").lower() in ("1", "true", "yes")
 
 

@@ -461,6 +461,58 @@ class ToolRegistry:
         return name in cls._tools
 
 
+async def _apply_scraper_tool_config(session, agent_id) -> None:
+    """Load web_scraper ToolConfig from DB and inject into the current context.
+
+    Checks agent-scope config first (highest priority), then system-scope.
+    Falls back gracefully — if no config is stored the scraper uses env vars.
+    """
+    try:
+        from sqlalchemy import select, or_, and_
+        from app.models.domain import ToolConfig
+
+        clauses = [
+            and_(ToolConfig.tool_name == "web_scraper", ToolConfig.scope == "system"),
+        ]
+        if agent_id:
+            try:
+                import uuid as _uuid
+                agent_uuid = _uuid.UUID(str(agent_id)) if not isinstance(agent_id, _uuid.UUID) else agent_id
+                clauses.append(
+                    and_(
+                        ToolConfig.tool_name == "web_scraper",
+                        ToolConfig.scope == "agent",
+                        ToolConfig.agent_id == agent_uuid,
+                    )
+                )
+            except (ValueError, AttributeError):
+                pass
+
+        result = await session.execute(
+            select(ToolConfig).where(or_(*clauses))
+        )
+        rows = result.scalars().all()
+
+        # Merge system config first, then agent config (agent wins).
+        # ToolConfig stores {"providers": {...}, "settings": {...}};
+        # scraper settings live under the "settings" key.
+        merged: dict = {}
+        for row in sorted(rows, key=lambda r: 0 if r.scope == "system" else 1):
+            if row.config:
+                settings = row.config.get("settings") or {}
+                merged.update(settings)
+
+        if merged:
+            from app.tools.scraper_config import set_scraper_tool_config
+            set_scraper_tool_config(merged)
+            logger.debug(
+                "scraper_tool_config_loaded",
+                extra={"keys": list(merged.keys()), "agent_id": str(agent_id)},
+            )
+    except Exception as exc:
+        logger.warning("Failed to load scraper tool config: %s", exc)
+
+
 # Register built-in tools
 def _register_builtin_tools():
     """Register all built-in tools with the registry."""
@@ -1156,7 +1208,16 @@ class BaseStreamingAgent(StreamingAgent):
         # Discover and register tools from MCP servers (lazy, first-run only)
         if self.config.mcp_servers:
             await self._register_mcp_tools()
-        
+
+        # Load web_scraper tool config (proxy, camoufox) from the ToolConfig DB
+        # table so admins can configure these via the agent-manager UI without
+        # touching server environment variables.
+        if agent_context.session:
+            await _apply_scraper_tool_config(
+                session=agent_context.session,
+                agent_id=agent_context.agent_id,
+            )
+
         return agent_context
 
     async def _register_mcp_tools(self) -> None:

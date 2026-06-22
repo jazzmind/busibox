@@ -37,5 +37,5 @@ playwright-stealth>=2.0.0
 trafilatura>=1.12.0
 readability-lxml>=0.8.1
 pypdf>=4.0.0
-# Camoufox (Tier 3) is optional — install only on hosts with ENABLE_CAMOUFOX=true
-# camoufox[geoip]>=0.4.0
+# Camoufox (Tier 3) — stealth browser. Enable via ToolConfig key camoufox_enabled=true in agent-manager.
+camoufox[geoip]>=0.4.0
