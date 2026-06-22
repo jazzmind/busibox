@@ -80,14 +80,11 @@ async def trigger_task_run(
     current_depth = int(meta.get("continuation_depth", 0))
     next_depth = current_depth + 1
 
-    # #region agent log
-    import json as _json, datetime as _dt
-    try:
-        with open("/Users/wsonnenreich/Code/busibox-core/busibox/.cursor/debug-fce93e.log", "a") as _f:
-            _f.write(_json.dumps({"sessionId": "fce93e", "hypothesisId": "B", "location": "trigger_task_tool.py:trigger_task_run", "message": "trigger_task_run CALLED", "data": {"task_id": task_id, "context_task_id": context_task_id, "current_depth": current_depth, "next_depth": next_depth, "reason": reason}, "timestamp": int(_dt.datetime.now().timestamp() * 1000)}) + "\n")
-    except Exception:
-        pass
-    # #endregion
+    logger.info(
+        f"[DEBUG-fce93e][B] trigger_task_run CALLED: "
+        f"task_id={task_id}, context_task_id={context_task_id}, "
+        f"depth={current_depth}->{next_depth}, reason={reason!r}"
+    )
 
     # --- Guardrail 1: self-only restriction ---
     # If context_task_id is known (injected via metadata), enforce self-only.
@@ -224,14 +221,7 @@ async def trigger_task_run(
 
     except Exception as e:
         logger.exception(f"[trigger_task_run] Failed to queue continuation for task {task_id}: {e}")
-        # #region agent log
-        import json as _json, datetime as _dt
-        try:
-            with open("/Users/wsonnenreich/Code/busibox-core/busibox/.cursor/debug-fce93e.log", "a") as _f:
-                _f.write(_json.dumps({"sessionId": "fce93e", "hypothesisId": "B", "location": "trigger_task_tool.py:except", "message": "trigger_task_run EXCEPTION", "data": {"error": str(e), "task_id": task_id}, "timestamp": int(_dt.datetime.now().timestamp() * 1000)}) + "\n")
-        except Exception:
-            pass
-        # #endregion
+        logger.info(f"[DEBUG-fce93e][B] trigger_task_run EXCEPTION: {e}")
         return TriggerTaskOutput(
             success=False,
             continuation_depth=current_depth,

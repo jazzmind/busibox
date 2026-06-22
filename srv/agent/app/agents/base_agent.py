@@ -611,24 +611,10 @@ def _register_builtin_tools():
     try:
         from app.tools.trigger_task_tool import trigger_task_run, TriggerTaskOutput
         ToolRegistry.register("trigger_task_run", trigger_task_run, TriggerTaskOutput)
-        # #region agent log
-        import json as _json, datetime as _dt
-        try:
-            with open("/Users/wsonnenreich/Code/busibox-core/busibox/.cursor/debug-fce93e.log", "a") as _f:
-                _f.write(_json.dumps({"sessionId": "fce93e", "hypothesisId": "A", "location": "base_agent.py:_register_builtin_tools", "message": "trigger_task_run registered in ToolRegistry", "data": {"registered": True}, "timestamp": int(_dt.datetime.now().timestamp() * 1000)}) + "\n")
-        except Exception:
-            pass
-        # #endregion
+        logger.info("[DEBUG-fce93e][A] trigger_task_run registered in ToolRegistry successfully")
     except ImportError as e:
         logger.warning(f"Could not register trigger_task_run tool: {e}")
-        # #region agent log
-        import json as _json, datetime as _dt
-        try:
-            with open("/Users/wsonnenreich/Code/busibox-core/busibox/.cursor/debug-fce93e.log", "a") as _f:
-                _f.write(_json.dumps({"sessionId": "fce93e", "hypothesisId": "A", "location": "base_agent.py:_register_builtin_tools", "message": "trigger_task_run IMPORT FAILED", "data": {"error": str(e)}, "timestamp": int(_dt.datetime.now().timestamp() * 1000)}) + "\n")
-        except Exception:
-            pass
-        # #endregion
+        logger.info(f"[DEBUG-fce93e][A] trigger_task_run IMPORT FAILED: {e}")
 
 
 # Initialize tool registry on module load
