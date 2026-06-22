@@ -11,8 +11,7 @@ This module is the single source of truth for the stealth scraper engine used by
 - Resource-block patterns for browser tiers
 - Structured error-code taxonomy
 
-The scraper is used as a general capability for agentic search across job-finder,
-market-intel, and any future app that needs robust web access.
+The scraper is used as a general capability for agentic search and any apps that need robust web access.
 """
 
 import asyncio
