@@ -12,6 +12,7 @@ Multiple server-side guardrails prevent runaway loops:
 """
 
 import asyncio
+import json
 import logging
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -174,14 +175,25 @@ async def trigger_task_run(
                     ),
                 )
 
-            # Build continuation payload
-            continuation_payload: Dict[str, Any] = {
+            # Build continuation payload, normalizing to JSON-safe types.
+            # task.input_config is read from JSONB and asyncpg may decode ISO
+            # date strings as datetime objects; round-tripping through JSON
+            # converts them back to strings before the INSERT.
+            raw_payload: Dict[str, Any] = {
                 "prompt": task.prompt,
                 **(task.input_config or {}),
                 **input_override,
                 "_task_id": task_id,
                 "_continuation_depth": next_depth,
             }
+            continuation_payload = json.loads(
+                json.dumps(raw_payload, default=str)
+            )
+
+            logger.info(
+                f"[DEBUG-fce93e][B] trigger_task_run continuation_payload built ok, "
+                f"task={task_id}, depth={next_depth}"
+            )
 
             # Create execution record with trigger_source="continuation"
             execution = await create_task_execution(
