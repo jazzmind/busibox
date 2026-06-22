@@ -367,7 +367,13 @@ BUILTIN_TOOL_METADATA = {
     },
     "data_tool_query": {
         "name": "query_data",
-        "description": "Query records from a data document with SQL-like filtering, sorting, and pagination.",
+        "description": (
+            "Query records from a data document with SQL-like filtering, sorting, and pagination. "
+            "Filter operators: eq, ne, gt, gte, lt, lte, in, nin, contains, startswith, endswith, isnull. "
+            "isnull example: {\"field\": \"last_checked\", \"op\": \"isnull\", \"value\": true} matches NULL fields. "
+            "Combine with 'or'/'and': {\"or\": [{\"field\": \"last_checked\", \"op\": \"isnull\", \"value\": true}, {\"field\": \"last_checked\", \"op\": \"lt\", \"value\": \"2026-06-15\"}]}. "
+            "NOTE: the 'records' array in the response is capped at 'limit'; 'total' is the full DB count and should NOT be used for continuation logic."
+        ),
         "entrypoint": "app.tools.data_tool:query_data",
         "scopes": ["data:read"],
         "version": 1,
@@ -377,7 +383,7 @@ BUILTIN_TOOL_METADATA = {
                 "properties": {
                     "document_id": {"type": "string", "description": "UUID of the data document"},
                     "select": {"type": "array", "description": "Fields to return (default: all)"},
-                    "where": {"type": "object", "description": "Filter conditions"},
+                    "where": {"type": "object", "description": "Filter conditions. Operators: eq, ne, gt, gte, lt, lte, in, nin, contains, startswith, endswith, isnull. Use 'or'/'and' for compound filters."},
                     "order_by": {"type": "array", "description": "Sort specification"},
                     "limit": {"type": "integer", "description": "Max records (default: 50)", "default": 50},
                     "offset": {"type": "integer", "description": "Pagination offset", "default": 0}

@@ -455,7 +455,8 @@ async def query_data(
     Example aggregation:
         aggregate={"count": "*", "avg": "salary"}, group_by=["department"]
     
-    Supported operators: eq, ne, gt, gte, lt, lte, in, nin, contains, startswith, endswith
+    Supported operators: eq, ne, gt, gte, lt, lte, in, nin, contains, startswith, endswith, isnull
+    - isnull: {"field": "last_checked", "op": "isnull", "value": true} matches NULL; value: false matches NOT NULL
     Supported aggregations: count, sum, avg, min, max
     """
     try:
