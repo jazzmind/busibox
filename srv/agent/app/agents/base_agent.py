@@ -195,7 +195,7 @@ def _ensure_openai_env():
 # Maximum characters for a single tool result before truncation.
 # ~2000 tokens at ~4 chars/token. Prevents context window overflow
 # when tools return large datasets (e.g. query_data with many records).
-MAX_TOOL_RESULT_CHARS = 8000
+MAX_TOOL_RESULT_CHARS = 12000
 
 
 def _truncate_tool_result(result: Any) -> Any:
@@ -606,6 +606,29 @@ def _register_builtin_tools():
         ToolRegistry.register("graph_relate", graph_relate, GraphRelateOutput)
     except ImportError as e:
         logger.warning(f"Could not register graph tools: {e}")
+
+    # Register trigger_task_run tool (self-continuation for long-running tasks)
+    try:
+        from app.tools.trigger_task_tool import trigger_task_run, TriggerTaskOutput
+        ToolRegistry.register("trigger_task_run", trigger_task_run, TriggerTaskOutput)
+        # #region agent log
+        import json as _json, datetime as _dt
+        try:
+            with open("/Users/wsonnenreich/Code/busibox-core/busibox/.cursor/debug-fce93e.log", "a") as _f:
+                _f.write(_json.dumps({"sessionId": "fce93e", "hypothesisId": "A", "location": "base_agent.py:_register_builtin_tools", "message": "trigger_task_run registered in ToolRegistry", "data": {"registered": True}, "timestamp": int(_dt.datetime.now().timestamp() * 1000)}) + "\n")
+        except Exception:
+            pass
+        # #endregion
+    except ImportError as e:
+        logger.warning(f"Could not register trigger_task_run tool: {e}")
+        # #region agent log
+        import json as _json, datetime as _dt
+        try:
+            with open("/Users/wsonnenreich/Code/busibox-core/busibox/.cursor/debug-fce93e.log", "a") as _f:
+                _f.write(_json.dumps({"sessionId": "fce93e", "hypothesisId": "A", "location": "base_agent.py:_register_builtin_tools", "message": "trigger_task_run IMPORT FAILED", "data": {"error": str(e)}, "timestamp": int(_dt.datetime.now().timestamp() * 1000)}) + "\n")
+        except Exception:
+            pass
+        # #endregion
 
 
 # Initialize tool registry on module load
