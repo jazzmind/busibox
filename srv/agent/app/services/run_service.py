@@ -595,6 +595,9 @@ async def create_run_background(
                 pass
         finally:
             if on_complete:
+                # #region agent log
+                logger.info("DEBUG[fce93e] _bg_execute finally: calling on_complete for run=%s status=%s", run_id, final_status)
+                # #endregion
                 try:
                     await on_complete(run_id, final_status, output_summary)
                 except Exception as cb_err:

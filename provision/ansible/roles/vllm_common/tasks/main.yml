@@ -261,7 +261,7 @@
   shell: |
     {{ vllm_venv_dir }}/bin/uv pip install -U \
       huggingface-hub \
-      'transformers>=4.49,<5'
+      'transformers>=5'
   args:
     executable: /bin/bash
   environment:

@@ -940,6 +940,12 @@ async def run_agent_task(
             async def _on_bg_complete(bg_run_id, bg_status, bg_summary):
                 from app.db.session import SessionLocal as _SL
                 from app.models.domain import TaskExecution as _TE
+                # #region agent log
+                logger.info(
+                    "DEBUG[fce93e] _on_bg_complete fired: run_id=%s, status=%s, exec_id=%s",
+                    bg_run_id, bg_status, task_exec_id,
+                )
+                # #endregion
                 async with _SL() as cb_session:
                     mapped_status = "completed" if bg_status in ("succeeded", "completed") else "failed"
                     await update_task_execution(
