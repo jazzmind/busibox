@@ -27,7 +27,7 @@ import {
   safeReadFile,
   CONTAINERS,
 } from '@busibox/mcp-shared';
-import { BUSIBOX_APP_EXPORTS, AUTH_PATTERNS, APP_TEMPLATE_STRUCTURE } from './app-builder-data.js';
+import { BUSIBOX_APP_EXPORTS, AUTH_PATTERNS, APP_TEMPLATE_STRUCTURE, DATA_API_PATTERNS, AGENT_API_PATTERNS } from './app-builder-data.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -44,9 +44,11 @@ const APP_BUILDER_DOC_CATEGORIES = ['users', 'developers'] as const;
 
 server.setRequestHandler(ListResourcesRequestSchema, async () => ({
   resources: [
-    { uri: 'busibox://app-builder/guide', mimeType: 'text/markdown', name: 'App Builder Guide', description: 'How to build Busibox apps' },
-    { uri: 'busibox://app-builder/busibox-app', mimeType: 'text/markdown', name: 'busibox-app API', description: 'Library exports reference' },
-    { uri: 'busibox://app-builder/auth', mimeType: 'text/markdown', name: 'Auth Patterns', description: 'SSO and token exchange' },
+    { uri: 'busibox://app-builder/guide', mimeType: 'text/markdown', name: 'App Builder Guide', description: 'App template structure, anti-patterns, and development flow' },
+    { uri: 'busibox://app-builder/busibox-app', mimeType: 'text/markdown', name: 'busibox-app API', description: '@jazzmind/busibox-app library exports reference' },
+    { uri: 'busibox://app-builder/auth', mimeType: 'text/markdown', name: 'Auth Patterns', description: 'SSO, SessionProvider, token exchange, Zero Trust' },
+    { uri: 'busibox://app-builder/data-api', mimeType: 'text/markdown', name: 'Data API Patterns', description: 'CRUD with data-api (ensureDocuments, queryRecords, etc.)' },
+    { uri: 'busibox://app-builder/agent-api', mimeType: 'text/markdown', name: 'Agent API Patterns', description: 'Chat, structured output, agent definitions, proxy pattern' },
     { uri: 'busibox://app-builder/service-endpoints', mimeType: 'application/json', name: 'Service Endpoints', description: 'Backend service URLs' },
     { uri: 'busibox://docs/users', mimeType: 'text/markdown', name: 'User Docs', description: 'Platform user guides' },
     { uri: 'busibox://docs/developers', mimeType: 'text/markdown', name: 'Developer Docs', description: 'Developer documentation' },
@@ -57,7 +59,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   const uri = request.params.uri;
 
   if (uri === 'busibox://app-builder/guide') {
-    const content = APP_TEMPLATE_STRUCTURE + '\n\n' + AUTH_PATTERNS;
+    const content = APP_TEMPLATE_STRUCTURE;
     return { contents: [{ uri, mimeType: 'text/markdown', text: content }] };
   }
   if (uri === 'busibox://app-builder/busibox-app') {
@@ -65,6 +67,12 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   }
   if (uri === 'busibox://app-builder/auth') {
     return { contents: [{ uri, mimeType: 'text/markdown', text: AUTH_PATTERNS }] };
+  }
+  if (uri === 'busibox://app-builder/data-api') {
+    return { contents: [{ uri, mimeType: 'text/markdown', text: DATA_API_PATTERNS }] };
+  }
+  if (uri === 'busibox://app-builder/agent-api') {
+    return { contents: [{ uri, mimeType: 'text/markdown', text: AGENT_API_PATTERNS }] };
   }
   if (uri === 'busibox://app-builder/service-endpoints') {
     const endpoints = CONTAINERS.flatMap((c) =>
@@ -93,8 +101,10 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 const APP_BUILDER_TOOLS = [
   { name: 'search_docs', description: 'Search docs', inputSchema: { type: 'object', properties: { query: { type: 'string' }, category: { type: 'string', enum: [...APP_BUILDER_DOC_CATEGORIES, 'all'] } }, required: ['query'] } },
   { name: 'get_doc', description: 'Get doc content', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
-  { name: 'get_busibox_app_exports', description: 'Get @jazzmind/busibox-app library exports', inputSchema: { type: 'object', properties: {} } },
-  { name: 'get_auth_patterns', description: 'Get auth patterns (SSO, token exchange)', inputSchema: { type: 'object', properties: {} } },
+  { name: 'get_busibox_app_exports', description: 'Get @jazzmind/busibox-app library exports and import paths', inputSchema: { type: 'object', properties: {} } },
+  { name: 'get_auth_patterns', description: 'Get auth patterns (SessionProvider, SSO, Zero Trust token exchange)', inputSchema: { type: 'object', properties: {} } },
+  { name: 'get_data_api_patterns', description: 'Get data-api CRUD patterns (ensureDocuments, queryRecords, schemas)', inputSchema: { type: 'object', properties: {} } },
+  { name: 'get_agent_api_patterns', description: 'Get agent-api patterns (chat, structured output, agent definitions, proxy)', inputSchema: { type: 'object', properties: {} } },
   { name: 'get_app_template_files', description: 'Read busibox-template reference files', inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'Path relative to busibox-template root (e.g. lib/auth-middleware.ts)' } } } },
   { name: 'get_service_endpoints', description: 'Get backend service IPs/ports', inputSchema: { type: 'object', properties: { environment: { type: 'string', enum: ['production', 'staging'] } } } },
   { name: 'validate_app_config', description: 'Check busibox.json structure', inputSchema: { type: 'object', properties: { config_path: { type: 'string' } } } },
@@ -128,6 +138,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return text(BUSIBOX_APP_EXPORTS);
     case 'get_auth_patterns':
       return text(AUTH_PATTERNS);
+    case 'get_data_api_patterns':
+      return text(DATA_API_PATTERNS);
+    case 'get_agent_api_patterns':
+      return text(AGENT_API_PATTERNS);
     case 'get_app_template_files': {
       const path = String(a.path || 'lib/auth-middleware.ts');
       const fullPath = join(APP_TEMPLATE_PATH, path);
@@ -160,9 +174,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case 'get_component_docs': {
       const component = String(a.component || '');
       const compLower = component.toLowerCase();
-      if (compLower.includes('chat')) return text(`${BUSIBOX_APP_EXPORTS}\n\nChat: SimpleChatInterface, FullChatInterface, ChatInterface. Use requireAuthWithTokenExchange in API routes, auth.apiToken for backend calls.`);
-      if (compLower.includes('document')) return text(`${BUSIBOX_APP_EXPORTS}\n\nDocuments: DocumentUpload, DocumentList, DocumentSearch. Use dataFetch, uploadChatAttachment from lib/data.`);
-      if (compLower.includes('auth')) return text(AUTH_PATTERNS);
+      if (compLower.includes('chat')) return text(`${AGENT_API_PATTERNS}\n\nChat components: SimpleChatInterface, FullChatInterface, ChatInterface from @jazzmind/busibox-app/components/chat/*. Get token via /api/auth/token route. Pass metadata with document IDs for tool context.`);
+      if (compLower.includes('document')) return text(`${DATA_API_PATTERNS}\n\nDocument components: DocumentUpload, DocumentList, DocumentSearch, AppDataList from @jazzmind/busibox-app/components/documents/*. Use data-api for all storage operations.`);
+      if (compLower.includes('auth') || compLower.includes('session')) return text(AUTH_PATTERNS);
+      if (compLower.includes('data')) return text(DATA_API_PATTERNS);
+      if (compLower.includes('agent')) return text(AGENT_API_PATTERNS);
       return text(BUSIBOX_APP_EXPORTS);
     }
     default:
@@ -193,17 +209,17 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
 
   switch (name) {
     case 'create_app':
-      return msg(`Create app ${a.app_name}`, `Use busibox-template. Set APP_MODE=frontend or prisma. Add busibox.json with id and name. Use get_auth_patterns for SSO.`);
+      return msg(`Create app ${a.app_name}`, `Use busibox-template as the starting point. All apps are frontend-mode (data-api for storage, NO Prisma, NO direct DB). Add busibox.json with id and name. Use get_auth_patterns for SSO setup and get_data_api_patterns for storage. NEVER use APP_MODE env var.`);
     case 'add_auth':
-      return msg('Add auth', 'Use requireAuthWithTokenExchange in API routes. Add app/api/sso/route.ts with createSSOGetHandler and createSSOPostHandler from @jazzmind/busibox-app/lib/auth.');
+      return msg('Add auth', `Use SessionProvider from @jazzmind/busibox-app/components/auth/SessionProvider in root layout. Add app/api/sso/route.ts with createSSOGetHandler and createSSOPostHandler from @jazzmind/busibox-app/lib/authz (NOT lib/auth). Add app/api/auth/session/route.ts with createSessionRouteHandlers. Use requireAuthWithTokenExchange in API routes.`);
     case 'add_chat':
-      return msg('Add chat', 'Use SimpleChatInterface from @jazzmind/busibox-app. Ensure auth.apiToken is passed. Use agentChat or streamChatMessage from lib/agent.');
+      return msg('Add chat', `1. Add /api/agent/[...path] proxy route (use get_agent_api_patterns). 2. Add /api/auth/token route for client token. 3. Use SimpleChatInterface from @jazzmind/busibox-app/components/chat/SimpleChatInterface with token from /api/auth/token. 4. Define agents in lib/my-agents.ts and sync via syncAgentDefinitions. NEVER call LiteLLM directly.`);
     case 'add_document_management':
-      return msg('Add documents', 'Use DocumentUpload, DocumentList, DocumentSearch from @jazzmind/busibox-app. Use dataFetch, uploadChatAttachment from lib/data.');
+      return msg('Add documents', `Use DocumentUpload, DocumentList, DocumentSearch from @jazzmind/busibox-app/components/documents/*. For storage, use data-api patterns: ensureDocuments + queryRecords/insertRecords from @jazzmind/busibox-app/lib/data/documents. All uploads go through data-api uploadChatAttachment. NEVER access storage directly.`);
     case 'deploy_app':
-      return msg(`Deploy ${a.app_name} to ${a.environment}`, `Use make install SERVICE=${a.app_name} or Deploy API. Ensure busibox.json and docs/portal/ exist.`);
+      return msg(`Deploy ${a.app_name} to ${a.environment}`, `Use make install SERVICE=${a.app_name} from the busibox repo root. Ensure busibox.json exists with valid id and name fields.`);
     case 'create_api_route':
-      return msg(`Create API route ${a.route_name}`, 'Use requireAuthWithTokenExchange. Use auth.apiToken for backend calls. See get_app_template_files for lib/auth-middleware.ts.');
+      return msg(`Create API route ${a.route_name}`, `Use requireAuthWithTokenExchange(request, 'data-api') for data routes or 'agent-api' for AI routes. Use auth.apiToken for backend calls. For data: call ensureDataDocuments then queryRecords/insertRecords. For agents: forward to AGENT_API_URL with Bearer token. NEVER access databases or LiteLLM directly.`);
     default:
       throw new Error(`Unknown prompt: ${name}`);
   }
