@@ -939,7 +939,7 @@ async def run_agent_task(
 
             async def _on_bg_complete(bg_run_id, bg_status, bg_summary):
                 from app.db.session import SessionLocal as _SL
-                from app.models.domain import TaskExecution as _TE
+                from app.models.domain import TaskExecution as _TE, AgentTask as _AT
                 # #region agent log
                 logger.info(
                     "DEBUG[fce93e] _on_bg_complete fired: run_id=%s, status=%s, exec_id=%s",
@@ -961,6 +961,45 @@ async def run_agent_task(
                     exec_obj = exec_result.scalar_one_or_none()
                     if exec_obj:
                         await update_task_after_execution(cb_session, task_obj_id, exec_obj, mapped_status == "completed")
+
+                    # --- Start pending continuations ---
+                    # If trigger_task_run queued a continuation during this run,
+                    # start it now that the current run has finished and all
+                    # records (last_checked, etc.) have been updated.
+                    if mapped_status == "completed":
+                        pending_cont_stmt = (
+                            select(_TE)
+                            .where(
+                                _TE.task_id == task_obj_id,
+                                _TE.trigger_source == "continuation",
+                                _TE.status == "pending",
+                            )
+                            .order_by(_TE.created_at.asc())
+                            .limit(1)
+                        )
+                        pending_result = await cb_session.execute(pending_cont_stmt)
+                        pending_exec = pending_result.scalar_one_or_none()
+                        if pending_exec:
+                            logger.info(
+                                "[DEBUG-fce93e] Starting pending continuation: "
+                                "exec_id=%s, task_id=%s",
+                                pending_exec.id, task_obj_id,
+                            )
+                            # Load the task for execution
+                            task_result = await cb_session.execute(
+                                select(_AT).where(_AT.id == task_obj_id)
+                            )
+                            cont_task = task_result.scalar_one_or_none()
+                            if cont_task:
+                                from app.api.webhooks import _execute_task_in_background
+                                import asyncio
+                                asyncio.create_task(
+                                    _execute_task_in_background(
+                                        task=cont_task,
+                                        execution_id=pending_exec.id,
+                                        input_data=pending_exec.input_data,
+                                    )
+                                )
 
             run_record = await create_run_background(
                 principal=principal_for_run,

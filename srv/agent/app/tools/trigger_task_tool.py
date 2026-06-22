@@ -11,11 +11,10 @@ Multiple server-side guardrails prevent runaway loops:
   - Self-only restriction: agents can only trigger their own task by default
 """
 
-import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
@@ -28,7 +27,6 @@ logger = logging.getLogger(__name__)
 
 # Guardrail constants
 MAX_CONTINUATION_DEPTH = 50   # Hard limit on self-continuation chain length
-COOLDOWN_SECONDS = 10          # Minimum seconds between consecutive continuation triggers
 
 
 class TriggerTaskInput(BaseModel):
@@ -151,32 +149,14 @@ async def trigger_task_run(
                     ),
                 )
 
-            # --- Guardrail 4: cooldown window ---
-            # Use timezone-naive UTC to match the model's _now() which stores
-            # TIMESTAMP WITHOUT TIME ZONE in PostgreSQL. Using timezone-aware
-            # datetime causes asyncpg DataError on the comparison.
-            cutoff = datetime.utcnow() - timedelta(seconds=COOLDOWN_SECONDS)
-            recent_stmt = (
-                select(func.count())
-                .select_from(TaskExecution)
-                .where(
-                    TaskExecution.task_id == uuid.UUID(task_id),
-                    TaskExecution.trigger_source == "continuation",
-                    TaskExecution.created_at >= cutoff,
-                )
+            # Guardrail 4 removed: the max-depth check (guardrail 2/3) is
+            # sufficient to prevent runaway loops. Time-based and pending-based
+            # cooldowns were blocking legitimate rapid chaining for large batch
+            # operations (500+ site collection runs).
+            logger.info(
+                f"[DEBUG-fce93e][B] trigger_task_run guards passed, "
+                f"proceeding with depth={next_depth}"
             )
-            recent_count_result = await session.execute(recent_stmt)
-            recent_count = recent_count_result.scalar() or 0
-
-            if recent_count > 0:
-                return TriggerTaskOutput(
-                    success=False,
-                    continuation_depth=current_depth,
-                    message=(
-                        f"Cooldown active: a continuation was already triggered within the last "
-                        f"{COOLDOWN_SECONDS}s. Preventing rapid re-triggering."
-                    ),
-                )
 
             # Build continuation payload, normalizing to JSON-safe types.
             # task.input_config is read from JSONB and asyncpg may decode ISO
@@ -214,15 +194,11 @@ async def trigger_task_run(
                 f"execution={execution.id}"
             )
 
-            # Fire and forget — import here to avoid circular imports
-            from app.api.webhooks import _execute_task_in_background
-            asyncio.create_task(
-                _execute_task_in_background(
-                    task=task,
-                    execution_id=execution.id,
-                    input_data=continuation_payload,
-                )
-            )
+            # Do NOT fire the continuation immediately. The current run still
+            # needs to finish updating last_checked on processed sites. If we
+            # start the next batch now, it will re-query the same sites.
+            # Instead, _on_bg_complete (in tasks.py) will detect the pending
+            # continuation execution and start it after this run finishes.
 
             return TriggerTaskOutput(
                 success=True,
