@@ -335,11 +335,20 @@ async def create_run(
                     # BusiboxDeps.metadata correctly (it reads context.get("metadata")).
                     # The metadata is also injected into the system prompt as
                     # "## Application Context" so the agent can reference task_id directly.
+                    #
+                    # System keys (starting with "_") and "prompt" are excluded.
+                    # All other payload keys (e.g. mode, documentIdSites, or any
+                    # input_override fields) are forwarded so the agent can read them.
+                    _SYSTEM_KEYS = {"prompt", "response_schema", "max_tokens"}
                     _task_meta = {
                         "task_id": payload.get("_task_id"),
                         "execution_id": payload.get("_execution_id"),
                         "continuation_depth": payload.get("_continuation_depth", 0),
                         "run_id": str(run_record.id),
+                        **{
+                            k: v for k, v in payload.items()
+                            if not k.startswith("_") and k not in _SYSTEM_KEYS
+                        },
                     }
                     context = {
                         "principal": principal,
