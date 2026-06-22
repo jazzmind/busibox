@@ -1887,7 +1887,7 @@ class BaseStreamingAgent(StreamingAgent):
                 agent, query, context, stream, cancel,
                 model_settings=model_settings if model_settings else None,
                 message_history=msg_history,
-                usage_limits=UsageLimits(tool_calls_limit=30),
+                usage_limits=UsageLimits(tool_calls_limit=max(30, self.config.max_iterations * 4)),
             )
             logger.info(
                 f"{self.name} LLM streaming execution complete",
