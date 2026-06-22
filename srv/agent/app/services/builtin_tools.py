@@ -1098,6 +1098,51 @@ BUILTIN_TOOL_METADATA = {
             }
         }
     },
+    "trigger_task_run_tool": {
+        "name": "trigger_task_run",
+        "description": (
+            "Asynchronously trigger an immediate run of your own agent task. "
+            "Use this at the start of a batch (after querying for work) to pre-queue the next batch "
+            "before scraping begins — this ensures continuation fires even if the current run hits its "
+            "iteration limit mid-scrape. "
+            "Fire-and-forget: returns immediately, does not block. "
+            "Server enforces max 50 continuation depth and a 10-second cooldown to prevent loops."
+        ),
+        "entrypoint": "app.tools.trigger_task_tool:trigger_task_run",
+        "scopes": [],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "UUID of the agent task to trigger. Must match your own task_id from context metadata."
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Why the continuation is needed (logged for observability).",
+                        "default": ""
+                    },
+                    "input_override": {
+                        "type": "object",
+                        "description": "Optional key-value overrides merged into the task input for the next run (e.g. {\"mode\": \"all\"}).",
+                        "default": {}
+                    }
+                },
+                "required": ["task_id"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "execution_id": {"type": "string", "description": "UUID of the newly queued execution"},
+                    "continuation_depth": {"type": "integer", "description": "Depth of this continuation in the chain"},
+                    "message": {"type": "string"}
+                }
+            }
+        }
+    },
 }
 
 
