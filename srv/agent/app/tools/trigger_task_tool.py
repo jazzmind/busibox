@@ -152,7 +152,10 @@ async def trigger_task_run(
                 )
 
             # --- Guardrail 4: cooldown window ---
-            cutoff = datetime.now(timezone.utc) - timedelta(seconds=COOLDOWN_SECONDS)
+            # Use timezone-naive UTC to match the model's _now() which stores
+            # TIMESTAMP WITHOUT TIME ZONE in PostgreSQL. Using timezone-aware
+            # datetime causes asyncpg DataError on the comparison.
+            cutoff = datetime.utcnow() - timedelta(seconds=COOLDOWN_SECONDS)
             recent_stmt = (
                 select(func.count())
                 .select_from(TaskExecution)
