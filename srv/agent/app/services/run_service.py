@@ -13,7 +13,7 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from opentelemetry import trace
 from pydantic_ai import Agent
@@ -502,6 +502,7 @@ async def create_run_background(
     scopes: list[str],
     purpose: str,
     agent_tier: str = "complex",
+    on_complete: Optional[Callable] = None,
 ) -> RunRecord:
     """
     Create a run record immediately (in "pending" state) and execute the agent
@@ -521,6 +522,7 @@ async def create_run_background(
         scopes: OAuth scopes for token exchange
         purpose: Token purpose
         agent_tier: Execution tier (simple/complex/batch)
+        on_complete: Optional async callback(run_id, status, output_summary) called after run finishes
 
     Returns:
         Pre-created RunRecord (status="pending")
@@ -560,9 +562,11 @@ async def create_run_background(
     run_id = run_record.id
 
     async def _bg_execute():
+        final_status = "failed"
+        output_summary = None
         try:
             async with SessionLocal() as bg_session:
-                await create_run(
+                result = await create_run(
                     session=bg_session,
                     principal=principal,
                     agent_id=agent_id,
@@ -572,11 +576,13 @@ async def create_run_background(
                     agent_tier=agent_tier,
                     existing_run_id=run_id,
                 )
+                final_status = getattr(result, "status", "succeeded") or "succeeded"
+                output_summary = str(getattr(result, "output", ""))[:500] if getattr(result, "output", None) else None
         except Exception as exc:
             logger.exception(
                 f"[bg_execute] Background run {run_id} failed with exception: {exc}"
             )
-            # Mark the pre-created record as failed so the UI doesn't show it stuck as pending
+            output_summary = str(exc)[:500]
             try:
                 async with SessionLocal() as err_session:
                     await err_session.execute(
@@ -587,6 +593,12 @@ async def create_run_background(
                     await err_session.commit()
             except Exception:
                 pass
+        finally:
+            if on_complete:
+                try:
+                    await on_complete(run_id, final_status, output_summary)
+                except Exception as cb_err:
+                    logger.warning(f"[bg_execute] on_complete callback failed: {cb_err}")
 
     asyncio.create_task(_bg_execute())
 

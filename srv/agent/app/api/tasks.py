@@ -921,6 +921,12 @@ async def run_agent_task(
             # which auto-grants the app:<name> role in the downstream data-api token.
             # Without this, data-api RLS silently returns 0 rows for app-scoped docs.
             task_app_id = (task.input_config or {}).get("__app_id__")
+            # #region agent log
+            logger.info(
+                "DEBUG[fce93e] task manual run: app_id from input_config",
+                extra={"task_id": str(task_id), "task_app_id": task_app_id, "input_config_keys": list((task.input_config or {}).keys()), "has_delegation_token": bool(task.delegation_token)},
+            )
+            # #endregion
             principal_for_run = Principal(
                 sub=task.user_id,
                 scopes=task.delegation_scopes or [],
@@ -928,6 +934,28 @@ async def run_agent_task(
                 app_id=task_app_id,
             )
             
+            task_exec_id = execution.id
+            task_obj_id = task.id
+
+            async def _on_bg_complete(bg_run_id, bg_status, bg_summary):
+                from app.db.session import SessionLocal as _SL
+                from app.models.domain import TaskExecution as _TE
+                async with _SL() as cb_session:
+                    mapped_status = "completed" if bg_status in ("succeeded", "completed") else "failed"
+                    await update_task_execution(
+                        session=cb_session,
+                        execution_id=task_exec_id,
+                        run_id=bg_run_id,
+                        status=mapped_status,
+                        output_summary=bg_summary,
+                    )
+                    exec_result = await cb_session.execute(
+                        select(_TE).where(_TE.id == task_exec_id)
+                    )
+                    exec_obj = exec_result.scalar_one_or_none()
+                    if exec_obj:
+                        await update_task_after_execution(cb_session, task_obj_id, exec_obj, mapped_status == "completed")
+
             run_record = await create_run_background(
                 principal=principal_for_run,
                 agent_id=task.agent_id,
@@ -935,6 +963,7 @@ async def run_agent_task(
                 scopes=task.delegation_scopes or [],
                 purpose="task-manual-execution",
                 agent_tier="complex",
+                on_complete=_on_bg_complete,
             )
             
             # Link the pre-created run to the execution record immediately

@@ -151,6 +151,12 @@ async def exchange_token(
     # libraries, and app document collections across all apps. Result-level
     # filtering (file_ids) handles scoping for doc-specific agents.
     resource_id = None if audience == "search-api" else principal.app_id
+    # #region agent log
+    logger.info(
+        "DEBUG[fce93e] exchange_token: resource_id=%s, audience=%s, principal.app_id=%s, purpose=%s",
+        resource_id, audience, principal.app_id, purpose,
+    )
+    # #endregion
     
     # Use Zero Trust exchange - pass user's JWT as subject_token
     result = await exchange_token_zero_trust(
