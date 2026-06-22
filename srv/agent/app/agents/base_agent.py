@@ -611,10 +611,8 @@ def _register_builtin_tools():
     try:
         from app.tools.trigger_task_tool import trigger_task_run, TriggerTaskOutput
         ToolRegistry.register("trigger_task_run", trigger_task_run, TriggerTaskOutput)
-        logger.info("[DEBUG-fce93e][A] trigger_task_run registered in ToolRegistry successfully")
     except ImportError as e:
         logger.warning(f"Could not register trigger_task_run tool: {e}")
-        logger.info(f"[DEBUG-fce93e][A] trigger_task_run IMPORT FAILED: {e}")
 
 
 # Initialize tool registry on module load

@@ -921,12 +921,6 @@ async def run_agent_task(
             # which auto-grants the app:<name> role in the downstream data-api token.
             # Without this, data-api RLS silently returns 0 rows for app-scoped docs.
             task_app_id = (task.input_config or {}).get("__app_id__")
-            # #region agent log
-            logger.info(
-                "DEBUG[fce93e] task manual run: app_id from input_config",
-                extra={"task_id": str(task_id), "task_app_id": task_app_id, "input_config_keys": list((task.input_config or {}).keys()), "has_delegation_token": bool(task.delegation_token)},
-            )
-            # #endregion
             principal_for_run = Principal(
                 sub=task.user_id,
                 scopes=task.delegation_scopes or [],
@@ -940,12 +934,6 @@ async def run_agent_task(
             async def _on_bg_complete(bg_run_id, bg_status, bg_summary):
                 from app.db.session import SessionLocal as _SL
                 from app.models.domain import TaskExecution as _TE, AgentTask as _AT
-                # #region agent log
-                logger.info(
-                    "DEBUG[fce93e] _on_bg_complete fired: run_id=%s, status=%s, exec_id=%s",
-                    bg_run_id, bg_status, task_exec_id,
-                )
-                # #endregion
                 async with _SL() as cb_session:
                     mapped_status = "completed" if bg_status in ("succeeded", "completed") else "failed"
                     await update_task_execution(
@@ -981,8 +969,7 @@ async def run_agent_task(
                         pending_exec = pending_result.scalar_one_or_none()
                         if pending_exec:
                             logger.info(
-                                "[DEBUG-fce93e] Starting pending continuation: "
-                                "exec_id=%s, task_id=%s",
+                                "Starting pending continuation: exec_id=%s, task_id=%s",
                                 pending_exec.id, task_obj_id,
                             )
                             # Load the task for execution
@@ -993,6 +980,17 @@ async def run_agent_task(
                             if cont_task:
                                 from app.api.webhooks import _execute_task_in_background
                                 import asyncio
+                                # #region agent log
+                                import time as _t3
+                                try:
+                                    import aiohttp as _ah3
+                                    async def _dbg3():
+                                        async with _ah3.ClientSession() as _s3:
+                                            await _s3.post('http://127.0.0.1:7251/ingest/606d8d55-f269-4a7e-9f32-b5c818b6655a', json={'sessionId':'fce93e','location':'tasks.py:_on_bg_complete','message':'chaining_first_continuation','data':{'task_id':str(task_obj_id),'next_exec_id':str(pending_exec.id),'next_depth':pending_exec.input_data.get('_continuation_depth') if pending_exec.input_data else None},'timestamp':int(_t3.time()*1000),'hypothesisId':'H1'}, headers={'X-Debug-Session-Id':'fce93e'})
+                                    asyncio.create_task(_dbg3())
+                                except Exception:
+                                    pass
+                                # #endregion agent log
                                 asyncio.create_task(
                                     _execute_task_in_background(
                                         task=cont_task,

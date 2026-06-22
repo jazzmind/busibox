@@ -120,6 +120,7 @@ redis_port: 6379
 
 agent_api_host: "{{ agent_ip }}"
 agent_api_port: 8000
+enable_camoufox: true  # Install Camoufox (Firefox-based stealth browser) for Tier 3 scraping
 
 # LLM Service Endpoints
 litellm_host: "{{ litellm_ip }}"

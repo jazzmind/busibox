@@ -80,9 +80,7 @@ async def trigger_task_run(
     next_depth = current_depth + 1
 
     logger.info(
-        f"[DEBUG-fce93e][B] trigger_task_run CALLED: "
-        f"task_id={task_id}, context_task_id={context_task_id}, "
-        f"depth={current_depth}->{next_depth}, reason={reason!r}"
+        f"[trigger_task_run] called: task_id={task_id}, depth={current_depth}->{next_depth}, reason={reason!r}"
     )
 
     # --- Guardrail 1: self-only restriction ---
@@ -153,10 +151,6 @@ async def trigger_task_run(
             # sufficient to prevent runaway loops. Time-based and pending-based
             # cooldowns were blocking legitimate rapid chaining for large batch
             # operations (500+ site collection runs).
-            logger.info(
-                f"[DEBUG-fce93e][B] trigger_task_run guards passed, "
-                f"proceeding with depth={next_depth}"
-            )
 
             # Build continuation payload, normalizing to JSON-safe types.
             # task.input_config is read from JSONB and asyncpg may decode ISO
@@ -173,10 +167,6 @@ async def trigger_task_run(
                 json.dumps(raw_payload, default=str)
             )
 
-            logger.info(
-                f"[DEBUG-fce93e][B] trigger_task_run continuation_payload built ok, "
-                f"task={task_id}, depth={next_depth}"
-            )
 
             # Create execution record with trigger_source="continuation"
             execution = await create_task_execution(
@@ -212,7 +202,6 @@ async def trigger_task_run(
 
     except Exception as e:
         logger.exception(f"[trigger_task_run] Failed to queue continuation for task {task_id}: {e}")
-        logger.info(f"[DEBUG-fce93e][B] trigger_task_run EXCEPTION: {e}")
         return TriggerTaskOutput(
             success=False,
             continuation_depth=current_depth,
