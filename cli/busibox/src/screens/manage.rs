@@ -1006,6 +1006,7 @@ pub fn load_service_status(app: &mut App) {
     let service_names: Vec<String> = app.manage_services.iter().map(|s| s.name.clone()).collect();
     let network_base = profile.effective_network_base().to_string();
     let vllm_network_base = profile.vllm_network_base().to_string();
+    let docker_runtime = profile.effective_docker_runtime().to_string();
     let repo_root = app.repo_root.clone();
 
     // Resolve busibox-frontend sibling directory (shared by version + remote threads)
@@ -1066,7 +1067,7 @@ pub fn load_service_status(app: &mut App) {
 
             for def in &check_defs {
                 let status = health::check_service_pub(
-                    def, &host, &prefix, ssh.as_ref(), true, &network_base, &vllm_network_base,
+                    def, &host, &prefix, ssh.as_ref(), true, &network_base, &vllm_network_base, None,
                 );
                 let status_str = match status {
                     HealthStatus::Healthy => "healthy".to_string(),
@@ -1080,6 +1081,7 @@ pub fn load_service_status(app: &mut App) {
                 });
             }
         } else {
+            let docker_context = health::resolve_docker_context_pub(&docker_runtime, &prefix);
             let mut handles = Vec::new();
             for def in check_defs {
                 let def = def.clone();
@@ -1089,6 +1091,7 @@ pub fn load_service_status(app: &mut App) {
                 let network_base = network_base.clone();
                 let vllm_network_base = vllm_network_base.clone();
                 let health_tx = health_tx.clone();
+                let docker_context = docker_context.clone();
 
                 let handle = std::thread::spawn(move || {
                     let ssh = ssh_details.as_ref().map(|(h, u, k)| {
@@ -1096,6 +1099,7 @@ pub fn load_service_status(app: &mut App) {
                     });
                     let status = health::check_service_pub(
                         &def, &host, &prefix, ssh.as_ref(), false, &network_base, &vllm_network_base,
+                        docker_context.as_deref(),
                     );
                     let status_str = match status {
                         HealthStatus::Healthy => "healthy".to_string(),

@@ -1038,6 +1038,36 @@ pub fn auto_start(app: &mut App) {
     app.pending_vault_setup = true;
 }
 
+/// Resume a partially-complete install: initialise services from stages, mark those
+/// already healthy (from the welcome screen's health results) so the worker skips them,
+/// then start the install worker (or trigger vault setup if we don't have the password yet).
+pub fn auto_start_resume(app: &mut App) {
+    use crate::modules::health::HealthStatus;
+
+    // Reset install bookkeeping but build service list from stages.
+    init_install(app);
+
+    // Pre-mark services that the health checker already confirmed are running.
+    let healthy_names: std::collections::HashSet<String> = app
+        .health_results
+        .iter()
+        .filter(|r| r.status == HealthStatus::Healthy)
+        .map(|r| r.name.clone())
+        .collect();
+
+    for svc in app.install_services.iter_mut() {
+        if healthy_names.contains(&svc.name) {
+            svc.status = InstallStatus::Healthy;
+        }
+    }
+
+    if app.vault_password.is_some() {
+        spawn_install_worker(app);
+    } else {
+        app.pending_vault_setup = true;
+    }
+}
+
 /// Public entry point to start the install worker after vault setup completes.
 pub fn spawn_install_worker_pub(app: &mut App) {
     spawn_install_worker(app);

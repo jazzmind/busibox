@@ -101,8 +101,12 @@ dev-apps/*
 # Profile export bundles (contain encrypted secrets)
 *.busibox-export
 
-# Rust build artifacts
+# Rust build artifacts (workspace target + per-crate targets)
+cli/target/
 cli/busibox/target/
+cli/busibox-core/target/
+cli/busibox-quick/target/
+cli/busibox-providers/target/
 
 # Kubernetes - sensitive files
 k8s/kubeconfig-*.yaml
