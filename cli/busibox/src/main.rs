@@ -1036,16 +1036,13 @@ fn perform_resume_install(app: &mut App) {
             .unwrap_or(0);
         app.remote_env_choice = env_idx;
     }
-    // Clear any previous install state and go to Install screen
-    app.install_services.clear();
-    app.install_log.clear();
-    app.install_complete = false;
-    app.install_model_status.clear();
-    app.install_models_complete = false;
-    app.install_portal_url = None;
     app.clear_message();
     app.screen = Screen::Install;
     app.menu_selected = 0;
+    // init_install (called inside auto_start_resume) resets bookkeeping, then
+    // pre-marks already-healthy services from the welcome screen's health results
+    // so the install worker skips stages that are already complete.
+    screens::install::auto_start_resume(app);
 }
 
 fn perform_sync_then_admin_login(app: &mut App) {

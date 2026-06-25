@@ -344,6 +344,37 @@ pub fn all_service_defs(is_mlx: bool) -> Vec<ServiceHealthDef> {
     defs
 }
 
+/// Detect which Docker context to use for local CLI health checks.
+///
+/// For explicit runtimes ("docker-desktop" / "colima") maps directly.
+/// For "auto" probes each well-known context in preference order and picks
+/// the first one that has containers matching the given prefix running.
+/// Returns None to leave the current default context unchanged.
+fn resolve_local_docker_context(docker_runtime: &str, prefix: &str) -> Option<String> {
+    match docker_runtime {
+        "docker-desktop" => return Some("desktop-linux".to_string()),
+        "colima" => return Some("colima".to_string()),
+        _ => {}
+    }
+    // Auto: find which context actually has this prefix's containers running.
+    for ctx in &["desktop-linux", "colima"] {
+        let has_containers = std::process::Command::new("docker")
+            .args(["--context", ctx, "ps", "-q", "--filter", &format!("name={prefix}-")])
+            .output()
+            .map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+            .unwrap_or(false);
+        if has_containers {
+            return Some(ctx.to_string());
+        }
+    }
+    None
+}
+
+/// Public alias so manage.rs can resolve the context once before spawning check threads.
+pub fn resolve_docker_context_pub(docker_runtime: &str, prefix: &str) -> Option<String> {
+    resolve_local_docker_context(docker_runtime, prefix)
+}
+
 /// Run a single health check, returning the status.
 fn check_service(
     def: &ServiceHealthDef,
@@ -352,6 +383,7 @@ fn check_service(
     ssh: Option<&SshConnection>,
     is_proxmox: bool,
     network_base: &str,
+    docker_context: Option<&str>,
 ) -> HealthStatus {
     if is_proxmox {
         return check_service_proxmox(def, ssh, network_base);
@@ -391,10 +423,12 @@ fn check_service(
                 let full_cmd = format!("{}{cmd}", shell::SHELL_PATH_PREAMBLE);
                 ssh.run(&full_cmd)
             } else {
-                std::process::Command::new("bash")
-                    .arg("-c")
-                    .arg(&cmd)
-                    .output()
+                let mut proc = std::process::Command::new("bash");
+                proc.arg("-c").arg(&cmd);
+                if let Some(ctx) = docker_context {
+                    proc.env("DOCKER_CONTEXT", ctx);
+                }
+                proc.output()
                     .map(|o| {
                         if o.status.success() {
                             String::from_utf8_lossy(&o.stdout).to_string()
@@ -492,9 +526,10 @@ pub fn check_service_pub(
     is_proxmox: bool,
     network_base: &str,
     vllm_network_base: &str,
+    docker_context: Option<&str>,
 ) -> HealthStatus {
     let effective_base = if def.name == "vllm" { vllm_network_base } else { network_base };
-    check_service(def, host, prefix, ssh, is_proxmox, effective_base)
+    check_service(def, host, prefix, ssh, is_proxmox, effective_base, docker_context)
 }
 
 /// Run all health checks, sending results through the channel as they complete.
@@ -519,6 +554,7 @@ pub fn run_health_checks(
     network_base: String,
     vllm_network_base: String,
     tx: mpsc::Sender<HealthUpdate>,
+    docker_runtime: String,
 ) {
     std::thread::spawn(move || {
         if is_proxmox {
@@ -526,7 +562,7 @@ pub fn run_health_checks(
         } else if let Some(ref details) = ssh_details {
             run_health_checks_remote_batched(&defs, &host, &prefix, details, &tx);
         } else {
-            run_health_checks_local_parallel(&defs, &host, &prefix, &tx);
+            run_health_checks_local_parallel(&defs, &host, &prefix, &tx, &docker_runtime);
         }
         let _ = tx.send(HealthUpdate::Complete);
     });
@@ -628,7 +664,10 @@ fn run_health_checks_local_parallel(
     host: &str,
     prefix: &str,
     tx: &mpsc::Sender<HealthUpdate>,
+    docker_runtime: &str,
 ) {
+    let docker_context = resolve_local_docker_context(docker_runtime, prefix);
+
     let mut handles = Vec::new();
 
     for def in defs {
@@ -636,6 +675,7 @@ fn run_health_checks_local_parallel(
         let host = host.to_string();
         let prefix = prefix.to_string();
         let tx = tx.clone();
+        let docker_context = docker_context.clone();
 
         let handle = std::thread::spawn(move || {
             let status = check_service(
@@ -645,6 +685,7 @@ fn run_health_checks_local_parallel(
                 None,
                 false,
                 "",
+                docker_context.as_deref(),
             );
 
             let _ = tx.send(HealthUpdate::ServiceResult(ServiceHealthResult {
@@ -843,6 +884,7 @@ pub fn start_health_checks(
     is_proxmox: bool,
     network_base: &str,
     vllm_network_base: &str,
+    docker_runtime: &str,
 ) -> mpsc::Receiver<HealthUpdate> {
     let (tx, rx) = mpsc::channel();
     let defs = all_service_defs(is_mlx);
@@ -852,6 +894,6 @@ pub fn start_health_checks(
         "localhost".to_string()
     };
 
-    run_health_checks(defs, host, prefix.to_string(), ssh_details, is_proxmox, network_base.to_string(), vllm_network_base.to_string(), tx);
+    run_health_checks(defs, host, prefix.to_string(), ssh_details, is_proxmox, network_base.to_string(), vllm_network_base.to_string(), tx, docker_runtime.to_string());
     rx
 }
