@@ -537,6 +537,9 @@ deploy_service() {
     # Without this, `docker compose up` sees no config change and leaves existing
     # containers running with stale/placeholder env vars.
     local cmd="ansible-playbook -i ${inventory} ${playbook} --tags ${tag}"
+    if [[ "${RUN_PVT_TESTS:-true}" == "false" ]]; then
+        cmd="${cmd} -e run_pvt_tests=false"
+    fi
 
     # If this is an individual core sub-app (busibox-*) on Docker and the container
     # is already running, use in-container deploy to avoid killing sibling apps.

@@ -129,10 +129,22 @@ fn main() -> Result<()> {
                     if let Ok(pw) = std::fs::read_to_string(&legacy_path) {
                         let pw = pw.trim().to_string();
                         if !pw.is_empty() {
-                            if let Some((msg, kind)) = run_vault_upgrade(&app.repo_root, &vault_prefix, &pw, false) {
-                                app.set_message(&msg, kind);
+                            match run_vault_upgrade(&app.repo_root, &vault_prefix, &pw, false) {
+                                Some((msg, app::MessageKind::Warning)) | Some((msg, app::MessageKind::Error)) => {
+                                    // Decrypt failed — the stored password is wrong. Prompt interactively
+                                    // so the user can supply the correct password. Don't set a bad password.
+                                    if msg.contains("vault_decrypt_failed") {
+                                        app.pending_vault_setup = true;
+                                    } else {
+                                        app.set_message(&msg, app::MessageKind::Warning);
+                                        app.vault_password = Some(pw);
+                                    }
+                                }
+                                _ => {
+                                    // Success (or vault didn't exist yet and was created) — use silently
+                                    app.vault_password = Some(pw);
+                                }
                             }
-                            app.vault_password = Some(pw);
                         }
                     }
                 }
@@ -1528,6 +1540,11 @@ fn handle_admin_login(app: &mut App) {
         .active_profile()
         .map(|(_, p)| p.backend.clone());
 
+    let docker_runtime: String = app
+        .active_profile()
+        .map(|(_, p)| p.effective_docker_runtime().to_string())
+        .unwrap_or_else(|| "auto".to_string());
+
     debug_info.push_str(&format!("email={:?}", admin_email));
 
     // Ensure SSH connection is established for remote
@@ -1655,6 +1672,26 @@ fn handle_admin_login(app: &mut App) {
         if let Some(ref backend_val) = busibox_backend {
             cmd.env("BUSIBOX_BACKEND", backend_val);
         }
+
+        // Set DOCKER_CONTEXT so docker exec in login.sh reaches the right containers
+        let env_prefix = match busibox_env.as_deref().unwrap_or("development") {
+            "development" => "dev",
+            "staging" => "staging",
+            "production" => "prod",
+            other => other,
+        };
+        if let Some(ctx) = crate::modules::health::resolve_docker_context_pub(&docker_runtime, env_prefix) {
+            cmd.env("DOCKER_CONTEXT", ctx);
+        }
+
+        // Pass SITE_DOMAIN so login.sh generates the correct portal URL.
+        // Without this, JSON_OUTPUT mode falls back to "localhost" (no port), producing
+        // https://localhost/portal/verify which may not be routable in local dev.
+        let site_domain = app
+            .active_profile()
+            .and_then(|(_, p)| p.site_domain.clone())
+            .unwrap_or_else(|| "localhost".to_string());
+        cmd.env("SITE_DOMAIN", &site_domain);
 
         debug_info.push_str(" | local_cmd=bash scripts/make/login.sh");
 
@@ -1836,6 +1873,35 @@ fn handle_vault_setup(app: &mut App) -> Option<(String, app::MessageKind)> {
                             Ok(vault_pw) => {
                                 eprintln!("✓ Vault unlocked\n");
                                 let result = run_vault_upgrade(&app.repo_root, &vault_prefix, &vault_pw, true);
+                                let is_decrypt_failure = result.as_ref()
+                                    .map(|(msg, _)| msg.contains("vault_decrypt_failed"))
+                                    .unwrap_or(false);
+                                if is_decrypt_failure {
+                                    eprintln!("⚠ The vault file exists but can't be decrypted with this vault key.");
+                                    eprintln!("  This usually means the vault file was encrypted during a previous install.");
+                                    eprintln!();
+                                    eprintln!("  [r] Reset vault — back up old vault and recreate from template");
+                                    eprintln!("  [s] Skip — continue with this warning (secrets won't load)");
+                                    eprint!("  Choice [r/s]: ");
+                                    let mut choice = String::new();
+                                    let _ = std::io::stdin().read_line(&mut choice);
+                                    if choice.trim().eq_ignore_ascii_case("r") {
+                                        let vault_rel = format!(
+                                            "provision/ansible/roles/secrets/vars/vault.{vault_prefix}.yml"
+                                        );
+                                        let vault_path = app.repo_root.join(&vault_rel);
+                                        if vault_path.exists() {
+                                            let backup = vault_path.with_extension("yml.bak");
+                                            if std::fs::rename(&vault_path, &backup).is_ok() {
+                                                eprintln!("  ✓ Backed up old vault to {}", backup.display());
+                                            }
+                                        }
+                                        let result2 = run_vault_upgrade(&app.repo_root, &vault_prefix, &vault_pw, true);
+                                        app.vault_password = Some(vault_pw);
+                                        return result2;
+                                    }
+                                    eprintln!("  Skipped. Use vault setup from the profile menu to reset later.");
+                                }
                                 app.vault_password = Some(vault_pw);
                                 return result;
                             }
@@ -1863,20 +1929,57 @@ fn handle_vault_setup(app: &mut App) -> Option<(String, app::MessageKind)> {
         return None;
     }
 
-    // Check for legacy plaintext password file — offer migration
+    // Check for legacy plaintext password file — verify it works, then offer migration
     if let Some(legacy_path) = vault::find_legacy_vault_pass(&vault_prefix) {
-        eprintln!(
-            "Found existing plaintext vault password: {}",
-            legacy_path.display()
-        );
-        eprintln!("Migrating to encrypted vault key...\n");
-
         match std::fs::read_to_string(&legacy_path) {
-            Ok(vault_pw) => {
-                let vault_pw = vault_pw.trim().to_string();
+            Ok(vault_pw_raw) => {
+                let mut vault_pw = vault_pw_raw.trim().to_string();
                 if vault_pw.is_empty() {
                     eprintln!("Warning: plaintext password file is empty. Skipping migration.");
                 } else {
+                    // Test whether the legacy password actually decrypts the vault file.
+                    // If it doesn't, prompt the user for the correct one before migrating.
+                    let vault_file = app.repo_root.join(format!(
+                        "provision/ansible/roles/secrets/vars/vault.{vault_prefix}.yml"
+                    ));
+                    let decrypt_ok = if vault_file.exists() {
+                        busibox_core::vault::verify_vault_decryption(&vault_file, &vault_pw)
+                            .unwrap_or(false)
+                    } else {
+                        true // No vault file yet — will be created; password is fine
+                    };
+
+                    if !decrypt_ok {
+                        eprintln!("⚠ The password in {} cannot decrypt the vault file.", legacy_path.display());
+                        eprintln!("Enter the correct Ansible vault password.\n");
+                        let mut corrected = false;
+                        for attempt in 1..=3 {
+                            match vault::prompt_password(&format!("Vault password (attempt {attempt}/3): ")) {
+                                Ok(pw) if pw.is_empty() => eprintln!("Password cannot be empty."),
+                                Ok(pw) => {
+                                    let ok = busibox_core::vault::verify_vault_decryption(&vault_file, &pw)
+                                        .unwrap_or(false);
+                                    if ok {
+                                        vault_pw = pw;
+                                        corrected = true;
+                                        break;
+                                    }
+                                    eprintln!("Incorrect password (attempt {attempt}/3).");
+                                }
+                                Err(e) => { eprintln!("Error: {e}"); break; }
+                            }
+                        }
+                        if !corrected {
+                            eprintln!("Could not verify vault password. Install will proceed without vault secrets.");
+                            eprintln!("Press Enter to continue...");
+                            let _ = std::io::stdin().read_line(&mut String::new());
+                            return None;
+                        }
+                    }
+
+                    eprintln!("Found existing vault password: {}", legacy_path.display());
+                    eprintln!("Migrating to encrypted vault key...\n");
+
                     // Encrypt with admin master password
                     eprintln!("Set a master password to protect this vault key.");
                     eprintln!("You'll need this password each time you deploy.\n");

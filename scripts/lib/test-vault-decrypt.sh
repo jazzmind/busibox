@@ -23,6 +23,14 @@ make_pw_script() {
     echo "$tmp"
 }
 
+# Ensure pyyaml is available — ansible may use a separate Python that already has it,
+# but the system python3 often does not on macOS.
+if ! python3 -c "import yaml" 2>/dev/null; then
+    python3 -m pip install --quiet --break-system-packages pyyaml 2>/dev/null \
+        || python3 -m pip install --quiet pyyaml 2>/dev/null \
+        || { echo '{"status":"error","message":"pyyaml_not_installed"}'; exit 1; }
+fi
+
 if [ "$MODE" = "--upgrade" ]; then
     EXAMPLE_FILE="${3:?--upgrade requires <example_vault_file> as third argument}"
     if [ "$PW_LEN" -eq 0 ]; then

@@ -157,7 +157,7 @@ fn get_bootstrap_stages(app: &App) -> Vec<(&'static str, &'static str, Vec<Strin
     stages.push((
         "Portal",
         "Portal & Admin",
-        vec!["core-apps".into()],
+        vec!["proxy".into(), "core-apps".into()],
     ));
     stages.push(("Validation", "Verify env secrets", vec!["_validate_env".into()]));
 
@@ -1048,16 +1048,23 @@ pub fn auto_start_resume(app: &mut App) {
     init_install(app);
 
     // Pre-mark services that the health checker already confirmed are running.
-    let healthy_names: std::collections::HashSet<String> = app
-        .health_results
-        .iter()
-        .filter(|r| r.status == HealthStatus::Healthy)
-        .map(|r| r.name.clone())
-        .collect();
+    // Skip this entirely for clean installs — every stage must run from scratch.
+    if !app.clean_install {
+        let healthy_names: std::collections::HashSet<String> = app
+            .health_results
+            .iter()
+            .filter(|r| r.status == HealthStatus::Healthy)
+            .map(|r| r.name.clone())
+            .collect();
 
-    for svc in app.install_services.iter_mut() {
-        if healthy_names.contains(&svc.name) {
-            svc.status = InstallStatus::Healthy;
+        // These services always need to run during resume so that vault secrets (postgres
+        // password, config api credentials, etc.) are synced even when the service is healthy.
+        const ALWAYS_SYNC: &[&str] = &["postgres", "config"];
+
+        for svc in app.install_services.iter_mut() {
+            if healthy_names.contains(&svc.name) && !ALWAYS_SYNC.contains(&svc.name.as_str()) {
+                svc.status = InstallStatus::Healthy;
+            }
         }
     }
 
@@ -3747,6 +3754,21 @@ echo "✓ User-specific values applied"
             }
             if service_list.contains("core-apps") {
                 ref_exports.push_str("ENABLED_APPS=all ");
+            }
+            // Skip PVT integration tests during bootstrap — dependent services may not
+            // be fully configured until the install completes end-to-end.
+            if !is_update {
+                ref_exports.push_str("RUN_PVT_TESTS=false ");
+            }
+            // Ensure Ansible and Docker CLI subprocesses use the correct Docker context.
+            // Without this, when both Colima and Docker Desktop are installed, the wrong
+            // daemon may be targeted — containers start in one runtime but get health-checked
+            // or operated on in another.
+            if let Some(ctx) = crate::modules::health::resolve_docker_context_pub(
+                &profile_docker_runtime,
+                &container_prefix,
+            ) {
+                ref_exports.push_str(&format!("DOCKER_CONTEXT={ctx} "));
             }
             let make_args = format!("{ref_exports}install SERVICE={service_list}");
 

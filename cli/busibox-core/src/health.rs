@@ -350,20 +350,53 @@ pub fn all_service_defs(is_mlx: bool) -> Vec<ServiceHealthDef> {
 /// For "auto" probes each well-known context in preference order and picks
 /// the first one that has containers matching the given prefix running.
 /// Returns None to leave the current default context unchanged.
+fn docker_context_socket_exists(ctx: &str) -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let sock = match ctx {
+        "colima" => format!("{home}/.colima/default/docker.sock"),
+        "desktop-linux" => format!("{home}/.docker/run/docker.sock"),
+        _ => return false,
+    };
+    std::path::Path::new(&sock).exists()
+}
+
 fn resolve_local_docker_context(docker_runtime: &str, prefix: &str) -> Option<String> {
-    match docker_runtime {
-        "docker-desktop" => return Some("desktop-linux".to_string()),
-        "colima" => return Some("colima".to_string()),
-        _ => {}
+    // For explicit runtimes, verify the socket is actually present.
+    // If both Colima and Docker Desktop are installed, the configured one takes priority,
+    // but we fall back to whichever is actually running if the preferred one is absent.
+    let preferred: Option<&str> = match docker_runtime {
+        "docker-desktop" => Some("desktop-linux"),
+        "colima" => Some("colima"),
+        _ => None,
+    };
+
+    if let Some(ctx) = preferred {
+        if docker_context_socket_exists(ctx) {
+            return Some(ctx.to_string());
+        }
+        // Configured runtime's socket not found — try the other local runtime
+        let other = if ctx == "colima" { "desktop-linux" } else { "colima" };
+        if docker_context_socket_exists(other) {
+            return Some(other.to_string());
+        }
+        // Neither socket found — return configured name anyway (may use default socket)
+        return Some(ctx.to_string());
     }
-    // Auto: find which context actually has this prefix's containers running.
-    for ctx in &["desktop-linux", "colima"] {
+
+    // Auto mode: first find which context has running containers with this prefix.
+    for ctx in &["colima", "desktop-linux"] {
         let has_containers = std::process::Command::new("docker")
             .args(["--context", ctx, "ps", "-q", "--filter", &format!("name={prefix}-")])
             .output()
             .map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty())
             .unwrap_or(false);
         if has_containers {
+            return Some(ctx.to_string());
+        }
+    }
+    // No containers yet (fresh install) — return whichever daemon socket is present.
+    for ctx in &["colima", "desktop-linux"] {
+        if docker_context_socket_exists(ctx) {
             return Some(ctx.to_string());
         }
     }
