@@ -386,6 +386,7 @@ fn save_profile_and_continue(app: &mut App) {
         dev_apps_dir: None,
         huggingface_token: None,
         direct_access: None,
+        port_overrides: Default::default(),
     };
 
     match profile::create_profile(&app.repo_root, &profile_id, profile, true) {

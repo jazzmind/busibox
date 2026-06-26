@@ -537,7 +537,46 @@ pub fn check_service_pub(
     vllm_network_base: &str,
     docker_context: Option<&str>,
 ) -> HealthStatus {
+    check_service_pub_with_override(def, host, prefix, ssh, is_proxmox, network_base, vllm_network_base, docker_context, None)
+}
+
+pub fn check_service_pub_with_override(
+    def: &ServiceHealthDef,
+    host: &str,
+    prefix: &str,
+    ssh: Option<&SshConnection>,
+    is_proxmox: bool,
+    network_base: &str,
+    vllm_network_base: &str,
+    docker_context: Option<&str>,
+    port_override: Option<u16>,
+) -> HealthStatus {
     let effective_base = if def.name == "vllm" { vllm_network_base } else { network_base };
+    if let Some(alt_port) = port_override {
+        if let CheckMethod::Http { path, .. } = &def.check {
+            let url = format!("http://{host}:{alt_port}{path}");
+            let curl_cmd = format!("curl -s -o /dev/null -w '%{{http_code}}' --max-time 3 '{url}'");
+            let output = if let Some(ssh) = ssh {
+                let full_cmd = format!("{}{curl_cmd}", remote::SHELL_PATH_PREAMBLE);
+                ssh.run(&full_cmd).unwrap_or_default()
+            } else {
+                std::process::Command::new("bash")
+                    .arg("-c")
+                    .arg(&curl_cmd)
+                    .output()
+                    .ok()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    .unwrap_or_default()
+            };
+            let code = output.trim().parse::<u16>().unwrap_or(0);
+            return match code {
+                0 => HealthStatus::Down,
+                200..=299 | 301 | 302 | 401 | 403 => HealthStatus::Healthy,
+                500..=599 => HealthStatus::Unhealthy,
+                _ => HealthStatus::Unhealthy,
+            };
+        }
+    }
     check_service(def, host, prefix, ssh, is_proxmox, effective_base, docker_context)
 }
 
@@ -565,13 +604,28 @@ pub fn run_health_checks(
     tx: mpsc::Sender<HealthUpdate>,
     docker_runtime: String,
 ) {
+    run_health_checks_with_overrides(defs, host, prefix, ssh_details, is_proxmox, network_base, vllm_network_base, tx, docker_runtime, std::collections::HashMap::new())
+}
+
+pub fn run_health_checks_with_overrides(
+    defs: Vec<ServiceHealthDef>,
+    host: String,
+    prefix: String,
+    ssh_details: Option<(String, String, String)>, // (host, user, key)
+    is_proxmox: bool,
+    network_base: String,
+    vllm_network_base: String,
+    tx: mpsc::Sender<HealthUpdate>,
+    docker_runtime: String,
+    port_overrides: std::collections::HashMap<String, u16>,
+) {
     std::thread::spawn(move || {
         if is_proxmox {
             run_health_checks_proxmox_batched(&defs, &ssh_details, &network_base, &vllm_network_base, &tx);
         } else if let Some(ref details) = ssh_details {
             run_health_checks_remote_batched(&defs, &host, &prefix, details, &tx);
         } else {
-            run_health_checks_local_parallel(&defs, &host, &prefix, &tx, &docker_runtime);
+            run_health_checks_local_parallel(&defs, &host, &prefix, &tx, &docker_runtime, &port_overrides);
         }
         let _ = tx.send(HealthUpdate::Complete);
     });
@@ -674,6 +728,7 @@ fn run_health_checks_local_parallel(
     prefix: &str,
     tx: &mpsc::Sender<HealthUpdate>,
     docker_runtime: &str,
+    port_overrides: &std::collections::HashMap<String, u16>,
 ) {
     let docker_context = resolve_local_docker_context(docker_runtime, prefix);
 
@@ -685,17 +740,16 @@ fn run_health_checks_local_parallel(
         let prefix = prefix.to_string();
         let tx = tx.clone();
         let docker_context = docker_context.clone();
+        let port_override = port_overrides.get(def.name).copied();
 
         let handle = std::thread::spawn(move || {
-            let status = check_service(
-                &def,
-                &host,
-                &prefix,
-                None,
-                false,
-                "",
-                docker_context.as_deref(),
-            );
+            let status = if let Some(alt_port) = port_override {
+                check_service_pub_with_override(
+                    &def, &host, &prefix, None, false, "", "", docker_context.as_deref(), Some(alt_port),
+                )
+            } else {
+                check_service(&def, &host, &prefix, None, false, "", docker_context.as_deref())
+            };
 
             let _ = tx.send(HealthUpdate::ServiceResult(ServiceHealthResult {
                 name: def.name.to_string(),
@@ -895,6 +949,21 @@ pub fn start_health_checks(
     vllm_network_base: &str,
     docker_runtime: &str,
 ) -> mpsc::Receiver<HealthUpdate> {
+    start_health_checks_with_overrides(is_remote, is_mlx, host, prefix, ssh_details, is_proxmox, network_base, vllm_network_base, docker_runtime, std::collections::HashMap::new())
+}
+
+pub fn start_health_checks_with_overrides(
+    is_remote: bool,
+    is_mlx: bool,
+    host: &str,
+    prefix: &str,
+    ssh_details: Option<(String, String, String)>,
+    is_proxmox: bool,
+    network_base: &str,
+    vllm_network_base: &str,
+    docker_runtime: &str,
+    port_overrides: std::collections::HashMap<String, u16>,
+) -> mpsc::Receiver<HealthUpdate> {
     let (tx, rx) = mpsc::channel();
     let defs = all_service_defs(is_mlx);
     let host = if is_remote {
@@ -903,6 +972,6 @@ pub fn start_health_checks(
         "localhost".to_string()
     };
 
-    run_health_checks(defs, host, prefix.to_string(), ssh_details, is_proxmox, network_base.to_string(), vllm_network_base.to_string(), tx, docker_runtime.to_string());
+    run_health_checks_with_overrides(defs, host, prefix.to_string(), ssh_details, is_proxmox, network_base.to_string(), vllm_network_base.to_string(), tx, docker_runtime.to_string(), port_overrides);
     rx
 }

@@ -100,6 +100,11 @@ pub struct Profile {
     /// HuggingFace API token for authenticated model access and higher rate limits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub huggingface_token: Option<String>,
+    /// Per-service host port overrides. Keys are service names (e.g. "litellm"), values are
+    /// the alternative host port to bind on. Set automatically when a port conflict is detected
+    /// during install. Passed to docker-compose as {SERVICE_HOST_PORT} env vars.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub port_overrides: std::collections::HashMap<String, u16>,
 }
 
 impl Profile {

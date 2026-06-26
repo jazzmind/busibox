@@ -727,6 +727,9 @@ pub struct ServiceStatus {
     pub source_repo: String,
     /// Secrets sync status: "checking...", "synced", "mismatch: VAR1, VAR2", "down", "error", or "—" (no secrets).
     pub secrets_status: String,
+    /// Accessible endpoint for this service, e.g. "localhost:4000" or "10.0.0.1:8010".
+    /// None for services without a host-side port (docker exec checks, etc.).
+    pub endpoint: Option<String>,
 }
 
 impl App {
