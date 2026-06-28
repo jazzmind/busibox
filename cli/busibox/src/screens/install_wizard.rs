@@ -1,4 +1,4 @@
-use crate::app::{App, Screen, SetupTarget, WizardStep};
+use crate::app::{App, BrowseStep, Screen, SetupTarget, WizardStep};
 use crate::modules::profile::{Profile, build_profile_id, load_profiles, try_lock_profile, upsert_profile};
 use crate::theme;
 use busibox_core::profiles::{resolve_services, AddonPack, BusiboxProfile, LocalLlmBackend};
@@ -63,10 +63,11 @@ pub fn render(f: &mut Frame, app: &App) {
 
     // Step progress
     let step_label = match app.wizard_step {
-        WizardStep::Target => "Step 1 of 3 — Where will Busibox run?",
-        WizardStep::Preset => "Step 2 of 3 — Choose a service preset",
-        WizardStep::LlmBackend => "Step 2b — Choose a local LLM backend",
-        WizardStep::Confirm => "Step 3 of 3 — Review and create profile",
+        WizardStep::Target      => "Step 1 of 4 — Where will Busibox run?",
+        WizardStep::Preset      => "Step 2 of 4 — Choose a service preset",
+        WizardStep::LlmBackend  => "Step 2b — Choose a local LLM backend",
+        WizardStep::ModelSelect => "Step 3 of 4 — Select an initial model (optional)",
+        WizardStep::Confirm     => "Step 4 of 4 — Review and create profile",
     };
     let subtitle = Paragraph::new(step_label)
         .style(theme::muted())
@@ -74,10 +75,11 @@ pub fn render(f: &mut Frame, app: &App) {
     f.render_widget(subtitle, chunks[1]);
 
     match app.wizard_step {
-        WizardStep::Target => render_target(f, app, chunks[2]),
-        WizardStep::Preset => render_preset(f, app, chunks[2]),
-        WizardStep::LlmBackend => render_llm_backend(f, app, chunks[2]),
-        WizardStep::Confirm => render_confirm(f, app, chunks[2]),
+        WizardStep::Target      => render_target(f, app, chunks[2]),
+        WizardStep::Preset      => render_preset(f, app, chunks[2]),
+        WizardStep::LlmBackend  => render_llm_backend(f, app, chunks[2]),
+        WizardStep::ModelSelect => render_model_select(f, app, chunks[2]),
+        WizardStep::Confirm     => render_confirm(f, app, chunks[2]),
     }
 
     // Help bar
@@ -191,6 +193,40 @@ fn render_llm_backend(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(list, area);
 }
 
+fn render_model_select(f: &mut Frame, app: &App, area: Rect) {
+    let engine_hint = engine_for_wizard(app);
+    let choices: &[(&str, &str)] = &[
+        ("Browse HuggingFace", "Open the model browser to pick and download an initial model"),
+        ("Skip for now", "Install Busibox first, download models later from the Models screen"),
+    ];
+
+    let items: Vec<ListItem> = choices
+        .iter()
+        .enumerate()
+        .map(|(i, (title, desc))| {
+            let style = if i == app.wizard_target_selected % 2 {
+                theme::selected()
+            } else {
+                theme::normal()
+            };
+            ListItem::new(vec![
+                Line::from(Span::styled(format!("  {title}"), style)),
+                Line::from(Span::styled(format!("    {desc}"), theme::muted())),
+                Line::from(""),
+            ])
+        })
+        .collect();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::dim())
+        .title(format!(" Initial Model — engine: {} ", engine_hint))
+        .title_style(theme::heading());
+
+    let list = List::new(items).block(block);
+    f.render_widget(list, area);
+}
+
 fn render_confirm(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -271,10 +307,11 @@ fn render_confirm(f: &mut Frame, app: &App, area: Rect) {
 
 pub fn handle_key(app: &mut App, key: KeyEvent) {
     match app.wizard_step {
-        WizardStep::Target => handle_target(app, key),
-        WizardStep::Preset => handle_preset(app, key),
-        WizardStep::LlmBackend => handle_llm_backend(app, key),
-        WizardStep::Confirm => handle_confirm(app, key),
+        WizardStep::Target      => handle_target(app, key),
+        WizardStep::Preset      => handle_preset(app, key),
+        WizardStep::LlmBackend  => handle_llm_backend(app, key),
+        WizardStep::ModelSelect => handle_model_select(app, key),
+        WizardStep::Confirm     => handle_confirm(app, key),
     }
 }
 
@@ -342,7 +379,9 @@ fn handle_preset(app: &mut App, key: KeyEvent) {
                 app.wizard_backend_selected = 0;
                 app.wizard_step = WizardStep::LlmBackend;
             } else {
-                app.wizard_step = WizardStep::Confirm;
+                // Lite or Full: still offer model selection
+                app.wizard_target_selected = 0;
+                app.wizard_step = WizardStep::ModelSelect;
             }
         }
         _ => {}
@@ -366,7 +405,42 @@ fn handle_llm_backend(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::Enter => {
-            app.wizard_step = WizardStep::Confirm;
+            // Proceed to model selection step (wizard_target_selected reused as 0=Browse/1=Skip)
+            app.wizard_target_selected = 0;
+            app.wizard_step = WizardStep::ModelSelect;
+        }
+        _ => {}
+    }
+}
+
+fn handle_model_select(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => {
+            // Go back to whichever step led here
+            if app.wizard_preset_selected == 1 {
+                app.wizard_step = WizardStep::LlmBackend;
+            } else {
+                app.wizard_step = WizardStep::Preset;
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if app.wizard_target_selected > 0 {
+                app.wizard_target_selected -= 1;
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if app.wizard_target_selected < 1 {
+                app.wizard_target_selected += 1;
+            }
+        }
+        KeyCode::Enter => {
+            if app.wizard_target_selected == 0 {
+                // "Browse HuggingFace" — open model browser, return here after
+                open_model_browser_from_wizard(app);
+            } else {
+                // "Skip" — proceed to confirm
+                app.wizard_step = WizardStep::Confirm;
+            }
         }
         _ => {}
     }
@@ -375,11 +449,7 @@ fn handle_llm_backend(app: &mut App, key: KeyEvent) {
 fn handle_confirm(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
-            if app.wizard_preset_selected == 1 {
-                app.wizard_step = WizardStep::LlmBackend;
-            } else {
-                app.wizard_step = WizardStep::Preset;
-            }
+            app.wizard_step = WizardStep::ModelSelect;
         }
         KeyCode::Enter => {
             if create_profile_from_wizard(app) {
@@ -395,6 +465,59 @@ fn handle_confirm(app: &mut App, key: KeyEvent) {
 // ---------------------------------------------------------------------------
 // Helper logic
 // ---------------------------------------------------------------------------
+
+/// Determine which model format the wizard's selected backend uses.
+/// - mlx-lm  → "mlx"   (Apple Silicon, MLX format)
+/// - vllm-mlx → "mlx"  (vLLM on Apple Silicon, still uses MLX-quantized weights)
+/// - vllm     → "vllm"  (NVIDIA CUDA, GPTQ/AWQ/FP8/safetensors)
+/// - llama.cpp → "gguf" (CPU, GGUF format)
+/// - ollama   → "gguf"  (wraps GGUF models)
+pub fn engine_for_wizard(app: &App) -> &'static str {
+    if let Some(backend_id) = app.wizard_available_backends.get(app.wizard_backend_selected) {
+        return match backend_id.as_str() {
+            "mlx-lm" | "vllm-mlx" => "mlx",
+            "vllm"                 => "vllm",
+            "llama.cpp" | "ollama" => "gguf",
+            _                      => "mlx",
+        };
+    }
+    // Fall back to hardware detection when no backend was selected (Lite/Full presets)
+    app.local_hardware
+        .as_ref()
+        .map(|hw| match hw.llm_backend {
+            busibox_core::hardware::LlmBackend::Mlx  => "mlx",
+            busibox_core::hardware::LlmBackend::Vllm => "vllm",
+            _                                         => "gguf",
+        })
+        .unwrap_or("mlx")
+}
+
+/// Open the model browser pre-configured for the wizard's chosen backend,
+/// and mark that it should return to the install wizard when done.
+fn open_model_browser_from_wizard(app: &mut App) {
+    let engine = engine_for_wizard(app);
+
+    // Pre-select the engine index
+    let engine_idx = crate::screens::model_browse::ENGINES
+        .iter()
+        .position(|(id, _)| *id == engine)
+        .unwrap_or(0);
+
+    app.browse_step = BrowseStep::Token;
+    app.browse_family_selected = 0;
+    app.browse_engine_selected = engine_idx;
+    app.browse_model_selected = 0;
+    app.browse_model_scroll = 0;
+    app.browse_models.clear();
+    app.browse_loading = false;
+    app.browse_rx = None;
+    app.browse_return_to_wizard = true;
+    // Engine pre-selected from wizard. In Models step, incompatible models are dimmed.
+    // If the selected model is compatible, the Engine step is auto-skipped to Confirm.
+    // If not compatible, the lock is cleared and the user picks a compatible engine.
+    app.browse_engine_locked = true;
+    app.screen = Screen::ModelBrowse;
+}
 
 /// Populate `wizard_available_backends` based on detected local hardware.
 fn populate_available_backends(app: &mut App) {

@@ -182,6 +182,30 @@ pub const CATALOG: &[CatalogModel] = &[
     },
 
     // --- GGUF variants (llama.cpp, CPU/any) ---
+    // Qwen3.6 MoE — latest generation
+    CatalogModel {
+        family: "qwen",
+        hf_repo: "unsloth/Qwen3.6-35B-A3B-GGUF",
+        display_name: "Qwen3.6 35B-A3B MoE (GGUF Q4_K_M)",
+        param_billions: 35.0,
+        quantization: "GGUF Q4_K_M",
+        size_gb: 22.0,
+        engines: &["gguf"],
+        description: "Latest MoE flagship on CPU. 35B total / 3B active. Requires 32GB+ RAM.",
+        gated: false,
+    },
+    CatalogModel {
+        family: "qwen",
+        hf_repo: "unsloth/Qwen3.6-35B-A3B-UD-GGUF",
+        display_name: "Qwen3.6 35B-A3B MoE (GGUF UD-Q4_K_XL)",
+        param_billions: 35.0,
+        quantization: "GGUF UD-Q4_K_XL",
+        size_gb: 24.0,
+        engines: &["gguf"],
+        description: "Unsloth dynamic quant MoE — better quality than standard Q4_K_M. 32GB+.",
+        gated: false,
+    },
+    // Qwen3.5 — previous generation
     CatalogModel {
         family: "qwen",
         hf_repo: "Qwen/Qwen3.5-4B-GGUF",
@@ -472,6 +496,17 @@ pub fn all_models_for(family: &str, engine: &str) -> Vec<&'static CatalogModel> 
         .collect()
 }
 
+/// Return all catalog models for a given family regardless of engine.
+/// Deduplication by hf_repo is NOT performed here — callers may receive the same
+/// underlying model multiple times if it appears under different engines.
+/// Use this when rendering the combined model list before engine selection.
+pub fn all_for_family(family: &str) -> Vec<&'static CatalogModel> {
+    CATALOG
+        .iter()
+        .filter(|m| m.family == family)
+        .collect()
+}
+
 /// Return all unique family identifiers in the catalog.
 pub fn families() -> Vec<&'static str> {
     let mut seen = std::collections::HashSet::new();
@@ -485,4 +520,51 @@ pub fn families() -> Vec<&'static str> {
             }
         })
         .collect()
+}
+
+/// Extract a (major, minor) version tuple from a model display name for recency sorting.
+/// Examples: "Qwen3.6 35B" -> (3, 6), "Qwen3.5 4B" -> (3, 5), "Qwen3 4B" -> (3, 0),
+///           "DeepSeek-R1-0528 8B" -> (1, 528), "Gemma 3 4B" -> (3, 0).
+/// Returns (0, 0) when no version is detected.
+pub fn version_rank(display_name: &str) -> (u32, u32) {
+    // Pattern: look for one or more digits optionally followed by dot + digits.
+    // We scan for the first digit cluster that looks like a version.
+    let bytes = display_name.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            // Collect major number
+            let start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            let major: u32 = display_name[start..i].parse().unwrap_or(0);
+
+            // Check for dot + minor
+            let minor = if i < bytes.len() && bytes[i] == b'.' {
+                let dot_pos = i;
+                i += 1;
+                let minor_start = i;
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+                if i > minor_start {
+                    display_name[minor_start..i].parse().unwrap_or(0)
+                } else {
+                    i = dot_pos; // rewind past the dot
+                    0u32
+                }
+            } else {
+                0u32
+            };
+
+            // Only trust if major looks like a version (> 0)
+            if major > 0 {
+                return (major, minor);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    (0, 0)
 }

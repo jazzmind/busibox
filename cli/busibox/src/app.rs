@@ -42,20 +42,22 @@ pub enum SetupTarget {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum WizardStep {
     #[default]
-    Target,   // Step 1: local / remote / import
-    Preset,   // Step 2: lite / lite+local-llm / full
-    LlmBackend, // Step 2b: pick local LLM backend (conditional)
-    Confirm,  // Step 3: review + create profile
+    Target,      // Step 1: local / remote / import
+    Preset,      // Step 2: lite / lite+local-llm / full
+    LlmBackend,  // Step 2b: pick local LLM backend (conditional)
+    ModelSelect, // Step 2c: browse HuggingFace for an initial model (optional)
+    Confirm,     // Step 3: review + create profile
 }
 
 /// Steps within the HuggingFace model browser.
+/// Order: Token → Family → Models (all engines shown per row) → Engine (filtered) → Confirm
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum BrowseStep {
     #[default]
-    Token,    // Step 1: enter/confirm HF token (skipped when token already set)
+    Token,    // Step 1: enter/confirm HF token
     Family,   // Step 2: pick model family (qwen, deepseek, gemma, etc.)
-    Engine,   // Step 3: pick inference engine (auto-filtered by hardware)
-    Models,   // Step 4: pick model + quantization from list
+    Models,   // Step 3: pick model + quantization (engine tags shown per row)
+    Engine,   // Step 4: pick engine (filtered to those the selected model supports)
     Confirm,  // Step 5: confirm and trigger download
 }
 
@@ -74,6 +76,8 @@ pub struct BrowsableModel {
     pub curated: bool,
     /// Approximate HF download count (0 when unknown).
     pub downloads: u64,
+    /// Inference engines this variant is compatible with (e.g. ["mlx"], ["gguf"], ["mlx","gguf"]).
+    pub engines: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -339,6 +343,10 @@ pub struct App {
     pub browse_models: Vec<BrowsableModel>,
     pub browse_hf_token_input: String,
     pub browse_loading: bool,
+    /// When true, completing/escaping the browse screen returns to InstallWizard::Confirm.
+    pub browse_return_to_wizard: bool,
+    /// When true, the engine was pre-selected externally (wizard); skip the Engine step.
+    pub browse_engine_locked: bool,
     /// Receiver for background HF API results.
     pub browse_rx: Option<std::sync::mpsc::Receiver<crate::screens::model_browse::BrowseUpdate>>,
 
@@ -979,6 +987,8 @@ impl App {
             browse_models: Vec::new(),
             browse_hf_token_input: String::new(),
             browse_loading: false,
+            browse_return_to_wizard: false,
+            browse_engine_locked: false,
             browse_rx: None,
             profile_edit_field: 0,
             profile_edit_buffer: String::new(),

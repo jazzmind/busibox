@@ -1224,7 +1224,7 @@ fn handle_tier_key(app: &mut App, key: KeyEvent) {
             app.screen = Screen::Welcome;
         }
         KeyCode::Char('h') => {
-            // Open HuggingFace model browser
+            // Open HuggingFace model browser (standalone — user chooses engine themselves)
             app.browse_step = crate::app::BrowseStep::Token;
             app.browse_family_selected = 0;
             app.browse_engine_selected = 0;
@@ -1233,6 +1233,8 @@ fn handle_tier_key(app: &mut App, key: KeyEvent) {
             app.browse_models.clear();
             app.browse_loading = false;
             app.browse_rx = None;
+            app.browse_return_to_wizard = false;
+            app.browse_engine_locked = false;
             app.screen = Screen::ModelBrowse;
         }
         KeyCode::Up | KeyCode::Char('k') => {
