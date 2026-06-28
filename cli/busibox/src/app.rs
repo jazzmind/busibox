@@ -27,6 +27,7 @@ pub enum Screen {
     K8sSetup,
     K8sManage,
     ValidateSecrets,
+    RunTests,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -260,11 +261,16 @@ pub struct App {
     // Validate secrets screen state
     pub validate_secrets_results: Vec<crate::modules::remote::SecretKeyStatus>,
     pub validate_secrets_scroll: usize,
+    pub validate_secrets_selected: usize,
     pub validate_secrets_loading: bool,
     pub validate_secrets_rx: Option<mpsc::Receiver<ValidateSecretsUpdate>>,
     pub validate_secrets_vault_file: String,
     pub validate_secrets_is_remote: bool,
     pub validate_secrets_error: Option<String>,
+    /// Decrypted plaintext values keyed by key_path (e.g. "postgresql.password").
+    pub validate_secrets_values: std::collections::HashMap<String, String>,
+    /// Key path whose value is currently shown in the "View Secret" popup.
+    pub validate_secrets_show_secret: Option<String>,
 
     // Profile state
     pub profiles: Option<ProfilesFile>,
@@ -347,6 +353,27 @@ pub struct App {
     // Install submenu / contextual action state
     pub deployment_state: DeploymentState,
     pub action_menu_selected: usize,
+
+    // Run Tests screen state
+    pub test_service_selected: usize,
+    pub test_suite_selected: usize,
+    pub test_focus_suite: bool,
+    pub test_custom_args: String,
+    pub test_custom_input_active: bool,
+    pub test_log: Vec<String>,
+    pub test_log_visible: bool,
+    pub test_log_scroll: usize,
+    pub test_log_autoscroll: bool,
+    pub test_action_running: bool,
+    pub test_action_complete: bool,
+    pub test_tick: usize,
+    pub test_rx: Option<mpsc::Receiver<TestUpdate>>,
+    /// Last run config (for resume / restart from log viewer).
+    pub test_last_service_selected: usize,
+    pub test_last_suite_selected: usize,
+    pub test_last_custom_args: String,
+    /// True after a failed run; enables `r` to continue with pytest --stepwise.
+    pub test_can_resume: bool,
 
     // Admin login screen state
     pub admin_login_magic_link: Option<String>,
@@ -532,6 +559,12 @@ pub enum ManageUpdate {
     },
 }
 
+#[derive(Debug)]
+pub enum TestUpdate {
+    Log(String),
+    Complete { success: bool },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModelsFocus {
     Tiers,
@@ -617,6 +650,7 @@ pub enum K8sManageUpdate {
 pub enum ValidateSecretsUpdate {
     Results {
         keys: Vec<crate::modules::remote::SecretKeyStatus>,
+        values: std::collections::HashMap<String, String>,
         local_error: Option<String>,
         remote_error: Option<String>,
     },
@@ -693,6 +727,9 @@ pub struct ServiceStatus {
     pub source_repo: String,
     /// Secrets sync status: "checking...", "synced", "mismatch: VAR1, VAR2", "down", "error", or "—" (no secrets).
     pub secrets_status: String,
+    /// Accessible endpoint for this service, e.g. "localhost:4000" or "10.0.0.1:8010".
+    /// None for services without a host-side port (docker exec checks, etc.).
+    pub endpoint: Option<String>,
 }
 
 impl App {
@@ -856,11 +893,14 @@ impl App {
             k8s_cluster_rx: None,
             validate_secrets_results: Vec::new(),
             validate_secrets_scroll: 0,
+            validate_secrets_selected: 0,
             validate_secrets_loading: false,
             validate_secrets_rx: None,
             validate_secrets_vault_file: String::new(),
             validate_secrets_is_remote: false,
             validate_secrets_error: None,
+            validate_secrets_values: std::collections::HashMap::new(),
+            validate_secrets_show_secret: None,
             profiles: None,
             profile_selected: 0,
             profile_lock: None,
@@ -913,6 +953,23 @@ impl App {
             ssh_tunnel_process: None,
             ssh_tunnel_active: false,
             ssh_tunnel_child: None,
+            test_service_selected: 0,
+            test_suite_selected: 0,
+            test_focus_suite: false,
+            test_custom_args: String::new(),
+            test_custom_input_active: false,
+            test_log: Vec::new(),
+            test_log_visible: false,
+            test_log_scroll: 0,
+            test_log_autoscroll: true,
+            test_action_running: false,
+            test_action_complete: false,
+            test_tick: 0,
+            test_rx: None,
+            test_last_service_selected: 0,
+            test_last_suite_selected: 0,
+            test_last_custom_args: String::new(),
+            test_can_resume: false,
         }
     }
 
@@ -1073,6 +1130,16 @@ impl App {
 
         if self.vault_password.is_some() && !actions.is_empty() {
             actions.push("Validate Secrets");
+        }
+
+        // Show "Run Tests" whenever we have a vault password and a deployed environment
+        if self.vault_password.is_some() && !actions.is_empty() {
+            match &self.deployment_state {
+                DeploymentState::BootstrapComplete | DeploymentState::Complete => {
+                    actions.push("Run Tests");
+                }
+                _ => {}
+            }
         }
 
         if !actions.is_empty() && crate::modules::mkcert::is_installed() {

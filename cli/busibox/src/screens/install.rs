@@ -157,7 +157,7 @@ fn get_bootstrap_stages(app: &App) -> Vec<(&'static str, &'static str, Vec<Strin
     stages.push((
         "Portal",
         "Portal & Admin",
-        vec!["core-apps".into()],
+        vec!["proxy".into(), "core-apps".into()],
     ));
     stages.push(("Validation", "Verify env secrets", vec!["_validate_env".into()]));
 
@@ -1038,6 +1038,43 @@ pub fn auto_start(app: &mut App) {
     app.pending_vault_setup = true;
 }
 
+/// Resume a partially-complete install: initialise services from stages, mark those
+/// already healthy (from the welcome screen's health results) so the worker skips them,
+/// then start the install worker (or trigger vault setup if we don't have the password yet).
+pub fn auto_start_resume(app: &mut App) {
+    use crate::modules::health::HealthStatus;
+
+    // Reset install bookkeeping but build service list from stages.
+    init_install(app);
+
+    // Pre-mark services that the health checker already confirmed are running.
+    // Skip this entirely for clean installs — every stage must run from scratch.
+    if !app.clean_install {
+        let healthy_names: std::collections::HashSet<String> = app
+            .health_results
+            .iter()
+            .filter(|r| r.status == HealthStatus::Healthy)
+            .map(|r| r.name.clone())
+            .collect();
+
+        // These services always need to run during resume so that vault secrets (postgres
+        // password, config api credentials, etc.) are synced even when the service is healthy.
+        const ALWAYS_SYNC: &[&str] = &["postgres", "config"];
+
+        for svc in app.install_services.iter_mut() {
+            if healthy_names.contains(&svc.name) && !ALWAYS_SYNC.contains(&svc.name.as_str()) {
+                svc.status = InstallStatus::Healthy;
+            }
+        }
+    }
+
+    if app.vault_password.is_some() {
+        spawn_install_worker(app);
+    } else {
+        app.pending_vault_setup = true;
+    }
+}
+
 /// Public entry point to start the install worker after vault setup completes.
 pub fn spawn_install_worker_pub(app: &mut App) {
     spawn_install_worker(app);
@@ -1064,8 +1101,118 @@ fn init_install(app: &mut App) {
     }
 }
 
+/// Check if a TCP port is free by attempting to bind to it.
+fn is_port_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// Find the next free port starting from `preferred`, searching up to +99.
+fn find_available_port(preferred: u16) -> u16 {
+    (preferred..preferred.saturating_add(100))
+        .find(|&p| is_port_free(p))
+        .unwrap_or(preferred)
+}
+
+/// Detect port conflicts for local installs. For any service whose port is already
+/// in use by a non-Docker process, record an alternative port in profile.port_overrides
+/// and persist the profile. Returns a list of (service, original_port, new_port) for logging.
+fn detect_and_resolve_port_conflicts(app: &mut App) -> Vec<(String, u16, u16)> {
+    use crate::modules::health::{all_service_defs, CheckMethod};
+    use crate::modules::hardware::LlmBackend;
+
+    let is_mlx = app
+        .active_profile()
+        .and_then(|(_, p)| p.hardware.as_ref())
+        .map(|h| matches!(h.llm_backend, LlmBackend::Mlx))
+        .unwrap_or(false);
+
+    let active_id = match app.active_profile() {
+        Some((id, _)) => id.to_string(),
+        None => return vec![],
+    };
+
+    let defs = all_service_defs(is_mlx);
+    let mut overrides: Vec<(String, u16, u16)> = vec![];
+
+    for def in &defs {
+        let preferred = match def.check {
+            CheckMethod::Http { port, .. } => port,
+            _ => continue,
+        };
+
+        // If the port is free, no conflict.
+        if is_port_free(preferred) {
+            continue;
+        }
+
+        // Check if the holder is a Docker process (expected; don't override).
+        let holder_is_docker = std::process::Command::new("lsof")
+            .args(["-i", &format!(":{preferred}"), "-sTCP:LISTEN", "-t"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|pids| pids.trim().split('\n').next().map(|s| s.trim().to_string()))
+            .and_then(|pid| {
+                if pid.is_empty() { return None; }
+                std::process::Command::new("ps")
+                    .args(["-p", &pid, "-o", "comm="])
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|name| name.to_lowercase())
+                    .map(|name| {
+                        name.contains("docker")
+                            || name.contains("com.docker")
+                            || name.contains("vpnkit")
+                            || name.contains("hyperkit")
+                    })
+            })
+            .unwrap_or(false);
+
+        if holder_is_docker {
+            continue;
+        }
+
+        // Port is in use by a non-Docker process — find an alternative.
+        let alt = find_available_port(preferred + 1);
+        if alt != preferred {
+            overrides.push((def.name.to_string(), preferred, alt));
+        }
+    }
+
+    if overrides.is_empty() {
+        return vec![];
+    }
+
+    // Apply overrides to the profile and persist.
+    if let Some(profiles) = app.profiles.as_mut() {
+        if let Some(profile) = profiles.profiles.get_mut(&active_id) {
+            for (svc, _, alt) in &overrides {
+                profile.port_overrides.insert(svc.clone(), *alt);
+            }
+        }
+        let _ = busibox_core::profile::save_profiles(&app.repo_root, profiles);
+    }
+
+    overrides
+}
+
 fn spawn_install_worker(app: &mut App) {
     use crate::app::InstallUpdate;
+
+    // For local installs, detect port conflicts before capturing profile state.
+    let is_local_install = app.setup_target != SetupTarget::Remote;
+    if is_local_install {
+        let conflicts = detect_and_resolve_port_conflicts(app);
+        for (svc, orig, alt) in &conflicts {
+            app.install_log.push(format!(
+                "⚠ Port {orig} in use — {svc} will use port {alt} instead"
+            ));
+        }
+        if !conflicts.is_empty() {
+            app.install_log.push(String::new());
+        }
+    }
 
     let (tx, rx) = std::sync::mpsc::channel::<InstallUpdate>();
     app.install_rx = Some(rx);
@@ -1098,6 +1245,10 @@ fn spawn_install_worker(app: &mut App) {
         .active_profile()
         .map(|(_, p)| p.effective_docker_runtime().to_string())
         .unwrap_or_else(|| "auto".into());
+    let port_overrides: std::collections::HashMap<String, u16> = app
+        .active_profile()
+        .map(|(_, p)| p.port_overrides.clone())
+        .unwrap_or_default();
 
     let ssh_details: Option<(String, String, String)> = app.ssh_connection.as_ref().map(|ssh| {
         (ssh.host.clone(), ssh.user.clone(), ssh.key_path.clone())
@@ -3123,7 +3274,7 @@ echo "✓ User-specific values applied"
                         fi
                         # Check for non-Docker processes on ports we need
                         BLOCKED_PORTS=""
-                        for port in 5432 6379 9000 19530 8010 4111 8002 8001 3000; do
+                        for port in 5432 6379 9000 9001 19530 7474 8010 8000 8002 8003 8004 8005 8011 8012 8081 4000 8080 80 443 3000; do
                             # Use lsof to find listeners (works on macOS and Linux)
                             HOLDER=$(lsof -i ":$port" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)
                             if [ -n "$HOLDER" ]; then
@@ -3198,7 +3349,7 @@ echo "✓ User-specific values applied"
                             done
                         fi
                         # Check for port conflicts from other Docker containers
-                        for port in 5432 6379 9000 19530 8010 4111 8002 8001 3000; do
+                        for port in 5432 6379 9000 9001 19530 7474 8010 8000 8002 8003 8004 8005 8011 8012 8081 4000 8080 80 443 3000; do
                             HOLDER=$(docker ps --filter "publish=$port" --format '{{{{.Names}}}}' 2>/dev/null || true)
                             if [ -n "$HOLDER" ]; then
                                 if ! echo "$HOLDER" | grep -q "^${{PREFIX}}-"; then
@@ -3209,7 +3360,7 @@ echo "✓ User-specific values applied"
                         done
                         # Check for non-Docker processes on critical ports
                         BLOCKED_PORTS=""
-                        for port in 5432 6379 9000 19530 8010 4111 8002 8001 3000; do
+                        for port in 5432 6379 9000 9001 19530 7474 8010 8000 8002 8003 8004 8005 8011 8012 8081 4000 8080 80 443 3000; do
                             HOLDER=$(lsof -i ":$port" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)
                             if [ -n "$HOLDER" ]; then
                                 PNAME=$(ps -p "$HOLDER" -o comm= 2>/dev/null || echo "unknown")
@@ -3536,6 +3687,7 @@ echo "✓ User-specific values applied"
                         &repo_root,
                         &make_args,
                         vp,
+                        None,
                         on_line,
                     )
                 } else {
@@ -3717,6 +3869,27 @@ echo "✓ User-specific values applied"
             if service_list.contains("core-apps") {
                 ref_exports.push_str("ENABLED_APPS=all ");
             }
+            // Skip PVT integration tests during bootstrap — dependent services may not
+            // be fully configured until the install completes end-to-end.
+            if !is_update {
+                ref_exports.push_str("RUN_PVT_TESTS=false ");
+            }
+            // Pass port overrides so docker-compose uses alternative host ports
+            // when a standard port is occupied by another process.
+            for (svc, port) in &port_overrides {
+                let var = format!("{}_HOST_PORT", svc.to_uppercase().replace('-', "_"));
+                ref_exports.push_str(&format!("{var}={port} "));
+            }
+            // Ensure Ansible and Docker CLI subprocesses use the correct Docker context.
+            // Without this, when both Colima and Docker Desktop are installed, the wrong
+            // daemon may be targeted — containers start in one runtime but get health-checked
+            // or operated on in another.
+            if let Some(ctx) = crate::modules::health::resolve_docker_context_pub(
+                &profile_docker_runtime,
+                &container_prefix,
+            ) {
+                ref_exports.push_str(&format!("DOCKER_CONTEXT={ctx} "));
+            }
             let make_args = format!("{ref_exports}install SERVICE={service_list}");
 
             // Use streaming functions so each line appears in the log immediately
@@ -3753,6 +3926,7 @@ echo "✓ User-specific values applied"
                     &repo_root,
                     &make_args,
                     vp,
+                    None,
                     on_line,
                 )
             } else {

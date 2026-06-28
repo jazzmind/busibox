@@ -527,11 +527,12 @@ class TestBuildEnrichedSystemPrompt:
         # Q3+ should not appear (limit is [:3])
         assert "Q3" not in prompt
 
-    def test_empty_context_returns_base_only(self):
+    def test_empty_context_returns_base_with_datetime(self):
         agent = self._make_agent("Just the base.")
         context = AgentContext()
         prompt = agent._build_enriched_system_prompt(context)
-        assert prompt.strip() == "Just the base."
+        assert prompt.startswith("Just the base.")
+        assert "## Current Date and Time" in prompt
 
 
 # =============================================================================

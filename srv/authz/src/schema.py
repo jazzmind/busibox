@@ -416,6 +416,33 @@ def get_authz_schema() -> SchemaManager:
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_user_roles_role ON authz_user_roles(role_id)")
     
     # ==========================================================================
+    # User integrations (Google / Microsoft OAuth tokens for calendar + email)
+    # ==========================================================================
+
+    schema.add_migration("""
+        CREATE TABLE IF NOT EXISTS authz_user_integrations (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id uuid NOT NULL REFERENCES authz_users(user_id) ON DELETE CASCADE,
+            provider text NOT NULL,
+            access_token_encrypted bytea NULL,
+            refresh_token_encrypted bytea NULL,
+            token_expiry timestamptz NULL,
+            scopes text[] NOT NULL DEFAULT '{}',
+            email text NULL,
+            created_at timestamptz NOT NULL DEFAULT now(),
+            updated_at timestamptz NOT NULL DEFAULT now(),
+            UNIQUE(user_id, provider)
+        )
+    """)
+    schema.add_migration(
+        "CREATE INDEX IF NOT EXISTS idx_authz_user_integrations_user_id "
+        "ON authz_user_integrations(user_id)"
+    )
+    schema.add_migration(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON authz_user_integrations TO busibox_user"
+    )
+
+    # ==========================================================================
     # Grants
     # ==========================================================================
     

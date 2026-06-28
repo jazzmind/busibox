@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_principal
+from app.api.llm import _ensure_litellm_keys
 from app.db.session import SessionLocal, get_session
 from app.models.domain import AgentDefinition
 from app.schemas.auth import Principal
@@ -96,6 +97,10 @@ async def run_agent(
         HTTPException: 400 if validation fails, 404 if agent not found
     """
     try:
+        # Verify LiteLLM has cloud provider keys; restore from config-api if not.
+        # This is a no-op after the first successful check.
+        await _ensure_litellm_keys(principal)
+
         logger.info(
             f"Creating run for agent {payload.agent_id} by user {principal.sub}",
             extra={

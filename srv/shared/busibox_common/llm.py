@@ -90,6 +90,10 @@ class ModelRegistry:
                     registry_data = json.load(f)
                     available_models = registry_data.get("available_models", {})
                     purposes = registry_data.get("purposes", {})
+                    # Guard against old deployments where Ansible serialized
+                    # resolved_purposes as a JSON string instead of an object
+                    if isinstance(purposes, str):
+                        purposes = json.loads(purposes)
                     
                     # Resolve aliases: if a purpose value points to another
                     # purpose key rather than an available_model key, follow the chain.

@@ -11,7 +11,8 @@ Provides:
 """
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+import re
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect, status
@@ -262,6 +263,84 @@ def _get_litellm_headers() -> Dict[str, str]:
     if settings.litellm_api_key:
         headers["Authorization"] = f"Bearer {settings.litellm_api_key}"
     return headers
+
+
+async def _push_env_vars_to_litellm(env_vars: Dict[str, str]) -> bool:
+    """Push a dict of env vars to LiteLLM via /config/update.
+
+    Used by the restore path so LiteLLM can route to cloud providers after
+    a restart where its DB-stored credentials were lost or became undecryptable.
+    Returns True if the push succeeded.
+    """
+    if not env_vars:
+        return False
+    base_url = _get_litellm_base_url()
+    headers = _get_litellm_headers()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/config/update",
+                headers=headers,
+                json={"environment_variables": env_vars},
+            )
+            if resp.is_success:
+                logger.info(f"[RESTORE] Pushed {len(env_vars)} env vars to LiteLLM /config/update")
+                return True
+            logger.warning(f"[RESTORE] LiteLLM /config/update returned {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"[RESTORE] Failed to push env vars to LiteLLM: {e}")
+    return False
+
+
+# --------------------------------------------------------------------------
+# First-request LiteLLM key restore
+# --------------------------------------------------------------------------
+
+# Set to False on startup; True once we've verified LiteLLM has provider keys
+# or have attempted a restore on the first authenticated request.
+_litellm_keys_verified: bool = False
+
+
+async def _ensure_litellm_keys(principal: "Principal") -> None:
+    """Verify LiteLLM has cloud-provider env vars; restore from config-api if not.
+
+    Called early in LLM request handlers (agent run, chat, etc.).  After the
+    first successful check this becomes a no-op.  If LiteLLM has lost its
+    credentials (e.g. salt key mismatch after restart) we restore them using
+    the current user's Zero Trust token chain — no service-to-service secrets.
+    """
+    global _litellm_keys_verified
+    if _litellm_keys_verified:
+        return
+
+    # Check whether LiteLLM already has env vars set (fast DB/env path)
+    env_vars = await _get_configured_env_vars()
+    has_real_keys = any(_looks_like_real_key(v) for v in env_vars.values())
+    if has_real_keys:
+        _litellm_keys_verified = True
+        return
+
+    # LiteLLM has no usable keys — attempt restore from config-api
+    logger.info("[RESTORE] LiteLLM has no provider keys after restart; attempting restore from config-api")
+    config_token = await _get_config_api_token(principal)
+    if config_token:
+        keys = await _read_all_llm_keys_from_config_api(config_token)
+        if keys:
+            real_keys = {k: v for k, v in keys.items() if _looks_like_real_key(v)}
+            if real_keys:
+                import os as _os
+                for k, v in real_keys.items():
+                    _os.environ[k] = v
+                await _push_env_vars_to_litellm(real_keys)
+                logger.info(f"[RESTORE] Auto-restored {len(real_keys)} LLM keys from config-api to LiteLLM")
+            else:
+                logger.warning("[RESTORE] config-api returned llm-keys but none look like real keys")
+        else:
+            logger.warning("[RESTORE] No llm-keys found in config-api; provider credentials may need to be re-entered")
+    else:
+        logger.warning("[RESTORE] Could not obtain config-api token for key restore")
+
+    _litellm_keys_verified = True
 
 
 async def _ensure_media_server(server_name: str, principal: Principal, timeout: float = 120.0) -> None:
@@ -786,20 +865,26 @@ async def _get_api_key_for_provider(
                 ak = config_keys.get("AWS_ACCESS_KEY_ID", "")
                 sk = config_keys.get("AWS_SECRET_ACCESS_KEY", "")
                 if ak and sk and _looks_like_real_key(ak) and _looks_like_real_key(sk):
+                    restored = {"AWS_ACCESS_KEY_ID": ak, "AWS_SECRET_ACCESS_KEY": sk}
                     os.environ["AWS_ACCESS_KEY_ID"] = ak
                     os.environ["AWS_SECRET_ACCESS_KEY"] = sk
                     region = config_keys.get("AWS_REGION_NAME", "")
                     if region:
                         os.environ["AWS_REGION_NAME"] = region
+                        restored["AWS_REGION_NAME"] = region
                     logger.info("Restored Bedrock IAM credentials from config-api to os.environ")
+                    await _push_env_vars_to_litellm(restored)
                     return "iam-configured"
                 bt = config_keys.get("AWS_BEARER_TOKEN_BEDROCK", "")
                 if bt and _looks_like_real_key(bt):
+                    restored = {"AWS_BEARER_TOKEN_BEDROCK": bt}
                     os.environ["AWS_BEARER_TOKEN_BEDROCK"] = bt
                     region = config_keys.get("AWS_REGION_NAME", "")
                     if region:
                         os.environ["AWS_REGION_NAME"] = region
+                        restored["AWS_REGION_NAME"] = region
                     logger.info("Restored Bedrock bearer token from config-api to os.environ")
+                    await _push_env_vars_to_litellm(restored)
                     return "bearer-configured"
         # Strategy 3: LiteLLM config/DB
         env_vars = await _get_configured_env_vars()
@@ -839,6 +924,7 @@ async def _get_api_key_for_provider(
             if config_val and _looks_like_real_key(config_val):
                 os.environ[env_var] = config_val
                 logger.info(f"Restored {provider} API key from config-api to os.environ")
+                await _push_env_vars_to_litellm({env_var: config_val})
                 return config_val
     
     # Strategy 3: Query LiteLLM config/DB for stored env vars
@@ -1546,18 +1632,88 @@ def _strip_provider_prefix(model_id: str) -> str:
     return model_id
 
 
+def _looks_like_encrypted_blob(value: str) -> bool:
+    """Detect LiteLLM ciphertext when DB params cannot be decrypted."""
+    if not value:
+        return False
+    if value.startswith("encrypted:"):
+        return True
+    if len(value) < 40:
+        return False
+    # Real model IDs are usually short or contain structured punctuation.
+    if "/" in value or value.count(".") >= 2:
+        return False
+    return bool(re.fullmatch(r"[A-Za-z0-9_-]+=*", value))
+
+
+def _reverse_lookup_model_name(
+    model_id: str,
+    all_entries: List[Dict],
+    purpose_names: Set[str],
+    current_purpose: str,
+) -> str:
+    """Find a friendly model_name that shares the same underlying litellm model."""
+    if not model_id or _looks_like_encrypted_blob(model_id):
+        return ""
+
+    matches: List[str] = []
+    for entry in all_entries:
+        name = entry.get("model_name", "")
+        if not name or name == current_purpose:
+            continue
+        params = entry.get("litellm_params") or {}
+        actual = _strip_provider_prefix(params.get("model", "") or "")
+        if actual == model_id and not _looks_like_encrypted_blob(actual):
+            matches.append(name)
+
+    concrete = [n for n in matches if n not in purpose_names]
+    if concrete:
+        return concrete[0]
+    if matches:
+        return matches[0]
+    return model_id
+
+
+def _resolve_purpose_target_model_name(
+    purpose: str,
+    entry: Dict[str, Any],
+    all_entries: List[Dict[str, Any]],
+    purpose_names: Set[str],
+) -> str:
+    """Resolve a purpose entry to a human-readable backing model name."""
+    info = entry.get("model_info") or {}
+    backing = info.get("backing_model_name")
+    if backing:
+        return backing
+
+    params = entry.get("litellm_params") or {}
+    model_id = _strip_provider_prefix(params.get("model", "") or "")
+    if not model_id:
+        return ""
+
+    if _looks_like_encrypted_blob(model_id):
+        return ""
+
+    return _reverse_lookup_model_name(model_id, all_entries, purpose_names, purpose)
+
+
 def _build_purpose_map(model_entries: List[Dict]) -> Dict[str, str]:
     """
-    Build purpose -> underlying model description from model entries.
-    
+    Build purpose -> backing model_name for admin display.
+
     Accepts entries from either /model/info or /config/yaml model_list.
+    Returns friendly model names (e.g. qwen3.6-35b-a3b-vllm-fp8), not raw
+    litellm_params.model values which may be encrypted ciphertext.
     """
-    purpose_map = {}
+    purpose_names = set(CONFIGURABLE_PURPOSES)
+    purpose_map: Dict[str, str] = {}
     for entry in model_entries:
         name = entry.get("model_name", "")
-        params = entry.get("litellm_params") or {}
-        model_id = params.get("model", "")
-        purpose_map[name] = _strip_provider_prefix(model_id)
+        if not name:
+            continue
+        purpose_map[name] = _resolve_purpose_target_model_name(
+            name, entry, model_entries, purpose_names
+        )
     return purpose_map
 
 
@@ -1597,7 +1753,13 @@ def _merge_model_entries(model_info_entries: List[Dict], config_entries: List[Di
         if name in by_name:
             merged = by_name[name]
             merged_params = dict(merged.get("litellm_params", {}) or {})
-            merged_params.update(dict(entry.get("litellm_params", {}) or {}))
+            incoming_params = dict(entry.get("litellm_params", {}) or {})
+            for key, val in incoming_params.items():
+                if key == "model" and _looks_like_encrypted_blob(str(val or "")):
+                    existing = merged_params.get("model", "")
+                    if existing and not _looks_like_encrypted_blob(str(existing)):
+                        continue
+                merged_params[key] = val
             merged_info = dict(merged.get("model_info", {}) or {})
             merged_info.update(dict(entry.get("model_info", {}) or {}))
             merged["litellm_params"] = merged_params
@@ -1709,6 +1871,8 @@ async def chat_completion(
     Supports local MLX models (via purpose names like 'fast', 'agent', 'frontier')
     and cloud models (via provider-prefixed names like 'gpt-4.1', 'claude-sonnet-4').
     """
+    await _ensure_litellm_keys(principal)
+
     base_url = _get_litellm_base_url()
     headers = _get_litellm_headers()
     
@@ -2107,18 +2271,42 @@ async def save_provider_key(
     for env_key, env_val in env_vars_to_save.items():
         os.environ[env_key] = env_val
     
-    # Persist to config-api so keys survive restarts (best-effort, non-blocking)
-    config_token = await _get_config_api_token(principal)
-    if config_token:
-        for env_key, env_val in env_vars_to_save.items():
-            await _save_key_to_config_api(
-                env_key, env_val, config_token,
-                description=f"{provider.title()} credential: {env_key}",
-            )
-    else:
-        logger.warning(
-            f"[CONFIG-API] Could not exchange token for config-api; "
-            f"{provider} keys saved to LiteLLM only (will not survive LiteLLM reset)"
+    # Persist to config-api — this is the durable backup that survives LiteLLM
+    # restarts, salt key changes, and DB issues.  Retry up to 3 times so
+    # transient token-exchange or network errors don't silently leave us without
+    # a fallback copy.
+    config_api_saved = False
+    config_api_warning = None
+    for attempt in range(3):
+        try:
+            config_token = await _get_config_api_token(principal)
+            if config_token:
+                saved_count = 0
+                for env_key, env_val in env_vars_to_save.items():
+                    ok = await _save_key_to_config_api(
+                        env_key, env_val, config_token,
+                        description=f"{provider.title()} credential: {env_key}",
+                    )
+                    if ok:
+                        saved_count += 1
+                if saved_count == len(env_vars_to_save):
+                    config_api_saved = True
+                    logger.info(f"[CONFIG-API] Persisted {saved_count} {provider} key(s) to config-api (attempt {attempt + 1})")
+                    break
+                else:
+                    config_api_warning = f"Only {saved_count}/{len(env_vars_to_save)} keys saved to config-api"
+            else:
+                config_api_warning = "Token exchange for config-api failed"
+        except Exception as e:
+            config_api_warning = f"config-api save error: {e}"
+        if attempt < 2:
+            import asyncio as _asyncio
+            await _asyncio.sleep(1.0 * (attempt + 1))
+
+    if not config_api_saved:
+        logger.error(
+            f"[CONFIG-API] Failed to persist {provider} keys after 3 attempts: {config_api_warning}. "
+            f"Keys are in LiteLLM only and will NOT survive a LiteLLM restart with salt key change."
         )
     
     # Auto-register video purpose model when OpenAI key is saved
@@ -2150,11 +2338,18 @@ async def save_provider_key(
         except Exception as e:
             logger.warning(f"Failed to auto-register video model: {e}")
     
-    return {
+    result: Dict[str, Any] = {
         "success": True,
         "provider": provider,
-        "message": f"{provider.title()} credentials configured successfully"
+        "message": f"{provider.title()} credentials configured successfully",
+        "config_api_persisted": config_api_saved,
     }
+    if not config_api_saved:
+        result["warning"] = (
+            "Credentials saved to LiteLLM but could not be persisted to config-api. "
+            "They may not survive a LiteLLM restart. Please try saving again."
+        )
+    return result
 
 
 @router.post("/keys/clean-stale")
@@ -2204,6 +2399,43 @@ async def clean_stale_encrypted_data(
         "message": (
             "Stale encrypted data cleaned. Config-file models re-synced. "
             "Cloud provider API keys must be re-entered in Settings > AI Models."
+        ),
+    }
+
+
+@router.post("/keys/verify-restore")
+async def verify_and_restore_llm_keys(
+    principal: Principal = Depends(get_principal),
+) -> Dict[str, Any]:
+    """
+    Force a check of whether LiteLLM has provider keys and restore from
+    config-api if not.
+
+    Resets the in-memory verified flag so the next call to _ensure_litellm_keys
+    performs a fresh check even if a previous check already ran. Useful after a
+    LiteLLM restart, and also used by integration tests to simulate a post-restart
+    state without restarting agent-api.
+
+    Admin only.
+    """
+    global _litellm_keys_verified
+    _require_admin(principal)
+
+    _litellm_keys_verified = False
+    await _ensure_litellm_keys(principal)
+
+    # Report what keys are now visible
+    env_vars = await _get_configured_env_vars()
+    restored_keys = [k for k, v in env_vars.items() if _looks_like_real_key(v)]
+
+    return {
+        "success": True,
+        "keys_found": len(restored_keys),
+        "providers_detected": list({k.split("_")[0].lower() for k in restored_keys}),
+        "message": (
+            f"Restore check complete. {len(restored_keys)} key(s) now configured in LiteLLM."
+            if restored_keys
+            else "No provider keys found in config-api. Please re-enter credentials in Settings > AI Models."
         ),
     }
 
@@ -3247,7 +3479,20 @@ async def get_purpose_mappings(
                 db_litellm_model = row.get("litellm_model", "") or ""
                 actual_model = db_litellm_model or _infer_litellm_model(mname)
                 if mname in CONFIGURABLE_PURPOSES:
-                    purpose_map[mname] = _strip_provider_prefix(actual_model)
+                    resolved = _resolve_purpose_target_model_name(
+                        mname,
+                        {
+                            "model_name": mname,
+                            "litellm_params": {"model": actual_model},
+                            "model_info": {"db_model": True},
+                        },
+                        merged_entries,
+                        set(CONFIGURABLE_PURPOSES),
+                    )
+                    if resolved:
+                        purpose_map[mname] = resolved
+                    elif actual_model and not _looks_like_encrypted_blob(actual_model):
+                        purpose_map[mname] = _strip_provider_prefix(actual_model)
                 if mname not in seen_names:
                     available_models.append({
                         "model_name": mname,
@@ -3407,7 +3652,7 @@ async def update_purpose_mapping(
             if target_params.get("api_base"):
                 clean_params["api_base"] = target_params["api_base"]
             
-            clean_info: Dict[str, Any] = {}
+            clean_info: Dict[str, Any] = {"backing_model_name": request.model_name}
             if target_info and target_info.get("description"):
                 clean_info["description"] = target_info["description"]
             

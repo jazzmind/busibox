@@ -119,6 +119,21 @@ class ProgressivePipeline:
         self.config = config
         self.vision_extractor = vision_extractor
 
+    def _run_async(self, coro):
+        """
+        Run an async coroutine from a synchronous context.
+
+        Uses a fresh event loop each time to avoid the 'Event loop is closed'
+        error that occurs when the worker sets a now-closed loop as the current
+        one via asyncio.set_event_loop(). Never reuses asyncio.get_event_loop()
+        here because the worker may have closed it after token exchange.
+        """
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
     # =========================================================================
     # Pass 1: Fast Extract (pdfplumber)
     # =========================================================================
@@ -422,7 +437,7 @@ class ProgressivePipeline:
             )
 
             if "has_chart" in flags and self.vision_extractor:
-                result = asyncio.get_event_loop().run_until_complete(
+                result = self._run_async(
                     self.vision_extractor.analyse_page(
                         ctx.file_path, pt.page_number, mode="chart",
                         existing_text=pt.text,
@@ -434,7 +449,7 @@ class ProgressivePipeline:
                     vision_used += 1
 
             elif "garbled_table" in flags and self.vision_extractor:
-                result = asyncio.get_event_loop().run_until_complete(
+                result = self._run_async(
                     self.vision_extractor.analyse_page(
                         ctx.file_path, pt.page_number, mode="table",
                         existing_text=pt.text,
@@ -445,7 +460,7 @@ class ProgressivePipeline:
                     vision_used += 1
 
             elif "has_images" in flags and self.vision_extractor:
-                result = asyncio.get_event_loop().run_until_complete(
+                result = self._run_async(
                     self.vision_extractor.analyse_page(
                         ctx.file_path, pt.page_number, mode="describe",
                         existing_text=pt.text,
@@ -464,7 +479,7 @@ class ProgressivePipeline:
                 if self._is_meaningful_improvement(pt.text, ocr_text):
                     improved_text = ocr_text
                 elif self.vision_extractor:
-                    result = asyncio.get_event_loop().run_until_complete(
+                    result = self._run_async(
                         self.vision_extractor.analyse_page(
                             ctx.file_path, pt.page_number, mode="ocr",
                             existing_text=pt.text,
@@ -478,7 +493,7 @@ class ProgressivePipeline:
             if needs_description and not vision_desc and self.vision_extractor:
                 try:
                     desc_mode = "chart" if "has_chart" in flags else "describe"
-                    desc_result = asyncio.get_event_loop().run_until_complete(
+                    desc_result = self._run_async(
                         self.vision_extractor.analyse_page(
                             ctx.file_path, pt.page_number, mode=desc_mode,
                             existing_text=pt.text,

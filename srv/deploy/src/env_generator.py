@@ -49,7 +49,8 @@ def get_service_endpoints(environment: str = 'production') -> Dict[str, str]:
             'AGENT_API_URL': 'http://agent-api:8000',
             'DATA_API_URL': 'http://data-api:8002',
             'SEARCH_API_URL': 'http://search-api:8003',
-            
+            'BRIDGE_API_URL': 'http://bridge-api:8081',
+
             # Storage
             'MINIO_ENDPOINT': 'minio:9000',
             'REDIS_HOST': 'redis',
@@ -74,7 +75,8 @@ def get_service_endpoints(environment: str = 'production') -> Dict[str, str]:
             'AGENT_API_URL': 'http://agent-api:8000',
             'DATA_API_URL': 'http://data-api:8002',
             'SEARCH_API_URL': 'http://search-api:8003',
-            
+            'BRIDGE_API_URL': 'http://bridge-api:8081',
+
             # Storage
             'MINIO_ENDPOINT': 'minio:9000',
             'REDIS_HOST': 'redis',
@@ -153,6 +155,7 @@ def generate_env_vars(
         'AGENT_API_URL',
         'DATA_API_URL',
         'SEARCH_API_URL',
+        'BRIDGE_API_URL',
     ]
     
     for var in common_vars:

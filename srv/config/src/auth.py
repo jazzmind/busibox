@@ -113,6 +113,31 @@ def require_admin_or_scope(required_scope: str):
     return _dep
 
 
+# Categories whose raw values require config.secrets.read scope in addition to
+# the Admin role. This prevents admins from directly exfiltrating secrets like
+# LLM provider keys by calling /raw; only agent-api (which receives this scope
+# via the authz token exchange source-gate) can retrieve decrypted values.
+SENSITIVE_CATEGORIES: set[str] = {"llm-keys"}
+
+
+async def require_secrets_scope(
+    user: dict = Depends(require_admin),
+) -> dict:
+    """
+    Require Admin role AND config.secrets.read scope.
+
+    Used to gate /raw and /export endpoints for sensitive config categories so
+    that only callers who obtained their config-api token through agent-api can
+    retrieve decrypted secret values.
+    """
+    if "config.secrets.read" not in user.get("scopes", []):
+        raise HTTPException(
+            status_code=403,
+            detail="config.secrets.read scope required to access sensitive config values",
+        )
+    return user
+
+
 def require_app_access(app_id_param: str = "app_id"):
     """
     Factory that returns a dependency checking the caller has access to a specific app.

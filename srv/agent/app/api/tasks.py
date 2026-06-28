@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_principal
-from app.db.session import get_session
+from app.db.session import get_session, SessionLocal
 from app.models.domain import TaskExecution
 from app.schemas.auth import Principal
 from app.schemas.task import (
@@ -43,6 +43,36 @@ from app.services.task_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+
+def _hot_register_task(task, session_factory) -> None:
+    """
+    Immediately register or update a cron task with the APScheduler.
+
+    Called after creating, updating, or resuming a task so that the schedule
+    takes effect without requiring a service restart.
+    """
+    from app.services.scheduler import task_scheduler
+
+    try:
+        if task.trigger_type == "cron" and task.status == "active":
+            cron = (task.trigger_config or {}).get("cron")
+            if cron:
+                # Cancel any existing job for this task (handles updates)
+                task_scheduler.cancel_task(task.id)
+                task_scheduler.schedule_task(task.id, cron, session_factory)
+                logger.info(f"[hot-reg] Registered cron task {task.id} ({cron})")
+        elif task.trigger_type == "one_time" and task.status == "active":
+            run_at = (task.trigger_config or {}).get("run_at")
+            if run_at:
+                from datetime import datetime
+                if isinstance(run_at, str):
+                    run_at = datetime.fromisoformat(run_at)
+                task_scheduler.cancel_task(task.id)
+                task_scheduler.schedule_task_one_time(task.id, run_at, session_factory)
+                logger.info(f"[hot-reg] Registered one-time task {task.id} at {run_at}")
+    except Exception as e:
+        logger.warning(f"[hot-reg] Failed to hot-register task {task.id}: {e}")
 
 
 async def _save_task_insight(
@@ -307,6 +337,9 @@ async def create_agent_task(
             },
         )
         
+        # Hot-register: schedule immediately so the task fires without a restart
+        _hot_register_task(task, SessionLocal)
+        
         # Include webhook_secret on creation so client can store it
         return task_to_read(task, base_url, include_secret=True)
         
@@ -436,6 +469,9 @@ async def update_agent_task(
     
     logger.info(f"Updated task {task_id}")
     
+    # Hot-register updated schedule (handles cron expression changes)
+    _hot_register_task(task, SessionLocal)
+    
     base_url = _get_base_url(request)
     return task_to_read(task, base_url)
 
@@ -464,6 +500,13 @@ async def delete_agent_task(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task {task_id} not found",
         )
+    
+    # Cancel any scheduled job for this task
+    try:
+        from app.services.scheduler import task_scheduler
+        task_scheduler.cancel_task(task_id)
+    except Exception as e:
+        logger.warning(f"[hot-reg] Failed to cancel task {task_id}: {e}")
     
     logger.info(f"Deleted task {task_id}")
 
@@ -497,6 +540,13 @@ async def pause_agent_task(
             detail=f"Task {task_id} not found",
         )
     
+    # Remove from scheduler immediately
+    try:
+        from app.services.scheduler import task_scheduler
+        task_scheduler.cancel_task(task_id)
+    except Exception as e:
+        logger.warning(f"[hot-reg] Failed to cancel paused task {task_id}: {e}")
+    
     logger.info(f"Paused task {task_id}")
     
     base_url = _get_base_url(request)
@@ -529,6 +579,9 @@ async def resume_agent_task(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task {task_id} not found",
         )
+    
+    # Hot-register: reschedule the task immediately on resume
+    _hot_register_task(task, SessionLocal)
     
     logger.info(f"Resumed task {task_id}")
     
@@ -662,6 +715,9 @@ async def run_agent_task(
         "prompt": task.prompt,
         **(task.input_config or {}),
         **(input_data or {}),
+        "_task_id": str(task_id),
+        "_execution_id": str(execution.id),
+        "_continuation_depth": 0,  # initial manual run; incremented by trigger_task_run
     }
     
     # For workflows, also include 'query' mapped from 'prompt' for compatibility
@@ -857,76 +913,117 @@ async def run_agent_task(
                 message="Workflow execution started. Connect to SSE stream for live progress.",
             )
         else:
-            # Execute agent
-            run_record = await create_run(
-                session=session,
-                principal=principal,
+            # Execute agent asynchronously — pre-create the run record and return
+            # immediately so the caller (and UI) can track the run_id right away.
+            from app.services.run_service import create_run_background
+            
+            # Restore app_id so exchange_token passes resource_id to authz,
+            # which auto-grants the app:<name> role in the downstream data-api token.
+            # Without this, data-api RLS silently returns 0 rows for app-scoped docs.
+            task_app_id = (task.input_config or {}).get("__app_id__")
+            principal_for_run = Principal(
+                sub=task.user_id,
+                scopes=task.delegation_scopes or [],
+                token=task.delegation_token,
+                app_id=task_app_id,
+            )
+            
+            task_exec_id = execution.id
+            task_obj_id = task.id
+
+            async def _on_bg_complete(bg_run_id, bg_status, bg_summary):
+                from app.db.session import SessionLocal as _SL
+                from app.models.domain import TaskExecution as _TE, AgentTask as _AT
+                async with _SL() as cb_session:
+                    mapped_status = "completed" if bg_status in ("succeeded", "completed") else "failed"
+                    await update_task_execution(
+                        session=cb_session,
+                        execution_id=task_exec_id,
+                        run_id=bg_run_id,
+                        status=mapped_status,
+                        output_summary=bg_summary,
+                    )
+                    exec_result = await cb_session.execute(
+                        select(_TE).where(_TE.id == task_exec_id)
+                    )
+                    exec_obj = exec_result.scalar_one_or_none()
+                    if exec_obj:
+                        await update_task_after_execution(cb_session, task_obj_id, exec_obj, mapped_status == "completed")
+
+                    # --- Start pending continuations ---
+                    # If trigger_task_run queued a continuation during this run,
+                    # start it now that the current run has finished and all
+                    # records (last_checked, etc.) have been updated.
+                    if mapped_status == "completed":
+                        pending_cont_stmt = (
+                            select(_TE)
+                            .where(
+                                _TE.task_id == task_obj_id,
+                                _TE.trigger_source == "continuation",
+                                _TE.status == "pending",
+                            )
+                            .order_by(_TE.created_at.asc())
+                            .limit(1)
+                        )
+                        pending_result = await cb_session.execute(pending_cont_stmt)
+                        pending_exec = pending_result.scalar_one_or_none()
+                        if pending_exec:
+                            logger.info(
+                                "Starting pending continuation: exec_id=%s, task_id=%s",
+                                pending_exec.id, task_obj_id,
+                            )
+                            # Load the task for execution
+                            task_result = await cb_session.execute(
+                                select(_AT).where(_AT.id == task_obj_id)
+                            )
+                            cont_task = task_result.scalar_one_or_none()
+                            if cont_task:
+                                from app.api.webhooks import _execute_task_in_background
+                                import asyncio
+                                # #region agent log
+                                import time as _t3
+                                try:
+                                    import aiohttp as _ah3
+                                    async def _dbg3():
+                                        async with _ah3.ClientSession() as _s3:
+                                            await _s3.post('http://127.0.0.1:7251/ingest/606d8d55-f269-4a7e-9f32-b5c818b6655a', json={'sessionId':'fce93e','location':'tasks.py:_on_bg_complete','message':'chaining_first_continuation','data':{'task_id':str(task_obj_id),'next_exec_id':str(pending_exec.id),'next_depth':pending_exec.input_data.get('_continuation_depth') if pending_exec.input_data else None},'timestamp':int(_t3.time()*1000),'hypothesisId':'H1'}, headers={'X-Debug-Session-Id':'fce93e'})
+                                    asyncio.create_task(_dbg3())
+                                except Exception:
+                                    pass
+                                # #endregion agent log
+                                asyncio.create_task(
+                                    _execute_task_in_background(
+                                        task=cont_task,
+                                        execution_id=pending_exec.id,
+                                        input_data=pending_exec.input_data,
+                                    )
+                                )
+
+            run_record = await create_run_background(
+                principal=principal_for_run,
                 agent_id=task.agent_id,
                 payload=payload,
                 scopes=task.delegation_scopes or [],
                 purpose="task-manual-execution",
-                agent_tier="complex",  # Tasks use complex tier (10 min timeout) for LLM processing
+                agent_tier="complex",
+                on_complete=_on_bg_complete,
             )
             
-            # Update execution with run result
-            output_summary = None
-            if run_record.output:
-                if isinstance(run_record.output, dict):
-                    output_summary = run_record.output.get("summary") or str(run_record.output)[:500]
-                else:
-                    output_summary = str(run_record.output)[:500]
-            
-            success = run_record.status in ("completed", "succeeded")
-            
+            # Link the pre-created run to the execution record immediately
             await update_task_execution(
                 session=session,
                 execution_id=execution.id,
                 run_id=run_record.id,
-                status=run_record.status,
-                output_summary=output_summary,
-                error=run_record.output.get("error") if isinstance(run_record.output, dict) and not success else None,
+                status="running",
             )
             
-            await update_task_after_execution(
-                session=session,
-                task_id=task_id,
-                execution=execution,
-                success=success,
-            )
-            
-            # Send notification for agent execution
-            await _send_task_notification(
-                session=session,
-                task=task,
-                execution=execution,
-                success=success,
-                output_summary=output_summary,
-            )
-            
-            # Save insight from execution output (for duplicate detection)
-            if success and output_summary:
-                await _save_task_insight(
-                    task=task,
-                    execution=execution,
-                    output_summary=output_summary,
-                    authorization=principal.token,  # Use the caller's token for fresh auth
-                )
-            
-            # Save output to library if configured
-            await _save_task_output_to_library(
-                task=task,
-                execution=execution,
-                output_summary=output_summary,
-                success=success,
-                authorization=principal.token,  # Use the caller's token for fresh auth
-            )
-
+            # Return immediately — agent executes in background
             return TaskRunResponse(
                 execution_id=execution.id,
                 task_id=task_id,
                 run_id=run_record.id,
-                status=run_record.status,
-                message=f"Task execution {run_record.status}",
+                status="running",
+                message="Task started in background. Track progress via run_id.",
             )
         
     except Exception as e:

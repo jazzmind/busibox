@@ -122,6 +122,7 @@ fn main() -> Result<()> {
         dev_apps_dir: None,
         huggingface_token: None,
         direct_access: None,
+        port_overrides: Default::default(),
     };
 
     profile::upsert_profile(&repo_root, PROFILE_ID, prof.clone(), true)?;

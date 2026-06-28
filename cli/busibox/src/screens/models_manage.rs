@@ -2519,7 +2519,7 @@ fn run_make_step(
         }
     } else {
         let result = if let Some(pw) = vault_password {
-            remote::run_local_make_quiet_with_vault_streaming(repo_root, make_args, pw, on_line)
+            remote::run_local_make_quiet_with_vault_streaming(repo_root, make_args, pw, None, on_line)
         } else {
             remote::run_local_make_quiet_streaming(repo_root, make_args, on_line)
         };

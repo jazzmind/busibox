@@ -109,6 +109,34 @@ class Config:
         self.microsoft_tenant_id: Optional[str] = os.getenv("MICROSOFT_TENANT_ID")
         self.microsoft_enabled: bool = bool(self.microsoft_client_id and self.microsoft_tenant_id)
 
+        # ---- Google OAuth integration (calendar + gmail read-only) ----
+        # A separate OAuth2 client (not the login client) scoped to calendar + gmail.
+        # Use GOOGLE_INTEGRATION_* env vars to avoid colliding with IdP login keys.
+        self.google_integration_client_id: Optional[str] = os.getenv("GOOGLE_INTEGRATION_CLIENT_ID")
+        self.google_integration_client_secret: Optional[str] = os.getenv("GOOGLE_INTEGRATION_CLIENT_SECRET")
+        self.google_integration_enabled: bool = bool(self.google_integration_client_id and self.google_integration_client_secret)
+
+        # ---- Microsoft Integration (calendar + mail read-only) ----
+        # Uses the same Entra ID app as login but with additional scopes.
+        # Separate client credentials can be set via MICROSOFT_INTEGRATION_* vars.
+        self.microsoft_integration_client_id: Optional[str] = (
+            os.getenv("MICROSOFT_INTEGRATION_CLIENT_ID") or self.microsoft_client_id
+        )
+        self.microsoft_integration_client_secret: Optional[str] = (
+            os.getenv("MICROSOFT_INTEGRATION_CLIENT_SECRET") or self.microsoft_client_secret
+        )
+        self.microsoft_integration_tenant_id: Optional[str] = (
+            os.getenv("MICROSOFT_INTEGRATION_TENANT_ID") or self.microsoft_tenant_id or "common"
+        )
+        self.microsoft_integration_enabled: bool = bool(
+            self.microsoft_integration_client_id and self.microsoft_integration_client_secret
+        )
+
+        # OAuth redirect base URL (authz public URL for OAuth callbacks)
+        self.authz_base_url: str = os.getenv("AUTHZ_BASE_URL", "http://localhost:8010")
+        # Portal URL for post-OAuth redirect
+        self.portal_base_url: str = os.getenv("PORTAL_BASE_URL", os.getenv("APP_URL", "http://localhost:3000/portal"))
+
     def to_dict(self) -> Dict:
         return {
             "postgres_host": self.postgres_host,

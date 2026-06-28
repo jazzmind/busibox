@@ -51,14 +51,21 @@ def _invalidate_key_object_cache() -> None:
     _key_object_cache.clear()
 
 
-async def _get_signing_key_objects(db) -> Tuple[str, str, object, object]:
-    """Get active signing key metadata and crypto objects with TTL caching."""
+async def _get_signing_key_objects(db=None) -> Tuple[str, str, object, object]:
+    """Get active signing key metadata and crypto objects with TTL caching.
+
+    All tokens (access, session, delegation) are always signed with the production
+    DB key (_pg), regardless of test mode. This function therefore always reads from
+    _pg so that the shared cache cannot be poisoned by test-mode callers that pass
+    the test DB.  The ``db`` parameter is retained for call-site compatibility but
+    is intentionally ignored.
+    """
     cache_key = "active_signing_key_objects"
     cached = _key_object_cache.get(cache_key)
     if cached is not None:
         return cached
 
-    row = await db.get_active_signing_key()
+    row = await _pg.get_active_signing_key()
     if not row:
         raise RuntimeError("no active signing key configured")
 
@@ -464,16 +471,13 @@ async def _ensure_bootstrap(force: bool = False) -> None:
     # 4) bootstrap essential roles
     await _ensure_bootstrap_roles()
     
-    # 5) bootstrap test user (for PVT tests in Zero Trust architecture)
-    await _ensure_bootstrap_test_user()
-    
-    # 6) bootstrap admin users from ADMIN_EMAILS config
+    # 5) bootstrap admin users from ADMIN_EMAILS config
     await _ensure_bootstrap_admin_users()
 
-    # 7) ensure Admin and User roles have bindings to core built-in apps
+    # 6) ensure Admin and User roles have bindings to core built-in apps
     await _ensure_bootstrap_core_app_bindings()
 
-    # 8) ensure test database has a signing key in test mode
+    # 7) ensure test database has a signing key in test mode
     if _pg_test:
         test_active_key = await _pg_test.get_active_signing_key()
         if not test_active_key:
@@ -497,11 +501,18 @@ async def _ensure_bootstrap(force: bool = False) -> None:
     logger.info("Bootstrap complete")
 
 
-async def _verify_subject_token(subject_token: str, request: Request = None) -> Tuple[str, str, str]:
+# Scopes injected into config-api tokens when the exchange comes from agent-api.
+# Grants access to sensitive config categories (e.g. llm-keys) that regular
+# admin users cannot read directly. Only agent-api holds tokens with aud=agent-api,
+# so this scope is never granted to user-held config-api tokens.
+_AGENT_API_CONFIG_EXTRA_SCOPES = {"config.secrets.read"}
+
+
+async def _verify_subject_token(subject_token: str, request: Request = None) -> Tuple[str, str, str, str]:
     """
     Verify a subject_token JWT signed by authz.
     
-    Returns (user_id, email, jti) if valid.
+    Returns (user_id, email, jti, subject_aud) if valid.
     Raises HTTPException if invalid.
     
     Args:
@@ -613,7 +624,7 @@ async def _verify_subject_token(subject_token: str, request: Request = None) -> 
             app_id=claims.get("app_id"),
         )
         
-        return user_id, email, jti
+        return user_id, email, jti, token_audience or ""
         
     except jwt.ExpiredSignatureError:
         raise HTTPException(
@@ -712,7 +723,7 @@ async def token(request: Request):
             # No client credentials required - the JWT signature proves identity
             logger.info("Token exchange with subject_token (Zero Trust mode)")
             
-            user_id, email, jti = await _verify_subject_token(token_req.subject_token, request)
+            user_id, email, jti, subject_aud = await _verify_subject_token(token_req.subject_token, request)
             purpose = f"subject_token:{jti[:8]}"
         else:
             raise HTTPException(
@@ -782,11 +793,17 @@ async def token(request: Request):
             # User's roles that are also bound to this app
             user_app_roles = [r for r in roles if r["id"] in app_role_binding_ids]
 
-            # Auto-granted: app-bound roles the user does NOT directly hold
+            # Auto-granted: ONLY data-partition roles (name starts with "app:")
+            # that the user does not directly hold.  Real access roles
+            # (Admin, Power-User, named teams) must never be auto-granted —
+            # they control menu visibility, Admin Dashboard links, and RLS
+            # bypass policies, so fabricating them for every app user is a
+            # privilege-escalation bug.
             auto_granted = [
                 {"id": b["id"], "name": b["name"], "scopes": b.get("scopes")}
                 for b in app_role_bindings
                 if b["id"] not in user_role_ids
+                and str(b.get("name", "")).startswith("app:")
             ]
 
             app_roles = user_app_roles + auto_granted
@@ -818,6 +835,23 @@ async def token(request: Request):
         for r in roles:
             role_scopes = r.get("scopes") or []
             all_scopes.update(role_scopes)
+
+        # Source-gate: inject config.secrets.read when agent-api exchanges for
+        # config-api. The subject_token was issued to agent-api (aud=agent-api),
+        # meaning the request originated inside the agent-api service on behalf
+        # of a user. A user directly exchanging their own session/access token
+        # would have a different subject audience, so they never get this scope.
+        if (
+            token_req.audience == "config-api"
+            and subject_aud == "agent-api"
+        ):
+            all_scopes.update(_AGENT_API_CONFIG_EXTRA_SCOPES)
+            logger.info(
+                "Injected config.secrets.read scope for agent-api -> config-api exchange",
+                user_id=user_id,
+                subject_aud=subject_aud,
+            )
+
         aggregated_scope = " ".join(sorted(all_scopes))
 
         now = int(time.time())
@@ -922,7 +956,7 @@ async def create_delegation_token(request: Request):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     
     # Verify the session JWT
-    user_id, email, session_jti = await _verify_subject_token(req.subject_token, request)
+    user_id, email, session_jti, _ = await _verify_subject_token(req.subject_token, request)
     
     # Get user's roles to validate requested scopes
     db = _get_pg(request)
@@ -1024,7 +1058,7 @@ async def list_delegation_tokens(request: Request):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="bearer_token_required")
     
     subject_token = auth_header[7:]
-    user_id, email, session_jti = await _verify_subject_token(subject_token, request)
+    user_id, email, session_jti, _ = await _verify_subject_token(subject_token, request)
     
     db = _get_pg(request)
     delegations = await db.list_user_delegation_tokens(user_id)
@@ -1060,7 +1094,7 @@ async def revoke_delegation_token(request: Request, jti: str):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="bearer_token_required")
     
     subject_token = auth_header[7:]
-    user_id, email, session_jti = await _verify_subject_token(subject_token, request)
+    user_id, email, session_jti, _ = await _verify_subject_token(subject_token, request)
     
     db = _get_pg(request)
     

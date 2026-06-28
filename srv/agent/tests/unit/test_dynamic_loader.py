@@ -150,10 +150,10 @@ async def test_load_active_agents_with_agents(test_session: AsyncSession):
     assert agent2.id in agents
     assert agent3.id not in agents  # Inactive agent should not be loaded
     
-    # Verify agents are Pydantic AI Agent instances
-    from pydantic_ai import Agent
-    assert isinstance(agents[agent1.id], Agent)
-    assert isinstance(agents[agent2.id], Agent)
+    # Verify agents are BaseStreamingAgent instances
+    from app.agents.base_agent import BaseStreamingAgent
+    assert isinstance(agents[agent1.id], BaseStreamingAgent)
+    assert isinstance(agents[agent2.id], BaseStreamingAgent)
 
 
 @pytest.mark.asyncio
@@ -175,9 +175,9 @@ async def test_register_agent_success(test_session: AsyncSession):
     # Verify agent_id is UUID
     assert isinstance(agent_id, uuid.UUID)
     
-    # Verify agent is Pydantic AI Agent
-    from pydantic_ai import Agent
-    assert isinstance(agent, Agent)
+    # Verify agent is BaseStreamingAgent
+    from app.agents.base_agent import BaseStreamingAgent
+    assert isinstance(agent, BaseStreamingAgent)
     
     # Verify definition persisted
     definition = await test_session.get(AgentDefinition, agent_id)
@@ -224,8 +224,8 @@ async def test_register_agent_no_tools(test_session: AsyncSession):
     agent_id, agent = await register_agent(test_session, payload)
     
     assert isinstance(agent_id, uuid.UUID)
-    from pydantic_ai import Agent
-    assert isinstance(agent, Agent)
+    from app.agents.base_agent import BaseStreamingAgent
+    assert isinstance(agent, BaseStreamingAgent)
 
 
 @pytest.mark.asyncio
@@ -250,8 +250,8 @@ async def test_load_active_agents_skips_invalid_tools(test_session: AsyncSession
     # Verify our agent is in the loaded agents (there may be others from previous tests)
     assert agent.id in agents
     # Agent should have search tool but not the invalid one
-    from pydantic_ai import Agent
-    assert isinstance(agents[agent.id], Agent)
+    from app.agents.base_agent import BaseStreamingAgent
+    assert isinstance(agents[agent.id], BaseStreamingAgent)
 
 
 

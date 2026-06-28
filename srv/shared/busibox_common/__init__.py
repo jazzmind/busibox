@@ -53,6 +53,8 @@ try:
         TestModeConfig,
         DatabaseRouter,
         is_test_mode_request,
+        authz_test_mode_enabled,
+        authz_request_headers,
         init_database_router,
         get_database,
         get_router,
@@ -88,6 +90,8 @@ except ImportError:
     TestModeConfig = None
     DatabaseRouter = None
     is_test_mode_request = None
+    authz_test_mode_enabled = None
+    authz_request_headers = None
     init_database_router = None
     get_database = None
     get_router = None
@@ -139,6 +143,8 @@ __all__ = [
     "TestModeConfig",
     "DatabaseRouter",
     "is_test_mode_request",
+    "authz_test_mode_enabled",
+    "authz_request_headers",
     "init_database_router",
     "get_database",
     "get_router",

@@ -108,6 +108,10 @@ pub struct Profile {
     ///   Some(false) = always use SSH tunnel (localhost:4443)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direct_access: Option<bool>,
+    /// Host port overrides for services that conflict with existing listeners.
+    /// Maps service name (e.g. "litellm") to the alternative host port.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub port_overrides: HashMap<String, u16>,
 }
 
 impl Profile {

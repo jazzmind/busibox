@@ -877,6 +877,64 @@ async def get_app_path(app_id: str) -> str:
     return f"/srv/apps/{app_id}"
 
 
+async def read_manifest_from_repo(
+    app_path: str,
+    current_manifest: BusiboxManifest,
+    logs: List[str],
+) -> BusiboxManifest:
+    """Read busibox.json from the cloned/dev app directory and return a refreshed manifest.
+
+    Overlays any fields present in the on-disk busibox.json on top of the manifest
+    sent in the deploy request.  This ensures that changes committed to the repo
+    (e.g. a new defaultPort or updated startCommand) are picked up at deploy time
+    without requiring an operator to manually update the portal config.
+
+    If busibox.json is missing or unparseable the original manifest is returned
+    unchanged so the deployment is not blocked.
+    """
+    stdout, _, code = await execute_in_container(
+        f"cat {app_path}/busibox.json 2>/dev/null"
+    )
+    if code != 0 or not stdout.strip():
+        logs.append("ℹ️ No busibox.json found in repo — using manifest from deploy request")
+        return current_manifest
+
+    try:
+        raw = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        logs.append(f"⚠️ Could not parse busibox.json: {exc} — using deploy-request manifest")
+        logger.warning("Failed to parse busibox.json at %s: %s", app_path, exc)
+        return current_manifest
+
+    try:
+        # Start from the current manifest dict, then overlay repo values.
+        # This means the repo busibox.json wins for any fields it declares.
+        current_dict = current_manifest.model_dump()
+        current_dict.update({k: v for k, v in raw.items() if v is not None})
+        updated = BusiboxManifest.model_validate(current_dict)
+    except Exception as exc:
+        logs.append(f"⚠️ busibox.json failed validation: {exc} — using deploy-request manifest")
+        logger.warning("busibox.json validation error at %s: %s", app_path, exc)
+        return current_manifest
+
+    changed_fields = []
+    if updated.defaultPort != current_manifest.defaultPort:
+        changed_fields.append(f"defaultPort: {current_manifest.defaultPort} → {updated.defaultPort}")
+    if updated.startCommand != current_manifest.startCommand:
+        changed_fields.append(f"startCommand: {current_manifest.startCommand!r} → {updated.startCommand!r}")
+    if updated.buildCommand != current_manifest.buildCommand:
+        changed_fields.append(f"buildCommand: {current_manifest.buildCommand!r} → {updated.buildCommand!r}")
+    if updated.healthEndpoint != current_manifest.healthEndpoint:
+        changed_fields.append(f"healthEndpoint: {current_manifest.healthEndpoint!r} → {updated.healthEndpoint!r}")
+
+    if changed_fields:
+        logs.append(f"📋 Manifest refreshed from busibox.json — updated: {', '.join(changed_fields)}")
+    else:
+        logs.append("📋 Manifest confirmed from busibox.json — no changes")
+
+    return updated
+
+
 async def clone_or_update_repo(
     manifest: BusiboxManifest,
     deploy_config: DeploymentConfig,
@@ -1311,6 +1369,13 @@ RestartSec=10
 StartLimitIntervalSec=60
 StartLimitBurst=3
 
+# Stop configuration — short timeout + kill whole process group so port is
+# released promptly and the next restart doesn't get EADDRINUSE.
+TimeoutStopSec=10
+KillMode=control-group
+KillSignal=SIGTERM
+FinalKillSignal=SIGKILL
+
 # Logging
 StandardOutput=journal
 StandardError=journal
@@ -1479,18 +1544,37 @@ rm -f /tmp/{app_id}.pid 2>/dev/null || true
             return True
     else:
         # LXC: Use systemd
-        command = f"""
-systemctl daemon-reload && \
-systemctl enable {app_id}.service && \
-systemctl restart {app_id}.service
+        # First reload the daemon so the service file changes are picked up,
+        # then stop any existing instance (SIGTERM → SIGKILL via TimeoutStopSec),
+        # kill any lingering process on the port (handles crash-loop orphans), and
+        # finally start the service cleanly.
+        port = env_vars.get("PORT", "") if env_vars else ""
+        port_kill_cmd = ""
+        if port:
+            port_kill_cmd = f"""
+# Kill any process still holding the port (e.g. crash-loop orphan)
+PORT_PIDS=$(ss -tlnp "sport = :{port}" 2>/dev/null | grep -oP 'pid=\\K[0-9]+' | sort -u)
+if [ -n "$PORT_PIDS" ]; then
+    echo "Killing processes on port {port}: $PORT_PIDS"
+    echo "$PORT_PIDS" | xargs kill -9 2>/dev/null || true
+    sleep 1
+fi
 """
-        
+
+        command = f"""
+systemctl daemon-reload && \\
+systemctl stop {app_id}.service 2>/dev/null || true
+{port_kill_cmd}
+systemctl enable {app_id}.service && \\
+systemctl start {app_id}.service
+"""
+
         stdout, stderr, code = await execute_in_container(command)
-        
+
         if code != 0:
             logs.append(f"❌ Failed to start service: {stderr}")
             return False
-        
+
         logs.append(f"✅ Application started (systemctl status {app_id})")
         return True
 
@@ -1866,6 +1950,28 @@ async def deploy_app(
     success, app_path = await clone_or_update_repo(manifest, deploy_config, logs)
     if not success:
         return False, assigned_port
+
+    # Step 1.1: Re-read busibox.json from the repo to pick up any manifest changes
+    # (e.g. defaultPort, startCommand) that were committed since the last deploy.
+    manifest = await read_manifest_from_repo(app_path, manifest, logs)
+
+    # If the manifest port changed we need to re-run port allocation with the
+    # updated preference.  Release the old assignment first so the previous port
+    # is freed for other apps, then allocate the new one.
+    if manifest.defaultPort is not None and manifest.defaultPort != assigned_port:
+        old_port = assigned_port
+        logs.append(
+            f"🔌 Manifest port ({manifest.defaultPort}) differs from allocated port "
+            f"({old_port}) — re-allocating"
+        )
+        # Stop old instance on the old port (belt-and-suspenders)
+        await stop_app(manifest.id, logs, port=old_port)
+        release_port(manifest.id)
+        try:
+            assigned_port = allocate_port(manifest.id, manifest.defaultPort, logs)
+        except RuntimeError as e:
+            logs.append(f"❌ {e}")
+            return False, None
 
     # Portal URL for auth redirects (used both at build-time and runtime)
     portal_url = os.environ.get("NEXT_PUBLIC_BUSIBOX_PORTAL_URL", "")

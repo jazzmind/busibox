@@ -445,67 +445,161 @@ async def _execute_task_in_background(
     execution_id: uuid.UUID,
     input_data: Dict[str, Any],
 ) -> None:
-    """Execute a task's agent in the background after webhook trigger."""
+    """Execute a task's agent in the background after webhook/continuation trigger.
+
+    Uses create_run_background so that the on_complete callback can detect and
+    start any pending continuation queued by trigger_task_run during this run.
+    This is what allows the depth-1, depth-2, ... chain to keep flowing —
+    without it, each continuation finishes but never kicks off the next one.
+    """
     try:
         from app.db.session import SessionLocal
-        from app.services.run_service import create_run
+        from app.models.domain import TaskExecution, AgentTask
+        from app.services.run_service import create_run_background
+        from app.services.task_service import update_task_execution, update_task_after_execution
         from app.schemas.auth import Principal
-        
+        from sqlalchemy import select, update as sql_update
+
         if not task.agent_id:
             logger.warning(f"Task {task.id} has no agent_id, skipping execution")
             return
-        
-        # Create a principal from the task's user_id
+
+        # Restore app_id so exchange_token passes resource_id to authz,
+        # auto-granting the app:<name> role in the downstream data-api token.
+        task_app_id = (task.input_config or {}).get("__app_id__")
         principal = Principal(
             sub=task.user_id,
             scopes=task.delegation_scopes or ["agent.execute"],
             token=task.delegation_token or "",
+            app_id=task_app_id,
         )
-        
-        async with SessionLocal() as session:
-            run = await create_run(
-                session=session,
-                principal=principal,
-                agent_id=task.agent_id,
-                payload={"prompt": input_data.get("prompt", task.prompt), **input_data},
-                scopes=task.delegation_scopes or ["agent.execute", "data.write", "data.read", "search.read"],
-                purpose="webhook-task",
-                agent_tier="complex",
-            )
-            
-            # Update execution with run_id
-            from app.models.domain import TaskExecution
-            from sqlalchemy import update
-            
-            await session.execute(
-                update(TaskExecution)
-                .where(TaskExecution.id == execution_id)
-                .values(
-                    run_id=run.id,
-                    status=run.status or "completed",
-                    output_summary=str(run.output)[:500] if run.output else None,
+
+        # Forward continuation depth from the payload if present
+        continuation_depth = input_data.get("_continuation_depth", 0)
+
+        task_obj_id = task.id
+        task_exec_id = execution_id
+
+        async def _on_continuation_complete(bg_run_id, bg_status, bg_summary):
+            """Mirror of tasks.py _on_bg_complete — updates execution and chains the next pending continuation."""
+            from app.db.session import SessionLocal as _SL
+            from app.models.domain import TaskExecution as _TE, AgentTask as _AT
+            async with _SL() as cb_session:
+                mapped_status = "completed" if bg_status in ("succeeded", "completed") else "failed"
+                await update_task_execution(
+                    session=cb_session,
+                    execution_id=task_exec_id,
+                    run_id=bg_run_id,
+                    status=mapped_status,
+                    output_summary=bg_summary,
                 )
+                exec_result = await cb_session.execute(
+                    select(_TE).where(_TE.id == task_exec_id)
+                )
+                exec_obj = exec_result.scalar_one_or_none()
+                if exec_obj:
+                    await update_task_after_execution(cb_session, task_obj_id, exec_obj, mapped_status == "completed")
+
+                # Start the next pending continuation (if any) now that this run finished.
+                if mapped_status == "completed":
+                    pending_cont_stmt = (
+                        select(_TE)
+                        .where(
+                            _TE.task_id == task_obj_id,
+                            _TE.trigger_source == "continuation",
+                            _TE.status == "pending",
+                        )
+                        .order_by(_TE.created_at.asc())
+                        .limit(1)
+                    )
+                    pending_result = await cb_session.execute(pending_cont_stmt)
+                    pending_exec = pending_result.scalar_one_or_none()
+                    if pending_exec:
+                        logger.info(
+                            "Starting pending continuation from _execute_task_in_background: "
+                            "exec_id=%s, task_id=%s",
+                            pending_exec.id, task_obj_id,
+                        )
+                        task_result = await cb_session.execute(
+                            select(_AT).where(_AT.id == task_obj_id)
+                        )
+                        cont_task = task_result.scalar_one_or_none()
+                        if cont_task:
+                            import asyncio as _asyncio
+                            # #region agent log
+                            import time as _t2
+                            try:
+                                import aiohttp as _ah2
+                                async def _dbg2():
+                                    async with _ah2.ClientSession() as _s2:
+                                        await _s2.post('http://127.0.0.1:7251/ingest/606d8d55-f269-4a7e-9f32-b5c818b6655a', json={'sessionId':'fce93e','location':'webhooks.py:_on_continuation_complete','message':'chaining_next_continuation','data':{'task_id':str(task_obj_id),'next_exec_id':str(pending_exec.id),'next_depth':pending_exec.input_data.get('_continuation_depth') if pending_exec.input_data else None},'timestamp':int(_t2.time()*1000),'hypothesisId':'H1'}, headers={'X-Debug-Session-Id':'fce93e'})
+                                _asyncio.create_task(_dbg2())
+                            except Exception:
+                                pass
+                            # #endregion agent log
+                            _asyncio.create_task(
+                                _execute_task_in_background(
+                                    task=cont_task,
+                                    execution_id=pending_exec.id,
+                                    input_data=pending_exec.input_data,
+                                )
+                            )
+
+        run_record = await create_run_background(
+            principal=principal,
+            agent_id=task.agent_id,
+            payload={
+                "prompt": input_data.get("prompt", task.prompt),
+                **input_data,
+                "_task_id": str(task.id),
+                "_execution_id": str(execution_id),
+                "_continuation_depth": continuation_depth,
+            },
+            scopes=task.delegation_scopes or ["agent.execute", "data.write", "data.read", "search.read"],
+            purpose="continuation-task",
+            agent_tier="complex",
+            on_complete=_on_continuation_complete,
+        )
+
+        # Update execution record with the pre-created run_id immediately
+        async with SessionLocal() as session:
+            await session.execute(
+                sql_update(TaskExecution)
+                .where(TaskExecution.id == execution_id)
+                .values(run_id=run_record.id, status="running")
             )
             await session.commit()
-            
-            logger.info(
-                f"Webhook task execution completed: task={task.id}, run={run.id}, status={run.status}"
-            )
-    
+
+        # #region agent log
+        import json as _json, time as _time
+        try:
+            import aiohttp as _aiohttp
+            import asyncio as _al
+            async def _dbg_log():
+                async with _aiohttp.ClientSession() as _s:
+                    await _s.post('http://127.0.0.1:7251/ingest/606d8d55-f269-4a7e-9f32-b5c818b6655a', json={'sessionId':'fce93e','location':'webhooks.py:_execute_task_in_background','message':'continuation_started','data':{'task_id':str(task.id),'execution_id':str(execution_id),'run_id':str(run_record.id),'depth':continuation_depth},'timestamp':int(_time.time()*1000),'hypothesisId':'H1'}, headers={'X-Debug-Session-Id':'fce93e'})
+            _al.create_task(_dbg_log())
+        except Exception:
+            pass
+        # #endregion agent log
+        logger.info(
+            f"Continuation task started in background: task={task.id}, "
+            f"execution={execution_id}, run={run_record.id}, depth={continuation_depth}"
+        )
+
     except Exception as e:
         logger.error(
             f"Background task execution failed: task={task.id}, error={e}",
             exc_info=True,
         )
-        # Update execution status to failed
         try:
             from app.db.session import SessionLocal
             from app.models.domain import TaskExecution
-            from sqlalchemy import update
-            
+            from sqlalchemy import update as sql_update
+
             async with SessionLocal() as session:
                 await session.execute(
-                    update(TaskExecution)
+                    sql_update(TaskExecution)
                     .where(TaskExecution.id == execution_id)
                     .values(status="failed", output_summary=str(e)[:500])
                 )

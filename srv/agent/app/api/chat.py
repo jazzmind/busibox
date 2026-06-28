@@ -31,6 +31,7 @@ from app.schemas.auth import Principal
 from app.services.platform_config import get_platform_insights_enabled
 from app.schemas.conversation import Attachment, MessageRead
 from app.schemas.dispatcher import DispatcherRequest, FileAttachment, UserSettings, RoutingDecision
+from app.api.llm import _ensure_litellm_keys
 from app.services.dispatcher_service import route_query
 from app.services.model_selector import select_model_and_tools, list_available_models, ModelCapabilities
 from app.services.chat_executor import execute_chat, execute_chat_stream
@@ -390,6 +391,9 @@ async def send_chat_message(
         ChatMessageResponse with assistant response and metadata
     """
     try:
+        # Verify LiteLLM has cloud provider keys; restore from config-api if not.
+        await _ensure_litellm_keys(principal)
+
         # Get or create conversation
         if payload.conversation_id:
             # Verify conversation exists and user owns it
@@ -1149,6 +1153,9 @@ async def send_chat_message_stream_agentic(
             thoughts = []
             run_events = []
             selected_agent_id = None
+            # Citations gathered from document_search tool results, keyed by file_id.
+            # Stored as a dict to deduplicate (keep highest score, earliest page).
+            citations_by_file: Dict[str, Any] = {}
             
             # Run agentic dispatcher
             dispatcher_metadata: Dict[str, Any] = dict(payload.metadata or {})
@@ -1184,21 +1191,43 @@ async def send_chat_message_stream_agentic(
                         "source": event.source,
                         "message": event.message,
                     }
-                    # Persist structured intent-routing diagnostics for later analysis.
-                    if (
-                        event.type == "thought"
-                        and isinstance(event.data, dict)
-                        and event.data.get("phase") == "intent_routing"
-                    ):
-                        thought_item["data"] = {
-                            "phase": "intent_routing",
-                            "action_type": event.data.get("action_type"),
-                            "needs_tools": event.data.get("needs_tools"),
-                            "confidence": event.data.get("confidence"),
-                            "routing_source": event.data.get("routing_source"),
-                            "follow_up_question": event.data.get("follow_up_question"),
-                        }
+                    # Persist structured data for diagnostics and UI re-rendering.
+                    if event.type == "thought" and isinstance(event.data, dict):
+                        phase = event.data.get("phase")
+                        if phase == "intent_routing":
+                            thought_item["data"] = {
+                                "phase": "intent_routing",
+                                "action_type": event.data.get("action_type"),
+                                "needs_tools": event.data.get("needs_tools"),
+                                "confidence": event.data.get("confidence"),
+                                "routing_source": event.data.get("routing_source"),
+                                "follow_up_question": event.data.get("follow_up_question"),
+                            }
+                        elif phase:
+                            # Preserve phase for all other thought types (e.g. model_reasoning)
+                            # so the UI can re-render the thinking section after completion.
+                            thought_item["data"] = {"phase": phase}
                     thoughts.append(thought_item)
+
+                # Accumulate document_search results for deterministic citation list.
+                if (
+                    event.type == "tool_result"
+                    and event.source == "document_search"
+                    and isinstance(event.data, dict)
+                ):
+                    for item in event.data.get("results", []):
+                        fid = item.get("file_id") or item.get("fileId")
+                        if not fid:
+                            continue
+                        new_score = float(item.get("score", 0.0))
+                        page = item.get("page_number") or item.get("pageNumber") or None
+                        if fid not in citations_by_file or new_score > citations_by_file[fid]["score"]:
+                            citations_by_file[fid] = {
+                                "file_id": fid,
+                                "filename": item.get("filename", ""),
+                                "page_number": page,
+                                "score": new_score,
+                            }
                 
                 # Build run event log for RunRecord
                 run_events.append({
@@ -1217,14 +1246,23 @@ async def send_chat_message_stream_agentic(
             # Join without separator - content chunks are already properly formatted
             response_text = "".join(full_content) if full_content else "No response generated."
             
+            # Build routing_decision payload.  Always include citations even when
+            # no thoughts/agents present, so the frontend can render source chips.
+            collected_citations = sorted(
+                citations_by_file.values(), key=lambda c: -c["score"]
+            )
+            routing_payload: Dict[str, Any] = {}
+            if thoughts or available_agents:
+                routing_payload["thoughts"] = thoughts
+                routing_payload["selected_agents"] = available_agents
+            if collected_citations:
+                routing_payload["citations"] = collected_citations
+
             assistant_message = Message(
                 conversation_id=conversation.id,
                 role="assistant",
                 content=response_text,
-                routing_decision={
-                    "thoughts": thoughts,
-                    "selected_agents": available_agents,
-                } if thoughts or available_agents else None,
+                routing_decision=routing_payload if routing_payload else None,
             )
             session.add(assistant_message)
             

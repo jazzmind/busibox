@@ -120,7 +120,7 @@ case "$ACTION" in
             error "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
             exit 1
         fi
-        exec "$BINARY"
+        exec "$BINARY" "${@:2}"
         ;;
     *)
         error "Unknown action: $ACTION (use 'build' or 'run')"

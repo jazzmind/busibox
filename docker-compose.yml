@@ -64,7 +64,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_DB: busibox
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./config/init-databases.sql:/docker-entrypoint-initdb.d/01-init-databases.sql:ro
@@ -88,7 +88,7 @@ services:
     labels:
       - "config_version=${GIT_COMMIT:-unknown}"
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -114,8 +114,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
     ports:
-      - "9000:9000"   # API
-      - "9001:9001"   # Console
+      - "${MINIO_HOST_PORT:-9000}:9000"   # API
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"   # Console
     volumes:
       - minio_data:/data
     healthcheck:
@@ -190,8 +190,8 @@ services:
     volumes:
       - milvus_data:/var/lib/milvus
     ports:
-      - "19530:19530"
-      - "9091:9091"
+      - "${MILVUS_HOST_PORT:-19530}:19530"
+      - "${MILVUS_GRPC_PORT:-9091}:9091"
     depends_on:
       etcd:
         condition: service_healthy
@@ -321,7 +321,7 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_REGION_NAME: ${AWS_REGION_NAME:-${AWS_REGION:-us-east-1}}
     ports:
-      - "4000:4000"
+      - "${LITELLM_HOST_PORT:-4000}:4000"
     volumes:
       - ./config/litellm-config.yaml:/app/config.yaml:ro
       - ./config/litellm-hooks:/app/litellm_hooks:ro
@@ -378,7 +378,7 @@ services:
       # Cache directory inside container - matches mounted volume
       FASTEMBED_CACHE_DIR: /root/.cache/fastembed
     ports:
-      - "8005:8005"
+      - "${EMBEDDING_HOST_PORT:-8005}:8005"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
       interval: 30s
@@ -438,7 +438,7 @@ services:
       BRIDGE_API_URL: "http://bridge-api:8081"
       DEV_MODE: "true"
     ports:
-      - "8010:8010"
+      - "${AUTHZ_HOST_PORT:-8010}:8010"
     depends_on:
       postgres:
         condition: service_healthy
@@ -535,7 +535,7 @@ services:
       NEO4J_USER: ${NEO4J_USER:-neo4j}
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD must be set}
     ports:
-      - "8002:8002"
+      - "${DATA_HOST_PORT:-8002}:8002"
     depends_on:
       postgres:
         condition: service_healthy
@@ -727,7 +727,7 @@ services:
       EMAIL_INBOUND_POLL_INTERVAL: "${BRIDGE_EMAIL_INBOUND_POLL_INTERVAL:-30}"
       EMAIL_ALLOWED_SENDERS: "${BRIDGE_EMAIL_ALLOWED_SENDERS:-}"
     ports:
-      - "8081:8081"
+      - "${BRIDGE_HOST_PORT:-8081}:8081"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
       interval: 30s
@@ -796,7 +796,7 @@ services:
       NEO4J_USER: ${NEO4J_USER:-neo4j}
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD must be set}
     ports:
-      - "8003:8003"
+      - "${SEARCH_HOST_PORT:-8003}:8003"
     depends_on:
       postgres:
         condition: service_healthy
@@ -906,7 +906,7 @@ services:
       NEO4J_USER: ${NEO4J_USER:-neo4j}
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD must be set}
     ports:
-      - "8000:8000"
+      - "${AGENT_HOST_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -954,7 +954,7 @@ services:
       DOCS_PATH: /app/docs
       OPENAPI_PATH: /app/openapi
     ports:
-      - "8004:8004"
+      - "${DOCS_HOST_PORT:-8004}:8004"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health/live')"]
       interval: 10s
@@ -1072,7 +1072,7 @@ services:
       # MLX server runs on host (not in docker) on port 8080
       MLX_SERVER_URL: http://host.docker.internal:8080
     ports:
-      - "8011:8011"
+      - "${DEPLOY_HOST_PORT:-8011}:8011"
     depends_on:
       authz-api:
         condition: service_healthy
@@ -1114,7 +1114,7 @@ services:
       AUTHZ_BASE_URL: http://authz-api:8010
       CONFIG_ENCRYPTION_KEY: ${CONFIG_ENCRYPTION_KEY:?CONFIG_ENCRYPTION_KEY must be set}
     ports:
-      - "8012:8012"
+      - "${CONFIG_HOST_PORT:-8012}:8012"
     depends_on:
       authz-api:
         condition: service_healthy
@@ -1262,8 +1262,8 @@ services:
     labels:
       - "config_version=${GIT_COMMIT:-unknown}"
     ports:
-      - "80:80"
-      - "443:443"
+      - "${PROXY_HTTP_PORT:-80}:80"
+      - "${PROXY_HTTPS_PORT:-443}:443"
     volumes:
       - ./config/nginx-local.conf:/etc/nginx/nginx.conf:ro
       - ./config/nginx-sites:/etc/nginx/conf.d:ro

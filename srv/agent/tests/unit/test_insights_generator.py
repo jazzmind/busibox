@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.insights_generator import (
     ConversationInsight,
+    EMBEDDING_DIMENSION,
     PROFILE_FIELDS,
     _should_promote_context_globally,
     extract_profile_insights_from_messages,
@@ -85,9 +86,29 @@ async def test_get_embedding_failure():
         
         # Should return zero vector and default model name
         assert embedding is not None
-        assert len(embedding) == 1024  # Default dimension from EMBEDDING_DIMENSION
+        assert len(embedding) == EMBEDDING_DIMENSION
         assert all(x == 0.0 for x in embedding)
         assert model_name is not None
+
+
+@pytest.mark.asyncio
+async def test_get_embedding_failure_honors_expected_dim():
+    """Failure fallback uses explicit expected_dim when provided."""
+    with patch('app.services.insights_generator.httpx.AsyncClient') as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=Exception("API error"))
+        mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        embedding, _ = await get_embedding(
+            "test text",
+            "http://localhost:8002",
+            None,
+            expected_dim=512,
+        )
+
+        assert len(embedding) == 512
+        assert all(x == 0.0 for x in embedding)
 
 
 @pytest.mark.asyncio
@@ -201,7 +222,7 @@ async def test_analyze_conversation_facts():
 
 @pytest.mark.asyncio
 async def test_analyze_conversation_short_messages_skipped():
-    """Test that very short messages are skipped."""
+    """Trivial threads (greetings only) skip LLM extraction without calling the model."""
     messages = [
         Message(
             role="user",

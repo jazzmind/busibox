@@ -1031,6 +1031,19 @@ fn handle_action_select(app: &mut App, action: &str) {
             );
             app.pending_mkcert_setup = true;
         }
+        "Run Tests" => {
+            // Reset picker state each time we enter the screen
+            app.test_service_selected = 0;
+            app.test_suite_selected = 0;
+            app.test_focus_suite = false;
+            app.test_custom_args.clear();
+            app.test_custom_input_active = false;
+            app.test_log.clear();
+            app.test_log_visible = false;
+            app.test_action_running = false;
+            app.test_action_complete = false;
+            app.screen = Screen::RunTests;
+        }
         _ => {}
     }
 }
@@ -1096,7 +1109,8 @@ pub fn trigger_health_checks(app: &mut App) {
 
     let network_base = profile.effective_network_base().to_string();
     let vllm_network_base = profile.vllm_network_base().to_string();
-    let rx = health::start_health_checks(is_remote, is_mlx, &host, &prefix, ssh_details, is_proxmox, &network_base, &vllm_network_base);
+    let docker_runtime = profile.effective_docker_runtime().to_string();
+    let rx = health::start_health_checks(is_remote, is_mlx, &host, &prefix, ssh_details, is_proxmox, &network_base, &vllm_network_base, &docker_runtime);
     app.health_rx = Some(rx);
 }
 

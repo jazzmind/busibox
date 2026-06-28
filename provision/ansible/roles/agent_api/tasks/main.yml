@@ -45,6 +45,11 @@
       - libasound2
       - libxshmfence1
       - libx11-xcb1
+      # Camoufox (Firefox-based stealth browser) runtime dependencies
+      - libgtk-3-0
+      - libdbus-glib-1-2
+      - libxt6
+      - libxss1
       # Stealth scraper dependencies (curl_cffi + trafilatura/readability-lxml)
       - libcurl4
       - libxml2-dev

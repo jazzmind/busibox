@@ -285,10 +285,22 @@ fn main() -> Result<()> {
                     if let Ok(pw) = std::fs::read_to_string(&legacy_path) {
                         let pw = pw.trim().to_string();
                         if !pw.is_empty() {
-                            if let Some((msg, kind)) = run_vault_upgrade(&app.repo_root, &vault_prefix, &pw, false) {
-                                app.set_message(&msg, kind);
+                            match run_vault_upgrade(&app.repo_root, &vault_prefix, &pw, false) {
+                                Some((msg, app::MessageKind::Warning)) | Some((msg, app::MessageKind::Error)) => {
+                                    // Decrypt failed — the stored password is wrong. Prompt interactively
+                                    // so the user can supply the correct password. Don't set a bad password.
+                                    if msg.contains("vault_decrypt_failed") {
+                                        app.pending_vault_setup = true;
+                                    } else {
+                                        app.set_message(&msg, app::MessageKind::Warning);
+                                        app.vault_password = Some(pw);
+                                    }
+                                }
+                                _ => {
+                                    // Success (or vault didn't exist yet and was created) — use silently
+                                    app.vault_password = Some(pw);
+                                }
                             }
-                            app.vault_password = Some(pw);
                         }
                     }
                 }
@@ -325,6 +337,9 @@ fn main() -> Result<()> {
         }
         if app.screen == Screen::ModelBenchmark && app.benchmark_running {
             app.benchmark_tick = app.benchmark_tick.wrapping_add(1);
+        }
+        if app.screen == Screen::RunTests && app.test_action_running {
+            app.test_tick = app.test_tick.wrapping_add(1);
         }
         if app.screen == Screen::Welcome && app.health_check_running {
             app.health_tick = app.health_tick.wrapping_add(1);
@@ -546,6 +561,62 @@ fn main() -> Result<()> {
             }
         }
 
+        // Drain test updates
+        {
+            let mut test_completed = false;
+            let mut test_success = false;
+            if let Some(rx) = app.test_rx.take() {
+                use std::sync::mpsc::TryRecvError;
+                let mut put_back = true;
+                loop {
+                    match rx.try_recv() {
+                        Ok(app::TestUpdate::Log(msg)) => {
+                            app.test_log.push(msg);
+                            const MAX_LOG: usize = 10000;
+                            if app.test_log.len() > MAX_LOG {
+                                let excess = app.test_log.len() - MAX_LOG;
+                                app.test_log.drain(..excess);
+                            }
+                            if app.test_log_autoscroll {
+                                app.test_log_scroll =
+                                    app.test_log.len().saturating_sub(1);
+                            }
+                        }
+                        Ok(app::TestUpdate::Complete { success }) => {
+                            app.test_action_running = false;
+                            app.test_action_complete = true;
+                            app.test_log_scroll =
+                                app.test_log.len().saturating_sub(1);
+                            test_completed = true;
+                            test_success = success;
+                            put_back = false;
+                            break;
+                        }
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            app.test_action_running = false;
+                            put_back = false;
+                            break;
+                        }
+                    }
+                }
+                if put_back {
+                    app.test_rx = Some(rx);
+                }
+            }
+            if test_completed {
+                if test_success {
+                    app.set_message("Tests passed", app::MessageKind::Success);
+                } else {
+                    app.test_can_resume = true;
+                    app.set_message(
+                        "Tests failed — press r in log view to resume from failure",
+                        app::MessageKind::Error,
+                    );
+                }
+            }
+        }
+
         // Drain models manage updates
         {
             if let Some(rx) = app.models_manage_rx.take() {
@@ -684,10 +755,12 @@ fn main() -> Result<()> {
             match rx.try_recv() {
                 Ok(app::ValidateSecretsUpdate::Results {
                     keys,
+                    values,
                     local_error,
                     remote_error,
                 }) => {
                     app.validate_secrets_results = keys;
+                    app.validate_secrets_values = values;
                     app.validate_secrets_loading = false;
                     if let Some(err) = local_error {
                         app.validate_secrets_error = Some(err);
@@ -933,6 +1006,7 @@ fn render(app: &App, f: &mut ratatui::Frame) {
         Screen::K8sSetup => screens::k8s_setup::render(f, app),
         Screen::K8sManage => screens::k8s_manage::render(f, app),
         Screen::ValidateSecrets => screens::validate_secrets::render(f, app),
+        Screen::RunTests => screens::run_tests::render(f, app),
     }
 
     // Profile header bar overlay (except Welcome and ProfileSelect)
@@ -1038,6 +1112,7 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
         Screen::K8sSetup => screens::k8s_setup::handle_key(app, key),
         Screen::K8sManage => screens::k8s_manage::handle_key(app, key),
         Screen::ValidateSecrets => screens::validate_secrets::handle_key(app, key),
+        Screen::RunTests => screens::run_tests::handle_key(app, key),
     }
 }
 
@@ -1129,16 +1204,13 @@ fn perform_resume_install(app: &mut App) {
             .unwrap_or(0);
         app.remote_env_choice = env_idx;
     }
-    // Clear any previous install state and go to Install screen
-    app.install_services.clear();
-    app.install_log.clear();
-    app.install_complete = false;
-    app.install_model_status.clear();
-    app.install_models_complete = false;
-    app.install_portal_url = None;
     app.clear_message();
     app.screen = Screen::Install;
     app.menu_selected = 0;
+    // init_install (called inside auto_start_resume) resets bookkeeping, then
+    // pre-marks already-healthy services from the welcome screen's health results
+    // so the install worker skips stages that are already complete.
+    screens::install::auto_start_resume(app);
 }
 
 fn perform_sync_then_admin_login(app: &mut App) {
@@ -1252,7 +1324,7 @@ fn perform_sync_then_admin_login(app: &mut App) {
                 let repo_root = app.repo_root.clone();
                 let result = if let Some(ref vp) = vault_pw {
                     remote::run_local_make_quiet_with_vault_streaming(
-                        &repo_root, make_args, vp, |_| {},
+                        &repo_root, make_args, vp, None, |_| {},
                     )
                 } else {
                     remote::run_local_make_quiet_streaming(&repo_root, make_args, |_| {})
@@ -1448,7 +1520,10 @@ fn perform_validate_secrets(app: &mut App) {
 
     // Reset screen state
     app.validate_secrets_results.clear();
+    app.validate_secrets_values.clear();
     app.validate_secrets_scroll = 0;
+    app.validate_secrets_selected = 0;
+    app.validate_secrets_show_secret = None;
     app.validate_secrets_loading = true;
     app.validate_secrets_error = None;
     app.validate_secrets_vault_file = vault_file;
@@ -1480,6 +1555,7 @@ fn perform_validate_secrets(app: &mut App) {
             Ok(None) => {
                 let _ = tx.send(app::ValidateSecretsUpdate::Results {
                     keys: vec![],
+                    values: std::collections::HashMap::new(),
                     local_error: Some(format!("vault.{vault_prefix}.yml not found")),
                     remote_error: None,
                 });
@@ -1488,6 +1564,7 @@ fn perform_validate_secrets(app: &mut App) {
             Err(e) => {
                 let _ = tx.send(app::ValidateSecretsUpdate::Results {
                     keys: vec![],
+                    values: std::collections::HashMap::new(),
                     local_error: Some(format!("{e}")),
                     remote_error: None,
                 });
@@ -1576,6 +1653,7 @@ fn perform_validate_secrets(app: &mut App) {
 
         let _ = tx.send(app::ValidateSecretsUpdate::Results {
             keys: results,
+            values: vault_values,
             local_error: None,
             remote_error,
         });
@@ -1617,6 +1695,11 @@ fn handle_admin_login(app: &mut App) {
     let busibox_backend: Option<String> = app
         .active_profile()
         .map(|(_, p)| p.backend.clone());
+
+    let docker_runtime: String = app
+        .active_profile()
+        .map(|(_, p)| p.effective_docker_runtime().to_string())
+        .unwrap_or_else(|| "auto".to_string());
 
     debug_info.push_str(&format!("email={:?}", admin_email));
 
@@ -1745,6 +1828,26 @@ fn handle_admin_login(app: &mut App) {
         if let Some(ref backend_val) = busibox_backend {
             cmd.env("BUSIBOX_BACKEND", backend_val);
         }
+
+        // Set DOCKER_CONTEXT so docker exec in login.sh reaches the right containers
+        let env_prefix = match busibox_env.as_deref().unwrap_or("development") {
+            "development" => "dev",
+            "staging" => "staging",
+            "production" => "prod",
+            other => other,
+        };
+        if let Some(ctx) = crate::modules::health::resolve_docker_context_pub(&docker_runtime, env_prefix) {
+            cmd.env("DOCKER_CONTEXT", ctx);
+        }
+
+        // Pass SITE_DOMAIN so login.sh generates the correct portal URL.
+        // Without this, JSON_OUTPUT mode falls back to "localhost" (no port), producing
+        // https://localhost/portal/verify which may not be routable in local dev.
+        let site_domain = app
+            .active_profile()
+            .and_then(|(_, p)| p.site_domain.clone())
+            .unwrap_or_else(|| "localhost".to_string());
+        cmd.env("SITE_DOMAIN", &site_domain);
 
         debug_info.push_str(" | local_cmd=bash scripts/make/login.sh");
 
@@ -1926,6 +2029,35 @@ fn handle_vault_setup(app: &mut App) -> Option<(String, app::MessageKind)> {
                             Ok(vault_pw) => {
                                 eprintln!("✓ Vault unlocked\n");
                                 let result = run_vault_upgrade(&app.repo_root, &vault_prefix, &vault_pw, true);
+                                let is_decrypt_failure = result.as_ref()
+                                    .map(|(msg, _)| msg.contains("vault_decrypt_failed"))
+                                    .unwrap_or(false);
+                                if is_decrypt_failure {
+                                    eprintln!("⚠ The vault file exists but can't be decrypted with this vault key.");
+                                    eprintln!("  This usually means the vault file was encrypted during a previous install.");
+                                    eprintln!();
+                                    eprintln!("  [r] Reset vault — back up old vault and recreate from template");
+                                    eprintln!("  [s] Skip — continue with this warning (secrets won't load)");
+                                    eprint!("  Choice [r/s]: ");
+                                    let mut choice = String::new();
+                                    let _ = std::io::stdin().read_line(&mut choice);
+                                    if choice.trim().eq_ignore_ascii_case("r") {
+                                        let vault_rel = format!(
+                                            "provision/ansible/roles/secrets/vars/vault.{vault_prefix}.yml"
+                                        );
+                                        let vault_path = app.repo_root.join(&vault_rel);
+                                        if vault_path.exists() {
+                                            let backup = vault_path.with_extension("yml.bak");
+                                            if std::fs::rename(&vault_path, &backup).is_ok() {
+                                                eprintln!("  ✓ Backed up old vault to {}", backup.display());
+                                            }
+                                        }
+                                        let result2 = run_vault_upgrade(&app.repo_root, &vault_prefix, &vault_pw, true);
+                                        app.vault_password = Some(vault_pw);
+                                        return result2;
+                                    }
+                                    eprintln!("  Skipped. Use vault setup from the profile menu to reset later.");
+                                }
                                 app.vault_password = Some(vault_pw);
                                 return result;
                             }
@@ -1953,20 +2085,57 @@ fn handle_vault_setup(app: &mut App) -> Option<(String, app::MessageKind)> {
         return None;
     }
 
-    // Check for legacy plaintext password file — offer migration
+    // Check for legacy plaintext password file — verify it works, then offer migration
     if let Some(legacy_path) = vault::find_legacy_vault_pass(&vault_prefix) {
-        eprintln!(
-            "Found existing plaintext vault password: {}",
-            legacy_path.display()
-        );
-        eprintln!("Migrating to encrypted vault key...\n");
-
         match std::fs::read_to_string(&legacy_path) {
-            Ok(vault_pw) => {
-                let vault_pw = vault_pw.trim().to_string();
+            Ok(vault_pw_raw) => {
+                let mut vault_pw = vault_pw_raw.trim().to_string();
                 if vault_pw.is_empty() {
                     eprintln!("Warning: plaintext password file is empty. Skipping migration.");
                 } else {
+                    // Test whether the legacy password actually decrypts the vault file.
+                    // If it doesn't, prompt the user for the correct one before migrating.
+                    let vault_file = app.repo_root.join(format!(
+                        "provision/ansible/roles/secrets/vars/vault.{vault_prefix}.yml"
+                    ));
+                    let decrypt_ok = if vault_file.exists() {
+                        busibox_core::vault::verify_vault_decryption(&vault_file, &vault_pw)
+                            .unwrap_or(false)
+                    } else {
+                        true // No vault file yet — will be created; password is fine
+                    };
+
+                    if !decrypt_ok {
+                        eprintln!("⚠ The password in {} cannot decrypt the vault file.", legacy_path.display());
+                        eprintln!("Enter the correct Ansible vault password.\n");
+                        let mut corrected = false;
+                        for attempt in 1..=3 {
+                            match vault::prompt_password(&format!("Vault password (attempt {attempt}/3): ")) {
+                                Ok(pw) if pw.is_empty() => eprintln!("Password cannot be empty."),
+                                Ok(pw) => {
+                                    let ok = busibox_core::vault::verify_vault_decryption(&vault_file, &pw)
+                                        .unwrap_or(false);
+                                    if ok {
+                                        vault_pw = pw;
+                                        corrected = true;
+                                        break;
+                                    }
+                                    eprintln!("Incorrect password (attempt {attempt}/3).");
+                                }
+                                Err(e) => { eprintln!("Error: {e}"); break; }
+                            }
+                        }
+                        if !corrected {
+                            eprintln!("Could not verify vault password. Install will proceed without vault secrets.");
+                            eprintln!("Press Enter to continue...");
+                            let _ = std::io::stdin().read_line(&mut String::new());
+                            return None;
+                        }
+                    }
+
+                    eprintln!("Found existing vault password: {}", legacy_path.display());
+                    eprintln!("Migrating to encrypted vault key...\n");
+
                     // Encrypt with admin master password
                     eprintln!("Set a master password to protect this vault key.");
                     eprintln!("You'll need this password each time you deploy.\n");

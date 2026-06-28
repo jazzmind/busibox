@@ -49,11 +49,15 @@ detect_container_prefix() {
 
 DOCKER_PREFIX=$(detect_container_prefix)
 
-# Detect vault password method (shared with deploy script)
+# Detect vault password method.
+# Priority: ANSIBLE_VAULT_PASSWORD env var > ~/.vault_pass file > interactive prompt.
 get_vault_flags() {
+    local vault_pass_from_env="${REPO_ROOT}/scripts/lib/vault-pass-from-env.sh"
     local vault_pass_file="$HOME/.vault_pass"
-    
-    if [ -f "$vault_pass_file" ]; then
+
+    if [ -n "${ANSIBLE_VAULT_PASSWORD:-}" ]; then
+        echo "--vault-password-file ${vault_pass_from_env}"
+    elif [ -f "$vault_pass_file" ]; then
         echo "--vault-password-file $vault_pass_file"
     else
         echo "--ask-vault-pass"
@@ -87,6 +91,7 @@ get_container_ip() {
         authz)    echo "${network_base}.210" ;;
         search)   echo "${network_base}.204" ;;  # Search runs on milvus container
         bridge)   echo "${network_base}.210" ;;  # Bridge currently runs with authz-api
+        config)   echo "${network_base}.210" ;;  # Config API runs on authz container
         *)        echo "" ;;
     esac
 }
@@ -94,9 +99,62 @@ get_container_ip() {
 # Extract test credentials from vault using Python YAML parsing
 # Usage: eval "$(extract_vault_credentials)"
 extract_vault_credentials() {
+    # Fast-path: if credentials were pre-injected by the TUI (which decrypts the
+    # vault locally on the admin workstation and passes them over SSH), output
+    # them directly without touching ansible-vault on this host.
+    if [[ -n "${POSTGRES_PASSWORD:-}" && -n "${JWT_SECRET:-}" ]]; then
+        echo "POSTGRES_PASSWORD='${POSTGRES_PASSWORD}'"
+        echo "TEST_DB_PASSWORD='${POSTGRES_PASSWORD}'"
+        echo "AUTHZ_MASTER_KEY='${AUTHZ_MASTER_KEY:-}'"
+        echo "MINIO_ACCESS_KEY='${MINIO_ACCESS_KEY:-}'"
+        echo "MINIO_SECRET_KEY='${MINIO_SECRET_KEY:-}'"
+        echo "TEST_USER_ID='${TEST_USER_ID:-}'"
+        echo "JWT_SECRET='${JWT_SECRET}'"
+        return 0
+    fi
+
     local vault_flags
     vault_flags="$(get_vault_flags)"
-    local vault_file="${ANSIBLE_DIR}/roles/secrets/vars/vault.yml"
+
+    # Resolve vault file:
+    # 1. VAULT_PREFIX env var (set by TUI / make variable)
+    # 2. Active profile's vault prefix (via profiles.sh)
+    # 3. Any vault file that decrypts successfully (last resort probe)
+    local vault_file=""
+    local secrets_vars_dir="${ANSIBLE_DIR}/roles/secrets/vars"
+
+    if [[ -n "${VAULT_PREFIX:-}" ]]; then
+        vault_file="${secrets_vars_dir}/vault.${VAULT_PREFIX}.yml"
+    fi
+
+    if [[ -z "$vault_file" || ! -f "$vault_file" ]]; then
+        # Try to source profiles.sh and get the active profile's vault prefix
+        local profiles_sh="${REPO_ROOT}/scripts/lib/profiles.sh"
+        if [[ -f "$profiles_sh" ]]; then
+            # shellcheck source=/dev/null
+            source "$profiles_sh" 2>/dev/null || true
+            if type profile_get_vault_prefix &>/dev/null; then
+                local vp
+                vp=$(profile_get_vault_prefix 2>/dev/null)
+                [[ -n "$vp" && "$vp" != "dev" ]] && vault_file="${secrets_vars_dir}/vault.${vp}.yml"
+            fi
+        fi
+    fi
+
+    if [[ -z "$vault_file" || ! -f "$vault_file" ]]; then
+        # Last resort: probe all vault files and use the first one that decrypts
+        while IFS= read -r -d '' candidate; do
+            if ansible-vault view "$candidate" $vault_flags > /dev/null 2>&1; then
+                vault_file="$candidate"
+                break
+            fi
+        done < <(find "${secrets_vars_dir}" -maxdepth 1 -name "vault.*.yml" ! -name "vault.example.yml" -print0 2>/dev/null)
+    fi
+
+    if [[ -z "$vault_file" || ! -f "$vault_file" ]]; then
+        echo "# No vault file found in ${secrets_vars_dir}" >&2
+        return 1
+    fi
     
     # Create temp file for decrypted vault
     local temp_vault
@@ -127,8 +185,6 @@ try:
     
     # Authz
     authz = secrets.get('authz', {})
-    
-    # Master key for envelope encryption
     master_key = authz.get('master_key', '')
     print(f"AUTHZ_MASTER_KEY='{master_key}'")
     
@@ -138,6 +194,7 @@ try:
     print(f"MINIO_SECRET_KEY='{minio.get('minio_secret_key', '') or minio.get('secret_key', '')}'")
     
     # Test credentials
+    test_creds = secrets.get('test_credentials', {})
     print(f"TEST_USER_ID='{test_creds.get('test_user_id', '')}'")
     
     # JWT secret (used as bootstrap client secret)
@@ -1173,6 +1230,107 @@ main_menu() {
     done
 }
 
+# Ensure the authz service on the given IP has AUTHZ_TEST_MODE_ENABLED=true.
+# If the flag is missing or false, it is added/updated and the service is
+# restarted.  This must run before any test suite that calls AuthTestClient so
+# X-Test-Mode: true headers actually route to the test DB.
+ensure_authz_test_mode() {
+    local authz_ip="$1"
+    info "Checking authz test mode on ${authz_ip}..."
+
+    # Read current value from the deployed .env
+    local current
+    current=$(ssh "root@${authz_ip}" "grep -E '^AUTHZ_TEST_MODE_ENABLED=' /srv/authz/.env 2>/dev/null || true")
+
+    if [[ "$current" == "AUTHZ_TEST_MODE_ENABLED=true" ]]; then
+        info "authz test mode already enabled — no restart needed"
+        return 0
+    fi
+
+    warn "Enabling AUTHZ_TEST_MODE_ENABLED=true on authz service (restart required)..."
+
+    # Add or update the flag then restart
+    ssh "root@${authz_ip}" "
+        if grep -qE '^AUTHZ_TEST_MODE_ENABLED=' /srv/authz/.env 2>/dev/null; then
+            sed -i 's|^AUTHZ_TEST_MODE_ENABLED=.*|AUTHZ_TEST_MODE_ENABLED=true|' /srv/authz/.env
+        else
+            echo 'AUTHZ_TEST_MODE_ENABLED=true' >> /srv/authz/.env
+        fi
+        systemctl restart authz-api
+        # Wait up to 30 s for the service to come back
+        for i in \$(seq 1 30); do
+            if curl -sf http://localhost:8010/health/live > /dev/null 2>&1; then
+                echo '[authz] service healthy after restart'
+                exit 0
+            fi
+            sleep 1
+        done
+        echo '[authz] WARNING: service not healthy after 30 s' >&2
+        exit 1
+    " || {
+        error "Failed to enable AUTHZ_TEST_MODE_ENABLED on authz service at ${authz_ip}"
+        exit 1
+    }
+
+    success "authz test mode enabled and service restarted"
+}
+
+# Proxmox: agent-lxc cannot restart litellm-lxc (no docker, no SSH keys).
+# When LLM key-restore tests are selected, run prepare → restart litellm from the
+# test runner host → verify, then exclude those tests from the main pytest pass.
+orchestrate_llm_key_restore_cycle() {
+    local agent_ip="$1"
+    local litellm_ip="$2"
+    local test_env="$3"
+    local pytest_path="$4"
+    local pytest_extra="$5"
+    local pytest_base_flags="$6"
+
+    LLM_RESTART_ORCHESTRATED=0
+
+    local collect_cmd
+    collect_cmd="cd /srv/agent && source .venv/bin/activate && source .env 2>/dev/null || true && export ${test_env} && python -m pytest ${pytest_path} ${pytest_extra} --collect-only -q 2>/dev/null"
+    local collected
+    collected=$(ssh -o ConnectTimeout=15 "root@${agent_ip}" "${collect_cmd}" 2>/dev/null || true)
+
+    if ! echo "${collected}" | grep -qE 'test_keys_survive_litellm_restart'; then
+        return 0
+    fi
+
+    info "Orchestrating LLM key-restore restart (test runner → litellm-lxc systemctl restart)..."
+
+    local agent_pytest="cd /srv/agent && source .venv/bin/activate && source .env 2>/dev/null || true && export ${test_env}"
+
+    if echo "${collected}" | grep -qE '::test_keys_survive_litellm_restart_prepare$|::test_keys_survive_litellm_restart$'; then
+        info "  Step 1/3: verify providers and config-api persistence..."
+        if ! ssh -o ConnectTimeout=15 "root@${agent_ip}" \
+            "${agent_pytest} && python -m pytest tests/integration/test_llm_key_restore.py::TestLLMKeyRestoreAfterRestart::test_keys_survive_litellm_restart_prepare ${pytest_base_flags}"; then
+            error "LLM key-restore prepare step failed"
+            return 1
+        fi
+
+        info "  Step 2/3: restarting LiteLLM on ${litellm_ip}..."
+        if ! ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 "root@${litellm_ip}" "systemctl restart litellm"; then
+            error "Failed to restart litellm on ${litellm_ip} (check SSH from test runner)"
+            return 1
+        fi
+        sleep 5
+    fi
+
+    if echo "${collected}" | grep -qE '::test_keys_survive_litellm_restart_verify$|::test_keys_survive_litellm_restart$'; then
+        info "  Step 3/3: verify keys restored after restart..."
+        if ! ssh -o ConnectTimeout=15 "root@${agent_ip}" \
+            "${agent_pytest} && export LITELLM_RESTART_EXTERNAL=1 && python -m pytest tests/integration/test_llm_key_restore.py::TestLLMKeyRestoreAfterRestart::test_keys_survive_litellm_restart_verify ${pytest_base_flags}"; then
+            error "LLM key-restore verify step failed"
+            return 1
+        fi
+    fi
+
+    LLM_RESTART_ORCHESTRATED=1
+    success "LLM key-restore restart cycle completed"
+    return 0
+}
+
 # Run tests on container (non-interactive)
 run_container_tests() {
     local service="$1"
@@ -1191,15 +1349,21 @@ run_container_tests() {
     eval "$creds"
     
     # Get container IPs
-    local postgres_ip authz_ip data_ip search_ip agent_ip bridge_ip minio_ip milvus_ip
+    local postgres_ip authz_ip data_ip search_ip agent_ip bridge_ip config_ip minio_ip milvus_ip
     postgres_ip=$(get_container_ip postgres "$env")
     authz_ip=$(get_container_ip authz "$env")
     data_ip=$(get_container_ip data "$env")
     search_ip=$(get_container_ip search "$env")
     agent_ip=$(get_container_ip agent "$env")
     bridge_ip=$(get_container_ip bridge "$env")
+    config_ip=$(get_container_ip config "$env")
     minio_ip=$(get_container_ip minio "$env")
     milvus_ip=$(get_container_ip milvus "$env")
+
+    # ALWAYS ensure authz is running in test mode before running any test suite.
+    # Without this, X-Test-Mode: true headers are silently ignored and tests hit
+    # the production database.
+    ensure_authz_test_mode "${authz_ip}"
     
     # Database configuration for pytest
     # NOTE: Pytest tests run against isolated test databases owned by busibox_test_user:
@@ -1212,7 +1376,48 @@ run_container_tests() {
     local db_user db_password
     db_user="busibox_test_user"
     db_password="${PYTEST_DB_PASSWORD:-testpassword}"
+
+    # Well-known bootstrap test user (created automatically by authz on startup
+    # when test mode is enabled).  AuthTestClient uses this ID by default.
+    # Tests that need a real user use auth_client.get_token() which bootstraps
+    # the user via magic link -- no external bootstrap script required.
+    local test_user_id="${TEST_USER_ID:-00000000-0000-0000-0000-000000000001}"
     
+    # Resolve pytest test path and extra flags from PYTEST_ARGS.
+    # Supports shorthand patterns from the TUI / CLI:
+    #   llm                      -> pytest tests/ -k llm
+    #   integration/test_llm     -> pytest tests/integration/test_llm
+    #   tests/unit/test_foo.py   -> pytest tests/unit/test_foo.py (full path)
+    #   -k "foo and not slow"    -> pytest tests/ -k "foo and not slow"
+    local _pytest_path _pytest_extra
+    local _raw="${PYTEST_ARGS:-}"
+    if [[ -z "$_raw" ]]; then
+        _pytest_path="tests/"
+        _pytest_extra=""
+    elif [[ "$_raw" == -* ]]; then
+        _pytest_path="tests/"
+        _pytest_extra="$_raw"
+    elif [[ "$_raw" == tests/* ]]; then
+        _pytest_path="$_raw"
+        _pytest_extra=""
+    elif [[ "$_raw" == */* ]]; then
+        _pytest_path="tests/${_raw}"
+        _pytest_extra=""
+    else
+        _pytest_path="tests/"
+        _pytest_extra="-k ${_raw}"
+    fi
+
+    # Default pytest flags: --stepwise stops at first failure and on the next run
+    # continues from that test (skips already-passed tests in .pytest_cache).
+    # Set PYTEST_STEPWISE_RESET=1 to clear stepwise state (fresh full run).
+    # PYTEST_ARGS can override by including its own --tb / --stepwise / -v flags.
+    local _pytest_stepwise_flags="--stepwise"
+    if [[ "${PYTEST_STEPWISE_RESET:-}" == "1" ]]; then
+        _pytest_stepwise_flags="--stepwise-reset --stepwise"
+    fi
+    local _pytest_base_flags="${_pytest_stepwise_flags} -v --tb=long"
+
     case "$service" in
         authz)
             header "Authz Service Tests" 70
@@ -1231,15 +1436,18 @@ run_container_tests() {
             test_env="${test_env} AUTHZ_MASTER_KEY=${AUTHZ_MASTER_KEY}"
             test_env="${test_env} AUTHZ_SERVICE_URL=http://${authz_ip}:8010"
             test_env="${test_env} TEST_AUTHZ_URL=http://${authz_ip}:8010"
+            test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
+            test_env="${test_env} AUTHZ_TEST_MODE_ENABLED=true"
+            test_env="${test_env} TEST_USER_ID=${test_user_id}"
             
             # Run tests via SSH
-            if ssh "root@${authz_ip}" "cd /srv/authz/app && source ../venv/bin/activate && export PYTHONPATH=/srv/authz/app/src && source /srv/authz/.env && export ${test_env} && python -m pytest tests/ -v --tb=short"; then
+            if ssh "root@${authz_ip}" "cd /srv/authz/app && source ../venv/bin/activate && export PYTHONPATH=/srv/authz/app/src && source /srv/authz/.env 2>/dev/null || true && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
                 success "Authz tests passed!"
                 save_test_result "authz" "passed"
             else
                 error "Authz tests failed"
                 echo ""
-                warn "To rerun failed tests, check output above for pytest filter"
+                warn "Press 'r' in the TUI to resume from the failure (--stepwise), or check pytest filter above"
                 echo ""
                 save_test_result "authz" "failed"
                 # Don't exit - continue to show summary
@@ -1249,28 +1457,18 @@ run_container_tests() {
         data)
             header "Data Service Tests" 70
             info "Running data tests on ${data_ip}..."
-            
-            # Validate required credentials
-            if [[ -z "${TEST_USER_ID:-}" ]]; then
-                warn "TEST_USER_ID not found in vault. Running bootstrap to create test user..."
-                # Bootstrap test credentials if missing and capture TEST_USER_ID
-                local bootstrap_output
-                bootstrap_output=$(bash "${REPO_ROOT}/scripts/test/bootstrap-test-credentials.sh" "$env" 2>&1) || {
-                    error "Failed to bootstrap test credentials"
-                    echo "$bootstrap_output"
-                    exit 1
-                }
-                # Extract TEST_USER_ID from bootstrap output
-                TEST_USER_ID=$(echo "$bootstrap_output" | grep "^TEST_USER_ID=" | cut -d'=' -f2)
-                if [[ -z "${TEST_USER_ID:-}" ]]; then
-                    error "Could not extract TEST_USER_ID from bootstrap output"
-                    echo "$bootstrap_output"
-                    exit 1
-                fi
-                info "Created test user: ${TEST_USER_ID}"
-            fi
-            
+
+            # Sync latest test files from repo to container (no full redeploy needed)
+            info "Syncing data tests to container..."
+            rsync -rltz --delete --no-owner --no-group \
+                "${REPO_ROOT}/srv/data/tests/" \
+                "root@${data_ip}:/srv/data/tests/" || {
+                error "Failed to sync data tests"
+                return 1
+            }
+
             # Pytest uses test_files database (owned by busibox_test_user)
+            # AuthTestClient bootstraps the test user automatically via magic link.
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
@@ -1280,19 +1478,16 @@ run_container_tests() {
             test_env="${test_env} MINIO_SECRET_KEY=${MINIO_SECRET_KEY}"
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
-            test_env="${test_env} TEST_USER_ID=${TEST_USER_ID}"
+            test_env="${test_env} AUTHZ_TEST_MODE_ENABLED=true"
+            test_env="${test_env} TEST_USER_ID=${test_user_id}"
             
-            # Parse additional pytest args
-            local pytest_args="${PYTEST_ARGS:-}"
-            
-            # Run tests with wrapper that captures failures
-            if ssh "root@${data_ip}" "cd /srv/data && source venv/bin/activate && export PYTHONPATH=/srv/data/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}"; then
+            if ssh "root@${data_ip}" "cd /srv/data && source venv/bin/activate && export PYTHONPATH=/srv/data/src && source .env 2>/dev/null || true && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
                 success "Data tests passed!"
                 save_test_result "data" "passed"
             else
                 error "Data tests failed"
                 echo ""
-                warn "To rerun failed tests, check output above for pytest filter"
+                warn "Press 'r' in the TUI to resume from the failure (--stepwise), or check pytest filter above"
                 echo ""
                 save_test_result "data" "failed"
                 # Don't exit - continue to show summary
@@ -1302,23 +1497,18 @@ run_container_tests() {
         search)
             header "Search Service Tests" 70
             info "Running search tests on ${search_ip}..."
-            
-            # Validate required credentials (use same TEST_USER_ID as data)
-            if [[ -z "${TEST_USER_ID:-}" ]]; then
-                warn "TEST_USER_ID not found. Running bootstrap to create test user..."
-                local bootstrap_output
-                bootstrap_output=$(bash "${REPO_ROOT}/scripts/test/bootstrap-test-credentials.sh" "$env" 2>&1) || {
-                    error "Failed to bootstrap test credentials"
-                    exit 1
-                }
-                TEST_USER_ID=$(echo "$bootstrap_output" | grep "^TEST_USER_ID=" | cut -d'=' -f2)
-                if [[ -z "${TEST_USER_ID:-}" ]]; then
-                    error "Could not extract TEST_USER_ID from bootstrap output"
-                    exit 1
-                fi
-            fi
-            
+
+            # Sync latest test files from repo to container (no full redeploy needed)
+            info "Syncing search tests to container..."
+            rsync -rltz --delete --no-owner --no-group \
+                "${REPO_ROOT}/srv/search/tests/" \
+                "root@${search_ip}:/opt/search/tests/" || {
+                error "Failed to sync search tests"
+                return 1
+            }
+
             # Pytest uses test_files database (owned by busibox_test_user)
+            # AuthTestClient bootstraps the test user automatically via magic link.
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
@@ -1326,19 +1516,17 @@ run_container_tests() {
             test_env="${test_env} MILVUS_HOST=${milvus_ip}"
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
-            test_env="${test_env} TEST_USER_ID=${TEST_USER_ID}"
-            
-            # Parse additional pytest args
-            local pytest_args="${PYTEST_ARGS:-}"
+            test_env="${test_env} AUTHZ_TEST_MODE_ENABLED=true"
+            test_env="${test_env} TEST_USER_ID=${test_user_id}"
             
             # Search service is deployed to /opt/search on milvus container
-            if ssh "root@${search_ip}" "cd /opt/search && source venv/bin/activate && export PYTHONPATH=/opt/search/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}"; then
+            if ssh "root@${search_ip}" "cd /opt/search && source venv/bin/activate && export PYTHONPATH=/opt/search/src && source .env 2>/dev/null || true && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
                 success "Search tests passed!"
                 save_test_result "search" "passed"
             else
                 error "Search tests failed"
                 echo ""
-                warn "To rerun failed tests, check output above for pytest filter"
+                warn "Press 'r' in the TUI to resume from the failure (--stepwise), or check pytest filter above"
                 echo ""
                 save_test_result "search" "failed"
                 # Don't exit - continue to show summary
@@ -1348,24 +1536,25 @@ run_container_tests() {
         agent)
             header "Agent Service Tests" 70
             info "Running agent tests on ${agent_ip}..."
-            
-            # Validate required credentials
-            if [[ -z "${TEST_USER_ID:-}" ]]; then
-                warn "TEST_USER_ID not found. Running bootstrap to create test user..."
-                local bootstrap_output
-                bootstrap_output=$(bash "${REPO_ROOT}/scripts/test/bootstrap-test-credentials.sh" "$env" 2>&1) || {
-                    error "Failed to bootstrap test credentials"
-                    exit 1
-                }
-                TEST_USER_ID=$(echo "$bootstrap_output" | grep "^TEST_USER_ID=" | cut -d'=' -f2)
-                if [[ -z "${TEST_USER_ID:-}" ]]; then
-                    error "Could not extract TEST_USER_ID from bootstrap output"
-                    exit 1
-                fi
-            fi
-            
+
+            # Sync latest test files from repo to container (no full redeploy needed)
+            info "Syncing agent tests to container..."
+            rsync -rltz --delete --no-owner --no-group \
+                "${REPO_ROOT}/srv/agent/tests/" \
+                "root@${agent_ip}:/srv/agent/tests/" || {
+                error "Failed to sync agent tests"
+                return 1
+            }
+            rsync -rltz --delete --no-owner --no-group \
+                "${REPO_ROOT}/srv/shared/busibox_common/" \
+                "root@${agent_ip}:/srv/agent/busibox_common/" || {
+                error "Failed to sync busibox_common for agent tests"
+                return 1
+            }
+
             # Pytest uses test_agent database (not the production agent database)
             # Also set TEST_DATABASE_URL which the agent conftest.py checks first
+            # AuthTestClient bootstraps the test user automatically via magic link.
             local agent_test_db_url="postgresql+asyncpg://${db_user}:${db_password}@${postgres_ip}:5432/test_agent"
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
@@ -1374,21 +1563,51 @@ run_container_tests() {
             test_env="${test_env} TEST_DATABASE_URL=${agent_test_db_url}"
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
-            test_env="${test_env} TEST_USER_ID=${TEST_USER_ID}"
+            test_env="${test_env} AUTHZ_TEST_MODE_ENABLED=true"
+            test_env="${test_env} TEST_USER_ID=${test_user_id}"
+            test_env="${test_env} CONFIG_API_URL=http://${authz_ip}:8012"
+            local litellm_ip
+            litellm_ip=$(get_container_ip litellm "$env")
+            test_env="${test_env} LITELLM_HOST=${litellm_ip}"
             test_env="${test_env} DATA_URL=http://${data_ip}:8000"
             test_env="${test_env} SEARCH_URL=http://${search_ip}:8003"  # Search is on port 8003
-            
-            # Parse additional pytest args
-            local pytest_args="${PYTEST_ARGS:-}"
-            
+
+            # LLM key-restore: restart litellm from test runner (agent-lxc has no docker/SSH)
+            if ! orchestrate_llm_key_restore_cycle \
+                "${agent_ip}" "${litellm_ip}" "${test_env}" \
+                "${_pytest_path}" "${_pytest_extra}" "${_pytest_base_flags}"; then
+                save_test_result "agent" "failed"
+                return 1
+            fi
+
+            # Build pytest -k expression (quote multi-word expressions for SSH)
+            local _agent_pytest_k_expr=""
+            if [[ "${_pytest_extra}" == -k\ * ]]; then
+                _agent_pytest_k_expr="${_pytest_extra#-k }"
+            fi
+            local _agent_pytest_invoke="${_pytest_path} ${_pytest_base_flags}"
+            if [[ "${LLM_RESTART_ORCHESTRATED:-0}" == "1" ]]; then
+                test_env="${test_env} LLM_RESTART_ORCHESTRATED=1"
+                if [[ -n "${_agent_pytest_k_expr}" ]]; then
+                    _agent_pytest_k_expr="${_agent_pytest_k_expr} and not keys_survive"
+                elif [[ "${_pytest_path}" == *"test_llm_key_restore"* ]]; then
+                    _agent_pytest_k_expr="not keys_survive"
+                fi
+            fi
+            if [[ -n "${_agent_pytest_k_expr}" ]]; then
+                _agent_pytest_invoke="${_agent_pytest_invoke} -k '${_agent_pytest_k_expr}'"
+            elif [[ -n "${_pytest_extra}" ]]; then
+                _agent_pytest_invoke="${_agent_pytest_invoke} ${_pytest_extra}"
+            fi
+
             # Agent uses .venv not venv
-            if ssh "root@${agent_ip}" "cd /srv/agent && source .venv/bin/activate && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}"; then
+            if ssh "root@${agent_ip}" "cd /srv/agent && source .venv/bin/activate && source .env 2>/dev/null || true && export ${test_env} && python -m pytest ${_agent_pytest_invoke}"; then
                 success "Agent tests passed!"
                 save_test_result "agent" "passed"
             else
                 error "Agent tests failed"
                 echo ""
-                warn "To rerun failed tests, check output above for pytest filter"
+                warn "Press 'r' in the TUI to resume from the failure (--stepwise), or check pytest filter above"
                 echo ""
                 save_test_result "agent" "failed"
                 # Don't exit - continue to show summary
@@ -1399,27 +1618,71 @@ run_container_tests() {
             header "Bridge Service Tests" 70
             info "Running bridge tests on ${bridge_ip}..."
 
+            # Sync latest test files from repo to container (no full redeploy needed)
+            info "Syncing bridge tests to container..."
+            rsync -rltz --delete --no-owner --no-group \
+                "${REPO_ROOT}/srv/bridge/tests/" \
+                "root@${bridge_ip}:/srv/bridge/tests/" || {
+                error "Failed to sync bridge tests"
+                return 1
+            }
+
             local test_env="BRIDGE_API_URL=http://${bridge_ip}:8081"
             test_env="${test_env} BRIDGE_API_PORT=8081"
+            test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
+            test_env="${test_env} AUTHZ_TEST_MODE_ENABLED=true"
+            test_env="${test_env} TEST_USER_ID=${test_user_id}"
 
-            # Parse additional pytest args
-            local pytest_args="${PYTEST_ARGS:-}"
-
-            if ssh "root@${bridge_ip}" "cd /srv/bridge && source venv/bin/activate && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}"; then
+            if ssh "root@${bridge_ip}" "cd /srv/bridge && source venv/bin/activate && source .env 2>/dev/null || true && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
                 success "Bridge tests passed!"
                 save_test_result "bridge" "passed"
             else
                 error "Bridge tests failed"
                 echo ""
-                warn "To rerun failed tests, check output above for pytest filter"
+                warn "Press 'r' in the TUI to resume from the failure (--stepwise), or check pytest filter above"
                 echo ""
                 save_test_result "bridge" "failed"
                 return 1
             fi
             ;;
+        config)
+            header "Config API Tests" 70
+            info "Running config-api tests on ${config_ip}..."
+
+            # Sync latest test files from repo to container (no full redeploy needed)
+            info "Syncing config-api tests to container..."
+            rsync -rltz --delete --no-owner --no-group \
+                "${REPO_ROOT}/srv/config/tests/" \
+                "root@${config_ip}:/opt/config/app/tests/" || {
+                error "Failed to sync config-api tests"
+                return 1
+            }
+
+            local test_env="CONFIG_API_URL=http://${config_ip}:8012"
+            test_env="${test_env} POSTGRES_HOST=${postgres_ip}"
+            test_env="${test_env} POSTGRES_USER=${db_user}"
+            test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
+            test_env="${test_env} POSTGRES_DB=test_config"
+            test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
+            test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
+            test_env="${test_env} AUTHZ_TEST_MODE_ENABLED=true"
+            test_env="${test_env} TEST_USER_ID=${test_user_id}"
+
+            if ssh "root@${config_ip}" "cd /opt/config/app && source /opt/config/venv/bin/activate && source /opt/config/.env 2>/dev/null || true && export ${test_env} && python -m pytest ${_pytest_path} ${_pytest_base_flags} ${_pytest_extra}"; then
+                success "Config API tests passed!"
+                save_test_result "config" "passed"
+            else
+                error "Config API tests failed"
+                echo ""
+                warn "Press 'r' in the TUI to resume from the failure (--stepwise), or check pytest filter above"
+                echo ""
+                save_test_result "config" "failed"
+                return 1
+            fi
+            ;;
         all)
             local failed_services=()
-            for svc in authz data search agent bridge; do
+            for svc in authz data search agent bridge config; do
                 if ! run_container_tests "$svc" "$env"; then
                     failed_services+=("$svc")
                 fi
@@ -1444,7 +1707,7 @@ run_container_tests() {
                 error "Failed services: ${failed_services[*]}"
                 echo ""
                 warn "Review output above for pytest filters to rerun failed tests"
-                warn "Or use 'Run Failed Tests' option to rerun only failed services"
+                warn "In the Busibox TUI: press 'r' to resume from the last failure (--stepwise)"
                 return 1
             fi
             ;;

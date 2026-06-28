@@ -195,7 +195,7 @@ def _ensure_openai_env():
 # Maximum characters for a single tool result before truncation.
 # ~2000 tokens at ~4 chars/token. Prevents context window overflow
 # when tools return large datasets (e.g. query_data with many records).
-MAX_TOOL_RESULT_CHARS = 8000
+MAX_TOOL_RESULT_CHARS = 12000
 
 
 def _truncate_tool_result(result: Any) -> Any:
@@ -330,6 +330,7 @@ TOOL_SCOPES: Dict[str, List[str]] = {
     "get_weather": [],  # No auth needed
     "rag_query": ["rag.read"],
     "create_task": ["task.write"],  # Create tasks
+    "trigger_task_run": ["task.execute"],  # Self-continuation: trigger own task run
     "send_notification": [],  # No special auth needed (uses configured providers)
     "generate_image": ["data.write"],
     "transcribe_audio": ["data.read"],
@@ -376,6 +377,7 @@ TOOL_CLASSES: Dict[str, Dict[str, Any]] = {
     "text_to_speech": {"class": "slow", "timeout": 180},
     "send_notification": {"class": "slow", "timeout": 30},
     "create_task": {"class": "slow", "timeout": 30},
+    "trigger_task_run": {"class": "fast", "timeout": 15},
 }
 
 TOOL_CLASS_DEFAULT: Dict[str, Any] = {"class": "slow", "timeout": 60}
@@ -457,6 +459,58 @@ class ToolRegistry:
     def has(cls, name: str) -> bool:
         """Check if a tool is registered."""
         return name in cls._tools
+
+
+async def _apply_scraper_tool_config(session, agent_id) -> None:
+    """Load web_scraper ToolConfig from DB and inject into the current context.
+
+    Checks agent-scope config first (highest priority), then system-scope.
+    Falls back gracefully — if no config is stored the scraper uses env vars.
+    """
+    try:
+        from sqlalchemy import select, or_, and_
+        from app.models.domain import ToolConfig
+
+        clauses = [
+            and_(ToolConfig.tool_name == "web_scraper", ToolConfig.scope == "system"),
+        ]
+        if agent_id:
+            try:
+                import uuid as _uuid
+                agent_uuid = _uuid.UUID(str(agent_id)) if not isinstance(agent_id, _uuid.UUID) else agent_id
+                clauses.append(
+                    and_(
+                        ToolConfig.tool_name == "web_scraper",
+                        ToolConfig.scope == "agent",
+                        ToolConfig.agent_id == agent_uuid,
+                    )
+                )
+            except (ValueError, AttributeError):
+                pass
+
+        result = await session.execute(
+            select(ToolConfig).where(or_(*clauses))
+        )
+        rows = result.scalars().all()
+
+        # Merge system config first, then agent config (agent wins).
+        # ToolConfig stores {"providers": {...}, "settings": {...}};
+        # scraper settings live under the "settings" key.
+        merged: dict = {}
+        for row in sorted(rows, key=lambda r: 0 if r.scope == "system" else 1):
+            if row.config:
+                settings = row.config.get("settings") or {}
+                merged.update(settings)
+
+        if merged:
+            from app.tools.scraper_config import set_scraper_tool_config
+            set_scraper_tool_config(merged)
+            logger.debug(
+                "scraper_tool_config_loaded",
+                extra={"keys": list(merged.keys()), "agent_id": str(agent_id)},
+            )
+    except Exception as exc:
+        logger.warning("Failed to load scraper tool config: %s", exc)
 
 
 # Register built-in tools
@@ -552,6 +606,13 @@ def _register_builtin_tools():
         ToolRegistry.register("graph_relate", graph_relate, GraphRelateOutput)
     except ImportError as e:
         logger.warning(f"Could not register graph tools: {e}")
+
+    # Register trigger_task_run tool (self-continuation for long-running tasks)
+    try:
+        from app.tools.trigger_task_tool import trigger_task_run, TriggerTaskOutput
+        ToolRegistry.register("trigger_task_run", trigger_task_run, TriggerTaskOutput)
+    except ImportError as e:
+        logger.warning(f"Could not register trigger_task_run tool: {e}")
 
 
 # Initialize tool registry on module load
@@ -700,11 +761,13 @@ class BaseStreamingAgent(StreamingAgent):
             return
 
         if self._should_disable_thinking():
-            model_settings.setdefault("extra_body", {}).setdefault(
-                "chat_template_kwargs", {}
-            )["enable_thinking"] = False
+            backend = get_settings().llm_backend.lower()
+            if backend in ("mlx", "vllm"):
+                model_settings.setdefault("extra_body", {}).setdefault(
+                    "chat_template_kwargs", {}
+                )["enable_thinking"] = False
             logger.info(
-                "Thinking settings [disabled]: model=%s", model_name,
+                "Thinking settings [disabled]: model=%s backend=%s", model_name, backend,
             )
             return
 
@@ -1152,7 +1215,16 @@ class BaseStreamingAgent(StreamingAgent):
         # Discover and register tools from MCP servers (lazy, first-run only)
         if self.config.mcp_servers:
             await self._register_mcp_tools()
-        
+
+        # Load web_scraper tool config (proxy, camoufox) from the ToolConfig DB
+        # table so admins can configure these via the agent-manager UI without
+        # touching server environment variables.
+        if agent_context.session:
+            await _apply_scraper_tool_config(
+                session=agent_context.session,
+                agent_id=agent_context.agent_id,
+            )
+
         return agent_context
 
     async def _register_mcp_tools(self) -> None:
@@ -1822,7 +1894,7 @@ class BaseStreamingAgent(StreamingAgent):
                 agent, query, context, stream, cancel,
                 model_settings=model_settings if model_settings else None,
                 message_history=msg_history,
-                usage_limits=UsageLimits(tool_calls_limit=30),
+                usage_limits=UsageLimits(tool_calls_limit=max(30, self.config.max_iterations * 4)),
             )
             logger.info(
                 f"{self.name} LLM streaming execution complete",
@@ -2237,10 +2309,12 @@ class BaseStreamingAgent(StreamingAgent):
                 "type": "json_schema",
                 "json_schema": response_schema,
             },
-            "extra_body": {
-                "chat_template_kwargs": {"enable_thinking": False},
-            },
         }
+        _so_backend = get_settings().llm_backend.lower()
+        if _so_backend in ("mlx", "vllm"):
+            kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
 
         max_attempts = 2
         last_error: Optional[str] = None
@@ -2412,12 +2486,27 @@ class BaseStreamingAgent(StreamingAgent):
 
         if any(t in self.config.tools for t in ("document_search", "web_search")):
             parts.append("")
-            parts.append("## Search Result Relevance")
+            parts.append("## Search Result Relevance and Citations")
             parts.append(
                 "When you receive results from document_search or web_search, critically evaluate "
                 "whether they are actually relevant to the user's query. If the results are about "
                 "a completely different topic, IGNORE them — do not summarize or reference irrelevant "
                 "results. Only use results that genuinely answer or inform the user's question."
+            )
+        if "document_search" in self.config.tools:
+            parts.append("")
+            parts.append("## Mandatory Document Citations")
+            parts.append(
+                "EVERY sentence or claim that uses information from document_search results MUST "
+                "include an inline citation immediately after the claim. Use EXACTLY this markdown "
+                "format and nothing else:\n"
+                "  [Source: filename, p.N](doc:file_id:page_number)\n"
+                "Example: \"The policy requires annual reviews. [Source: policy.pdf, p.3](doc:abc-123:3)\"\n"
+                "Rules:\n"
+                "- Use the citation_url provided in the tool result for each source.\n"
+                "- Do NOT omit citations. Do NOT use bare URLs or vague references.\n"
+                "- If you cite multiple sources in one sentence, add each citation inline.\n"
+                "- If no relevant documents were found, say so clearly without fabricating citations."
             )
 
         attachment_section = self._build_attachment_context_section(context)

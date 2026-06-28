@@ -97,15 +97,17 @@ build_mcp() {
 
 # Write MCP config to .cursor/ for Cursor (project-level) and Claude (template)
 # Idempotent: uses atomic writes; skips claude-mcp.json if user has customized it
+#
+# Local env overrides: if .cursor/mcp-env.json exists it is merged into mcp.json.
+# Format: { "busibox-admin": { "PROXMOX_HOST_IP": "...", ... } }
+# This file is gitignored — put machine-specific env vars there so they survive
+# rebuilds without being committed.
 write_config() {
     local cursor_dir="${REPO_ROOT}/.cursor"
     mkdir -p "$cursor_dir"
     
-    # Cursor: .cursor/mcp.json (atomic write - safe for repeat runs)
-    local mcp_tmp
-    mcp_tmp=$(mktemp)
-    cat > "$mcp_tmp" << 'MCPJSON'
-{
+    # Base config (no env block — env comes from mcp-env.json or the existing mcp.json)
+    local base_json='{
   "mcpServers": {
     "busibox-core-dev": {
       "command": "node",
@@ -120,9 +122,55 @@ write_config() {
       "args": ["tools/mcp-admin/dist/index.js"]
     }
   }
+}'
+
+    # Cursor: .cursor/mcp.json — merge env from mcp-env.json if present, else
+    # preserve env blocks from the existing mcp.json so they survive rebuilds.
+    local mcp_out="${cursor_dir}/mcp.json"
+    local mcp_env_file="${cursor_dir}/mcp-env.json"
+    local mcp_tmp
+    mcp_tmp=$(mktemp)
+
+    if command -v node &>/dev/null; then
+        # Use Node.js to merge env blocks (already required for MCP servers)
+        node - "$mcp_env_file" "$mcp_out" <<NODESCRIPT
+const fs = require('fs');
+const base = ${base_json//$'\n'/\\n};
+const envFile = process.argv[1];
+const existingFile = process.argv[2];
+
+// Load env overrides from mcp-env.json (preferred source)
+let envOverrides = {};
+if (fs.existsSync(envFile)) {
+  try { envOverrides = JSON.parse(fs.readFileSync(envFile, 'utf8')); } catch {}
 }
-MCPJSON
-    mv "$mcp_tmp" "${cursor_dir}/mcp.json"
+
+// Fall back to preserving env blocks from the current mcp.json
+if (Object.keys(envOverrides).length === 0 && fs.existsSync(existingFile)) {
+  try {
+    const existing = JSON.parse(fs.readFileSync(existingFile, 'utf8'));
+    for (const [server, cfg] of Object.entries(existing.mcpServers || {})) {
+      if (cfg.env && Object.keys(cfg.env).length > 0) {
+        envOverrides[server] = cfg.env;
+      }
+    }
+  } catch {}
+}
+
+// Merge env into base config
+for (const [server, env] of Object.entries(envOverrides)) {
+  if (base.mcpServers[server]) {
+    base.mcpServers[server].env = env;
+  }
+}
+
+process.stdout.write(JSON.stringify(base, null, 2) + '\n');
+NODESCRIPT
+    else
+        echo "$base_json"
+    fi > "$mcp_tmp"
+
+    mv "$mcp_tmp" "$mcp_out"
     
     # Claude: .cursor/claude-mcp.json - only write if missing or still has placeholder
     # (user may have replaced __BUSIBOX_ROOT__ with their path - don't overwrite)

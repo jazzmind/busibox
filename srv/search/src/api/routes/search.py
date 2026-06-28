@@ -65,13 +65,17 @@ async def search(
     role_ids = getattr(request.state, 'role_ids', [])
     
     try:
+        file_ids_filter = getattr(search_request, 'file_ids', None) or []
         logger.info(
             "Search request received",
             user_id=user_id,
-            query=search_request.query,
+            query=search_request.query[:200],
             mode=search_request.mode,
             limit=search_request.limit,
             role_count=len(role_ids),
+            role_ids=role_ids,
+            file_ids_filter=file_ids_filter,
+            file_ids_filter_count=len(file_ids_filter),
         )
         
         # Prepare filters (exclude None values)

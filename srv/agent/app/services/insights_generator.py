@@ -33,6 +33,22 @@ from app.services.insights_service import InsightsService, ChatInsight
 
 logger = logging.getLogger(__name__)
 
+# Skip LLM insight extraction for trivial threads (greetings, acks, etc.)
+_MIN_INSIGHT_MESSAGE_CHARS = 15
+_MIN_INSIGHT_CONVERSATION_CHARS = 40
+
+
+def _conversation_too_short_for_insights(messages: List[Message]) -> bool:
+    """True when the thread lacks enough substance to bother the LLM."""
+    contents = [(msg.content or "").strip() for msg in messages if (msg.content or "").strip()]
+    if len(contents) < 2:
+        return True
+    if sum(len(c) for c in contents) < _MIN_INSIGHT_CONVERSATION_CHARS:
+        return True
+    if all(len(c) < _MIN_INSIGHT_MESSAGE_CHARS for c in contents):
+        return True
+    return False
+
 
 def get_embedding_config() -> Tuple[str, int]:
     """
@@ -1048,9 +1064,12 @@ async def analyze_conversation_for_insights(
     """
     existing = existing_insights or []
     
-    # Skip if conversation is too short
-    if len(messages) < 2:
-        logger.info(f"Conversation {conversation_id} too short for insight extraction")
+    # Skip trivial threads (too few messages or not enough substantive text)
+    if _conversation_too_short_for_insights(messages):
+        logger.info(
+            f"Conversation {conversation_id} too short for insight extraction",
+            extra={"conversation_id": conversation_id, "message_count": len(messages)},
+        )
         return []
     
     # Format conversation for LLM

@@ -1,7 +1,7 @@
 """
 Tests for MinIO Markdown and Image Storage
 
-These tests use REAL MinIO service and credentials from environment.
+These tests use a REAL MinIO service and credentials from environment.
 All tests use unique UUIDs to avoid conflicts and include proper cleanup.
 """
 
@@ -9,6 +9,7 @@ import pytest
 import uuid
 
 
+@pytest.mark.integration
 class TestMinIOMarkdownStorage:
     """Test suite for MinIO markdown and image storage"""
 

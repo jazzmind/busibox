@@ -16,25 +16,10 @@ from app.auth.tokens import get_service_token
 
 async def _get_user_token(test_user_id: str) -> str:
     """
-    Get a valid user JWT for testing.
-    
-    In Zero Trust mode, we use the AuthTestClient which:
-    1. Uses pre-created test users (no client auth)
-    2. Gets tokens via admin-scoped token exchange
+    Get a valid user JWT for testing via the shared AuthTestClient.
     """
-    # Import the shared testing library
-    import sys
-    import os
-    
-    # Add shared testing library to path if not already
-    _agent_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    _testing_path = os.path.join(_agent_root, "src", "testing")
-    if _testing_path not in sys.path and os.path.exists(_testing_path):
-        sys.path.insert(0, _testing_path)
-    
-    from testing import AuthTestClient
-    
-    # Use the shared test client to get a token
+    from busibox_common.testing.auth import AuthTestClient
+
     client = AuthTestClient(test_user_id=test_user_id)
     return client.get_token(audience="agent-api")
 

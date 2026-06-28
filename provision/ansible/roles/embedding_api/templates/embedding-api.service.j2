@@ -2,6 +2,9 @@
 Description=Busibox Embedding API
 Documentation=https://github.com/sonnenreich/busibox
 After=network.target
+# Stop restarting after 5 failures in 5 minutes to prevent thrashing
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -23,8 +26,6 @@ TimeoutStopSec=30
 # Restart policy
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=3
 
 # Security hardening (relaxed to allow tmp access)
 NoNewPrivileges=true

@@ -152,16 +152,32 @@ pub fn render(f: &mut Frame, app: &App) {
         render_secrets_table(f, app, table_area);
     }
 
-    // Help bar
-    let help = Paragraph::new(Line::from(vec![
-        Span::styled(" Esc ", theme::highlight()),
-        Span::styled("Back  ", theme::normal()),
-        Span::styled("r ", theme::highlight()),
-        Span::styled("Refresh  ", theme::normal()),
-        Span::styled("j/k ", theme::muted()),
-        Span::styled("Scroll", theme::muted()),
-    ]));
+    // Help bar — changes when the secret popup is open
+    let help = if app.validate_secrets_show_secret.is_some() {
+        Paragraph::new(Line::from(vec![
+            Span::styled(" Esc ", theme::highlight()),
+            Span::styled("Close  ", theme::normal()),
+            Span::styled("c ", theme::highlight()),
+            Span::styled("Copy to clipboard", theme::normal()),
+        ]))
+    } else {
+        Paragraph::new(Line::from(vec![
+            Span::styled(" Esc ", theme::highlight()),
+            Span::styled("Back  ", theme::normal()),
+            Span::styled("r ", theme::highlight()),
+            Span::styled("Refresh  ", theme::normal()),
+            Span::styled("j/k ", theme::muted()),
+            Span::styled("Scroll  ", theme::muted()),
+            Span::styled("s ", theme::highlight()),
+            Span::styled("View secret", theme::normal()),
+        ]))
+    };
     f.render_widget(help, chunks[4]);
+
+    // Secret popup — rendered on top of everything else
+    if let Some(ref key) = app.validate_secrets_show_secret.clone() {
+        render_secret_popup(f, app, area, key);
+    }
 }
 
 fn render_secrets_table(f: &mut Frame, app: &App, area: Rect) {
@@ -181,16 +197,29 @@ fn render_secrets_table(f: &mut Frame, app: &App, area: Rect) {
         .style(Style::default().bg(theme::BRAND_DIM))
         .height(1);
 
-    // Build rows
+    // Compute scroll offset to keep selected row visible
     let results = &app.validate_secrets_results;
     let visible_height = area.height.saturating_sub(4) as usize;
-    let scroll = app.validate_secrets_scroll.min(results.len().saturating_sub(visible_height));
+    let selected = app.validate_secrets_selected.min(results.len().saturating_sub(1));
+
+    // Derive scroll from selected: keep selected within the visible window
+    let scroll = if selected < app.validate_secrets_scroll {
+        selected
+    } else if selected >= app.validate_secrets_scroll + visible_height {
+        selected + 1 - visible_height
+    } else {
+        app.validate_secrets_scroll
+    }
+    .min(results.len().saturating_sub(visible_height));
 
     let rows: Vec<Row> = results
         .iter()
+        .enumerate()
         .skip(scroll)
         .take(visible_height)
-        .map(|entry| {
+        .map(|(i, entry)| {
+            let is_selected = i == selected;
+
             let (local_label, local_style) = key_state_label(&entry.local);
             let local_icon = match &entry.local {
                 KeyState::Ok => "✓ ",
@@ -202,13 +231,17 @@ fn render_secrets_table(f: &mut Frame, app: &App, area: Rect) {
             let live_icon = live_state_icon(&entry.live);
 
             let req_label = if entry.required { "yes" } else { "" };
-            let req_style = if entry.required {
+            let req_style = if is_selected {
+                theme::selected()
+            } else if entry.required {
                 theme::info()
             } else {
                 theme::dim()
             };
 
-            let key_style = if entry.required && (entry.local.is_bad() || entry.live.is_bad()) {
+            let key_style = if is_selected {
+                theme::selected()
+            } else if entry.required && (entry.local.is_bad() || entry.live.is_bad()) {
                 theme::error()
             } else if !entry.required {
                 theme::muted()
@@ -216,11 +249,26 @@ fn render_secrets_table(f: &mut Frame, app: &App, area: Rect) {
                 theme::normal()
             };
 
+            let status_style = if is_selected { theme::selected() } else { local_style };
+            let live_row_style = if is_selected { theme::selected() } else { live_style };
+
+            let has_value = !app.validate_secrets_values
+                .get(&entry.key_path)
+                .map(|v| v.is_empty())
+                .unwrap_or(true);
+
+            // Append a hint indicator on the key cell if value is available
+            let key_display = if has_value {
+                format!(" {} ›", entry.key_path)
+            } else {
+                format!(" {}", entry.key_path)
+            };
+
             let mut cells = vec![
-                Cell::from(format!(" {}", entry.key_path)).style(key_style),
+                Cell::from(key_display).style(key_style),
                 Cell::from(req_label).style(req_style),
-                Cell::from(format!("{}{}", local_icon, local_label)).style(local_style),
-                Cell::from(format!("{}{}", live_icon, live_label)).style(live_style),
+                Cell::from(format!("{}{}", local_icon, local_label)).style(status_style),
+                Cell::from(format!("{}{}", live_icon, live_label)).style(live_row_style),
             ];
 
             if show_remote {
@@ -230,12 +278,18 @@ fn render_secrets_table(f: &mut Frame, app: &App, area: Rect) {
                     KeyState::NotChecked | KeyState::Pending => "  ",
                     _ => "✗ ",
                 };
+                let rs = if is_selected { theme::selected() } else { remote_style };
                 cells.push(
-                    Cell::from(format!("{}{}", remote_icon, remote_label)).style(remote_style),
+                    Cell::from(format!("{}{}", remote_icon, remote_label)).style(rs),
                 );
             }
 
-            Row::new(cells)
+            let row = Row::new(cells);
+            if is_selected {
+                row.style(theme::selected())
+            } else {
+                row
+            }
         })
         .collect();
 
@@ -277,39 +331,201 @@ fn render_secrets_table(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+fn render_secret_popup(f: &mut Frame, app: &App, area: Rect, key: &str) {
+    let value = app
+        .validate_secrets_values
+        .get(key)
+        .map(|v| v.as_str())
+        .unwrap_or("<value not available>");
+
+    // Wrap value into lines of at most popup_inner_width chars
+    let popup_width = 72u16.min(area.width.saturating_sub(8));
+    let inner_width = popup_width.saturating_sub(4) as usize;
+
+    let value_lines: Vec<Line> = if value.len() <= inner_width {
+        vec![Line::from(Span::styled(value.to_string(), theme::normal()))]
+    } else {
+        value
+            .as_bytes()
+            .chunks(inner_width)
+            .map(|chunk| {
+                Line::from(Span::styled(
+                    String::from_utf8_lossy(chunk).into_owned(),
+                    theme::normal(),
+                ))
+            })
+            .collect()
+    };
+
+    // popup height: title + key line + separator + value lines + empty + help
+    let content_height = 1 + 1 + 1 + value_lines.len() as u16 + 1 + 1;
+    let popup_height = (content_height + 2).min(area.height.saturating_sub(6));
+
+    let popup_area = Rect {
+        x: area.x + (area.width.saturating_sub(popup_width)) / 2,
+        y: area.y + (area.height.saturating_sub(popup_height)) / 2,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    f.render_widget(Clear, popup_area);
+
+    let inner = popup_area.inner(Margin::new(2, 1));
+
+    // Key path line
+    let mut lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled("Key:  ", theme::muted()),
+            Span::styled(key.to_string(), theme::info()),
+        ]),
+        Line::from(Span::styled(
+            "─".repeat(inner.width as usize),
+            theme::dim(),
+        )),
+        Line::from(vec![
+            Span::styled("Value:", theme::muted()),
+        ]),
+    ];
+    lines.extend(value_lines.into_iter().map(|l| {
+        Line::from(vec![
+            Span::raw("  "),
+            l.spans.into_iter().next().unwrap_or_default(),
+        ])
+    }));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(" c ", theme::highlight()),
+        Span::styled("Copy to clipboard  ", theme::normal()),
+        Span::styled(" Esc ", theme::highlight()),
+        Span::styled("Close", theme::muted()),
+    ]));
+
+    let para = Paragraph::new(lines).wrap(Wrap { trim: false });
+    f.render_widget(para, inner);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::highlight())
+        .title(" View Secret ")
+        .title_style(theme::heading());
+    f.render_widget(block, popup_area);
+}
+
 pub fn handle_key(app: &mut App, key: KeyEvent) {
+    // When the secret popup is open, only Esc (close) and c (copy) are active
+    if app.validate_secrets_show_secret.is_some() {
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter => {
+                app.validate_secrets_show_secret = None;
+            }
+            KeyCode::Char('c') => {
+                if let Some(ref k) = app.validate_secrets_show_secret.clone() {
+                    if let Some(value) = app.validate_secrets_values.get(k) {
+                        if copy_to_clipboard(value).is_ok() {
+                            app.set_message(
+                                &format!("Copied {} to clipboard", k),
+                                crate::app::MessageKind::Success,
+                            );
+                        } else {
+                            app.set_message(
+                                "Clipboard copy failed (pbcopy/xclip not found?)",
+                                crate::app::MessageKind::Warning,
+                            );
+                        }
+                        app.validate_secrets_show_secret = None;
+                    }
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+
     match key.code {
         KeyCode::Esc => {
             app.screen = Screen::Welcome;
             app.validate_secrets_results.clear();
+            app.validate_secrets_values.clear();
             app.validate_secrets_scroll = 0;
+            app.validate_secrets_selected = 0;
+            app.validate_secrets_show_secret = None;
             app.validate_secrets_loading = false;
             app.validate_secrets_error = None;
         }
         KeyCode::Char('r') if !app.validate_secrets_loading => {
             app.validate_secrets_results.clear();
+            app.validate_secrets_values.clear();
             app.validate_secrets_scroll = 0;
+            app.validate_secrets_selected = 0;
+            app.validate_secrets_show_secret = None;
             app.validate_secrets_error = None;
             app.pending_compare_secrets = true;
         }
         KeyCode::Down | KeyCode::Char('j') => {
             let max = app.validate_secrets_results.len().saturating_sub(1);
-            if app.validate_secrets_scroll < max {
-                app.validate_secrets_scroll += 1;
+            if app.validate_secrets_selected < max {
+                app.validate_secrets_selected += 1;
             }
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            if app.validate_secrets_scroll > 0 {
-                app.validate_secrets_scroll -= 1;
+            if app.validate_secrets_selected > 0 {
+                app.validate_secrets_selected -= 1;
             }
         }
         KeyCode::PageDown => {
-            app.validate_secrets_scroll = (app.validate_secrets_scroll + 10)
-                .min(app.validate_secrets_results.len().saturating_sub(1));
+            let max = app.validate_secrets_results.len().saturating_sub(1);
+            app.validate_secrets_selected = (app.validate_secrets_selected + 10).min(max);
         }
         KeyCode::PageUp => {
-            app.validate_secrets_scroll = app.validate_secrets_scroll.saturating_sub(10);
+            app.validate_secrets_selected = app.validate_secrets_selected.saturating_sub(10);
+        }
+        KeyCode::Char('s') if !app.validate_secrets_results.is_empty() => {
+            let sel = app.validate_secrets_selected
+                .min(app.validate_secrets_results.len().saturating_sub(1));
+            if let Some(entry) = app.validate_secrets_results.get(sel) {
+                let key = entry.key_path.clone();
+                if app.validate_secrets_values.contains_key(&key) {
+                    app.validate_secrets_show_secret = Some(key);
+                } else {
+                    app.set_message(
+                        "No decrypted value available for this key",
+                        crate::app::MessageKind::Info,
+                    );
+                }
+            }
         }
         _ => {}
     }
+}
+
+fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    #[cfg(target_os = "macos")]
+    let mut child = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    #[cfg(target_os = "linux")]
+    let mut child = Command::new("xclip")
+        .args(["-selection", "clipboard"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    return Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "clipboard not supported on this platform",
+    ));
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(text.as_bytes())?;
+    }
+    child.wait()?;
+    Ok(())
 }

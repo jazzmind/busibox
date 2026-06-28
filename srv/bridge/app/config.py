@@ -98,6 +98,12 @@ class Settings(BaseSettings):
     enable_doc_search: bool = Field(True, description="Enable document search")
     default_model: str = Field("auto", description="Default model selection")
     default_agent_id: str = Field("chat-agent", description="Default agent ID for inbound bridge messages")
+
+    # Per-channel agent overrides (empty = use default_agent_id)
+    telegram_agent_id: str = Field("", description="Agent ID for Telegram channel (empty = default)")
+    signal_agent_id: str = Field("", description="Agent ID for Signal channel (empty = default)")
+    discord_agent_id: str = Field("", description="Agent ID for Discord channel (empty = default)")
+    whatsapp_agent_id: str = Field("", description="Agent ID for WhatsApp channel (empty = default)")
     max_message_length: int = Field(4000, description="Max message length for Signal")
 
     # Rate limiting
@@ -228,14 +234,15 @@ class Settings(BaseSettings):
     resend_enabled: bool = Field(True, description="Enable Resend provider when API key is configured")
     resend_api_key: Optional[str] = Field(None, description="Resend API key (alternative to SMTP)")
 
-    # Inbound email (IMAP polling)
+    # Inbound email (IMAP or POP3 polling)
     email_inbound_enabled: bool = Field(False, description="Enable inbound email polling channel")
-    imap_host: Optional[str] = Field(None, description="IMAP server host")
-    imap_port: int = Field(993, description="IMAP server port")
-    imap_user: Optional[str] = Field(None, description="IMAP username")
-    imap_password: Optional[str] = Field(None, description="IMAP password")
-    imap_use_ssl: bool = Field(True, description="Use IMAP SSL")
-    imap_folder: str = Field("INBOX", description="IMAP folder to poll")
+    email_inbound_protocol: str = Field("imap", description="Inbound email protocol: imap or pop3")
+    imap_host: Optional[str] = Field(None, description="Inbound server host (IMAP or POP3)")
+    imap_port: int = Field(993, description="Inbound server port (993 for IMAP, 995 for POP3)")
+    imap_user: Optional[str] = Field(None, description="Inbound email username")
+    imap_password: Optional[str] = Field(None, description="Inbound email password")
+    imap_use_ssl: bool = Field(True, description="Use SSL for inbound connection")
+    imap_folder: str = Field("INBOX", description="IMAP folder to poll (IMAP only)")
     email_inbound_poll_interval: float = Field(30.0, description="Seconds between inbound email polls")
     email_allowed_senders: str = Field(
         "",
