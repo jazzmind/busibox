@@ -112,6 +112,15 @@ pub struct Profile {
     /// Maps service name (e.g. "litellm") to the alternative host port.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub port_overrides: HashMap<String, u16>,
+    /// Service preset chosen at install time: "lite", "standard", or "full".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_preset: Option<String>,
+    /// Add-on packs enabled for this profile (e.g. ["local-models", "rag-milvus"]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addon_packs: Vec<String>,
+    /// Local LLM backend selected at install time (e.g. "mlx-lm", "vllm", "ollama").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_llm_backend: Option<String>,
 }
 
 impl Profile {

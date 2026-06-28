@@ -221,6 +221,32 @@ fn main() -> Result<()> {
         Err(_) => {}
     }
 
+    // First-run detection: if there are no profiles, go straight to the install wizard.
+    // If profiles exist, start on ProfileSelect so the user can pick or manage them.
+    let has_profiles = app
+        .profiles
+        .as_ref()
+        .map(|p| !p.profiles.is_empty())
+        .unwrap_or(false);
+    if !has_profiles {
+        app.screen = Screen::InstallWizard;
+    } else {
+        app.screen = Screen::ProfileSelect;
+    }
+
+    // When profiles exist, pre-select the active profile in the profile selector.
+    if has_profiles {
+        if let Some(profiles) = &app.profiles {
+            let active = &profiles.active;
+            let idx = profiles
+                .profiles
+                .keys()
+                .position(|k| k == active)
+                .unwrap_or(0);
+            app.profile_selected = idx;
+        }
+    }
+
     // Try to lock the active profile. If another instance holds it,
     // redirect to profile select so the user can pick a different one.
     let mut active_locked = false;
@@ -990,6 +1016,7 @@ fn render(app: &App, f: &mut ratatui::Frame) {
 
     match &app.screen {
         Screen::Welcome => screens::welcome::render(f, app),
+        Screen::InstallWizard => screens::install_wizard::render(f, app),
         Screen::SetupMode => screens::setup_mode::render(f, app),
         Screen::SshSetup => screens::ssh_setup::render(f, app),
         Screen::TailscaleSetup => screens::tailscale_setup::render(f, app),
@@ -1010,7 +1037,7 @@ fn render(app: &App, f: &mut ratatui::Frame) {
     }
 
     // Profile header bar overlay (except Welcome and ProfileSelect)
-    if !matches!(&app.screen, Screen::Welcome | Screen::ProfileSelect) {
+    if !matches!(&app.screen, Screen::Welcome | Screen::InstallWizard | Screen::ProfileSelect) {
         render_profile_header(f, app, area);
     }
 }
@@ -1096,6 +1123,7 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
 
     match &app.screen {
         Screen::Welcome => screens::welcome::handle_key(app, key),
+        Screen::InstallWizard => screens::install_wizard::handle_key(app, key),
         Screen::SetupMode => screens::setup_mode::handle_key(app, key),
         Screen::SshSetup => screens::ssh_setup::handle_key(app, key),
         Screen::TailscaleSetup => screens::tailscale_setup::handle_key(app, key),

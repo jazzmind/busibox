@@ -191,6 +191,116 @@ pub enum AddonPack {
     RagQdrant,
 }
 
+/// Local LLM backends available for the local-models add-on pack.
+/// Hardware availability is determined at wizard time via `available_for_hardware`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LocalLlmBackend {
+    /// Apple MLX (mlx-lm) — Apple Silicon only.
+    MlxLm,
+    /// vLLM for Apple Silicon (vllm-mlx) — Apple Silicon only.
+    VllmMlx,
+    /// vLLM — NVIDIA CUDA GPUs.
+    Vllm,
+    /// llama.cpp — CPU or any GPU; slower but broadly compatible.
+    LlamaCpp,
+    /// Ollama — easiest path; CPU or any GPU; good for small/mid models.
+    Ollama,
+}
+
+impl LocalLlmBackend {
+    pub fn id(&self) -> &'static str {
+        match self {
+            Self::MlxLm => "mlx-lm",
+            Self::VllmMlx => "vllm-mlx",
+            Self::Vllm => "vllm",
+            Self::LlamaCpp => "llama.cpp",
+            Self::Ollama => "ollama",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::MlxLm => "MLX (mlx-lm)",
+            Self::VllmMlx => "vLLM-MLX",
+            Self::Vllm => "vLLM (CUDA)",
+            Self::LlamaCpp => "llama.cpp",
+            Self::Ollama => "Ollama",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::MlxLm => "Native Apple Silicon LLM inference — fastest on M-series Macs",
+            Self::VllmMlx => "vLLM optimized for Apple Silicon GPUs",
+            Self::Vllm => "High-throughput NVIDIA GPU inference",
+            Self::LlamaCpp => "CPU-compatible; broad hardware support",
+            Self::Ollama => "Easiest setup; works on CPU or any GPU",
+        }
+    }
+
+    /// The Ansible service name(s) this backend maps to for deployment.
+    pub fn services(&self) -> &'static [&'static str] {
+        match self {
+            Self::MlxLm => &["mlx"],
+            Self::VllmMlx => &["vllm"],
+            Self::Vllm => &["vllm"],
+            Self::LlamaCpp => &["ollama"],
+            Self::Ollama => &["ollama"],
+        }
+    }
+
+    /// Return backends appropriate for the given hardware profile.
+    /// `arch` is the CPU architecture (e.g. "arm64", "x86_64").
+    /// `has_nvidia_gpu` is true when an NVIDIA GPU is detected.
+    pub fn available_for_hardware(arch: &str, has_nvidia_gpu: bool) -> Vec<Self> {
+        let is_apple_silicon = arch == "arm64" || arch == "aarch64";
+        let mut out = Vec::new();
+        if is_apple_silicon {
+            out.push(Self::MlxLm);
+            out.push(Self::VllmMlx);
+        }
+        if has_nvidia_gpu {
+            out.push(Self::Vllm);
+        }
+        out.push(Self::Ollama);
+        out.push(Self::LlamaCpp);
+        out
+    }
+
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::MlxLm,
+            Self::VllmMlx,
+            Self::Vllm,
+            Self::LlamaCpp,
+            Self::Ollama,
+        ]
+    }
+}
+
+impl std::fmt::Display for LocalLlmBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.id())
+    }
+}
+
+impl std::str::FromStr for LocalLlmBackend {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "mlx-lm" | "mlx_lm" | "mlx" => Ok(Self::MlxLm),
+            "vllm-mlx" | "vllm_mlx" => Ok(Self::VllmMlx),
+            "vllm" => Ok(Self::Vllm),
+            "llama.cpp" | "llama_cpp" | "llamacpp" => Ok(Self::LlamaCpp),
+            "ollama" => Ok(Self::Ollama),
+            other => Err(format!(
+                "unknown LLM backend '{other}' (expected: mlx-lm, vllm-mlx, vllm, llama.cpp, ollama)"
+            )),
+        }
+    }
+}
+
 impl AddonPack {
     pub fn id(&self) -> &'static str {
         match self {

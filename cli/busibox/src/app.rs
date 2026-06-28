@@ -11,6 +11,7 @@ use std::sync::mpsc;
 #[allow(dead_code)]
 pub enum Screen {
     Welcome,
+    InstallWizard,
     SetupMode,
     SshSetup,
     TailscaleSetup,
@@ -34,6 +35,16 @@ pub enum Screen {
 pub enum SetupTarget {
     Local,
     Remote,
+}
+
+/// Steps within the install wizard (first-run flow).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum WizardStep {
+    #[default]
+    Target,   // Step 1: local / remote / import
+    Preset,   // Step 2: lite / lite+local-llm / full
+    LlmBackend, // Step 2b: pick local LLM backend (conditional)
+    Confirm,  // Step 3: review + create profile
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -281,6 +292,14 @@ pub struct App {
 
     // Profile delete confirmation
     pub profile_delete_confirming: bool,
+
+    // Install wizard state (first-run)
+    pub wizard_step: WizardStep,
+    pub wizard_target_selected: usize,    // 0=Local, 1=Remote, 2=Import
+    pub wizard_preset_selected: usize,    // 0=Lite, 1=Lite+LocalLLM, 2=Full
+    pub wizard_backend_selected: usize,   // index into available local LLM backends
+    pub wizard_available_backends: Vec<String>, // backend ids available for this hardware
+    pub wizard_label_input: String,       // profile label
 
     // Profile edit state
     pub profile_edit_field: usize,
@@ -905,6 +924,12 @@ impl App {
             profile_selected: 0,
             profile_lock: None,
             profile_delete_confirming: false,
+            wizard_step: WizardStep::Target,
+            wizard_target_selected: 0,
+            wizard_preset_selected: 0,
+            wizard_backend_selected: 0,
+            wizard_available_backends: Vec::new(),
+            wizard_label_input: String::new(),
             profile_edit_field: 0,
             profile_edit_buffer: String::new(),
             profile_editing: false,

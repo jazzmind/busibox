@@ -1,6 +1,7 @@
 pub mod admin_login;
 pub mod hardware_report;
 pub mod install;
+pub mod install_wizard;
 pub mod k8s_manage;
 pub mod k8s_setup;
 pub mod manage;

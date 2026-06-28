@@ -251,6 +251,10 @@ mod tests {
             dev_apps_dir: None,
             huggingface_token: None,
             direct_access: None,
+            port_overrides: HashMap::new(),
+            service_preset: None,
+            addon_packs: Vec::new(),
+            local_llm_backend: None,
         }
     }
 

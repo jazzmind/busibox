@@ -759,6 +759,9 @@ fn save_profile_and_continue(app: &mut App) {
         huggingface_token: None,
         direct_access: None,
         port_overrides: Default::default(),
+        service_preset: None,
+        addon_packs: Vec::new(),
+        local_llm_backend: None,
     };
 
     match profile::create_profile(&app.repo_root, &profile_id, profile, true) {
