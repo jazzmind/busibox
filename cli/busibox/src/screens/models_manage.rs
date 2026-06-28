@@ -339,6 +339,8 @@ pub fn render(f: &mut Frame, app: &App) {
                 help_spans.push(Span::styled("Svc  ", theme::normal()));
                 help_spans.push(Span::styled("b ", theme::highlight()));
                 help_spans.push(Span::styled("Bench  ", theme::normal()));
+                help_spans.push(Span::styled("h ", theme::highlight()));
+                help_spans.push(Span::styled("HF Browse  ", theme::normal()));
                 help_spans.push(Span::styled("d ", theme::highlight()));
                 help_spans.push(Span::styled("Deploy  ", theme::success()));
             }
@@ -1220,6 +1222,18 @@ fn handle_tier_key(app: &mut App, key: KeyEvent) {
             app.models_manage_loaded = false;
             app.models_manage_readonly = false;
             app.screen = Screen::Welcome;
+        }
+        KeyCode::Char('h') => {
+            // Open HuggingFace model browser
+            app.browse_step = crate::app::BrowseStep::Token;
+            app.browse_family_selected = 0;
+            app.browse_engine_selected = 0;
+            app.browse_model_selected = 0;
+            app.browse_model_scroll = 0;
+            app.browse_models.clear();
+            app.browse_loading = false;
+            app.browse_rx = None;
+            app.screen = Screen::ModelBrowse;
         }
         KeyCode::Up | KeyCode::Char('k') => {
             if !readonly && app.models_manage_tier_selected > 0 {

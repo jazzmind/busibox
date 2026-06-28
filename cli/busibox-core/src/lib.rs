@@ -1,6 +1,7 @@
 pub mod deploy;
 pub mod hardware;
 pub mod health;
+pub mod model_catalog;
 pub mod profile;
 pub mod profiles;
 pub mod services;

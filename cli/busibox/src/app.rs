@@ -29,6 +29,7 @@ pub enum Screen {
     K8sManage,
     ValidateSecrets,
     RunTests,
+    ModelBrowse,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -45,6 +46,34 @@ pub enum WizardStep {
     Preset,   // Step 2: lite / lite+local-llm / full
     LlmBackend, // Step 2b: pick local LLM backend (conditional)
     Confirm,  // Step 3: review + create profile
+}
+
+/// Steps within the HuggingFace model browser.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum BrowseStep {
+    #[default]
+    Token,    // Step 1: enter/confirm HF token (skipped when token already set)
+    Family,   // Step 2: pick model family (qwen, deepseek, gemma, etc.)
+    Engine,   // Step 3: pick inference engine (auto-filtered by hardware)
+    Models,   // Step 4: pick model + quantization from list
+    Confirm,  // Step 5: confirm and trigger download
+}
+
+/// A model entry shown in the browse screen. Can come from the curated catalog
+/// or from a live HF API query.
+#[derive(Debug, Clone)]
+pub struct BrowsableModel {
+    pub hf_repo: String,
+    pub display_name: String,
+    pub param_billions: f32,
+    pub quantization: String,
+    pub size_gb: f32,
+    pub description: String,
+    pub gated: bool,
+    /// True if this entry came from the curated catalog (verified working).
+    pub curated: bool,
+    /// Approximate HF download count (0 when unknown).
+    pub downloads: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -300,6 +329,18 @@ pub struct App {
     pub wizard_backend_selected: usize,   // index into available local LLM backends
     pub wizard_available_backends: Vec<String>, // backend ids available for this hardware
     pub wizard_label_input: String,       // profile label
+
+    // HF model browser state
+    pub browse_step: BrowseStep,
+    pub browse_family_selected: usize,
+    pub browse_engine_selected: usize,
+    pub browse_model_scroll: usize,
+    pub browse_model_selected: usize,
+    pub browse_models: Vec<BrowsableModel>,
+    pub browse_hf_token_input: String,
+    pub browse_loading: bool,
+    /// Receiver for background HF API results.
+    pub browse_rx: Option<std::sync::mpsc::Receiver<crate::screens::model_browse::BrowseUpdate>>,
 
     // Profile edit state
     pub profile_edit_field: usize,
@@ -930,6 +971,15 @@ impl App {
             wizard_backend_selected: 0,
             wizard_available_backends: Vec::new(),
             wizard_label_input: String::new(),
+            browse_step: BrowseStep::Token,
+            browse_family_selected: 0,
+            browse_engine_selected: 0,
+            browse_model_scroll: 0,
+            browse_model_selected: 0,
+            browse_models: Vec::new(),
+            browse_hf_token_input: String::new(),
+            browse_loading: false,
+            browse_rx: None,
             profile_edit_field: 0,
             profile_edit_buffer: String::new(),
             profile_editing: false,

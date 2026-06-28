@@ -6,6 +6,7 @@ pub mod k8s_manage;
 pub mod k8s_setup;
 pub mod manage;
 pub mod model_benchmark;
+pub mod model_browse;
 pub mod model_config;
 pub mod model_download;
 pub mod models_manage;
