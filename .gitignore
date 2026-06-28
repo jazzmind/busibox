@@ -112,3 +112,4 @@ k8s/terraform/*.tfvars
 k8s/terraform/.terraform/
 k8s/terraform/*.tfstate*
 provision/.cache/*
+.cursor/mcp-env.json
