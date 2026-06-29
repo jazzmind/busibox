@@ -249,6 +249,239 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    // ===== DIAGNOSTIC TESTS =====
+    // Run with: cargo test debug_ -- --nocapture
+    // These print intermediate values to expose exactly where crypto diverges.
+
+    /// Derive a key from a fixed known input and print the hex output.
+    /// If Argon2 default parameters differ between builds or machines, the hex will differ.
+    /// Cross-compare this output against a working machine to detect param drift.
+    #[test]
+    fn debug_argon2_params_are_stable() {
+        // Fixed inputs — output must be identical everywhere if params are the same.
+        let password = b"debug-password-busibox";
+        let salt = [0x42u8; 32];
+
+        let mut key = [0u8; 32];
+        let start = std::time::Instant::now();
+        Argon2::default()
+            .hash_password_into(password, &salt, &mut key)
+            .expect("Argon2 key derivation failed");
+        let elapsed = start.elapsed();
+
+        eprintln!("=== Argon2 parameter fingerprint ===");
+        eprintln!("Input password: {:?}", std::str::from_utf8(password).unwrap());
+        eprintln!("Salt (hex):     {}", hex(&salt));
+        eprintln!("Output key:     {}", hex(&key));
+        eprintln!("Derivation time: {:?}", elapsed);
+        eprintln!();
+        eprintln!("If this key differs from another machine, Argon2 default params changed.");
+        eprintln!("Expected stable value (first run establishes baseline): {}", hex(&key));
+    }
+
+    /// Encrypt a known value and print every intermediate byte array.
+    /// Use this to trace exactly what bytes are produced at each stage.
+    #[test]
+    fn debug_encrypt_decrypt_with_full_trace() {
+        let vault_pw = "known-test-vault-pw-9999";
+        let master_pw = "known-test-master-pw";
+
+        eprintln!("=== Encrypt trace ===");
+        eprintln!("Vault password:  {:?}", vault_pw);
+        eprintln!("Vault pw bytes:  {:?}", vault_pw.as_bytes());
+        eprintln!("Master password: {:?}", master_pw);
+
+        let mut salt = [0u8; 32];
+        OsRng.fill_bytes(&mut salt);
+        eprintln!("Salt (hex):      {}", hex(&salt));
+        eprintln!("Salt (b64):      {}", B64.encode(salt));
+
+        let mut key_bytes = [0u8; 32];
+        Argon2::default()
+            .hash_password_into(master_pw.as_bytes(), &salt, &mut key_bytes)
+            .unwrap();
+        eprintln!("Derived key:     {}", hex(&key_bytes));
+
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+        let cipher = Aes256Gcm::new(key);
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        eprintln!("Nonce (hex):     {}", hex(&nonce));
+        eprintln!("Nonce len:       {} bytes (expected 12)", nonce.len());
+
+        let ciphertext = cipher.encrypt(&nonce, vault_pw.as_bytes()).unwrap();
+        eprintln!("Ciphertext (hex): {}", hex(&ciphertext));
+        eprintln!(
+            "Ciphertext len:  {} bytes ({} plaintext + 16 GCM tag)",
+            ciphertext.len(),
+            vault_pw.len()
+        );
+
+        eprintln!("\n=== Decrypt trace ===");
+        let plaintext = cipher.decrypt(&nonce, ciphertext.as_ref()).unwrap();
+        eprintln!("Plaintext bytes: {:?}", plaintext);
+        let plaintext_str = String::from_utf8(plaintext.clone()).unwrap();
+        eprintln!("Plaintext str:   {:?}", plaintext_str);
+        eprintln!("Lengths match:   {}", plaintext.len() == vault_pw.len());
+        assert_eq!(plaintext, vault_pw.as_bytes(), "round-trip mismatch");
+    }
+
+    /// Inspect the actual vault key file on disk without decrypting it.
+    /// Reveals: file structure, byte lengths, whether data is valid base64.
+    #[test]
+    fn debug_inspect_vault_key_file_structure() {
+        let profile = "local-development-docker";
+        let path = vault_key_path(profile).unwrap();
+
+        eprintln!("=== Vault key file inspection ===");
+        eprintln!("Profile: {profile}");
+        eprintln!("Path:    {}", path.display());
+        eprintln!("Exists:  {}", path.exists());
+
+        if !path.exists() {
+            eprintln!("SKIP: file not found");
+            return;
+        }
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        eprintln!("Raw file contents:\n{raw}");
+
+        let enc = load_encrypted_vault(&path).unwrap();
+        eprintln!("Version:       {}", enc.version);
+
+        let salt_bytes = B64.decode(&enc.salt).unwrap();
+        let nonce_bytes = B64.decode(&enc.nonce).unwrap();
+        let ct_bytes = B64.decode(&enc.ciphertext).unwrap();
+
+        eprintln!("Salt:          {} bytes, hex: {}", salt_bytes.len(), hex(&salt_bytes));
+        eprintln!("Nonce:         {} bytes, hex: {}", nonce_bytes.len(), hex(&nonce_bytes));
+        eprintln!("Ciphertext:    {} bytes", ct_bytes.len());
+
+        let pw_len = ct_bytes.len().saturating_sub(16);
+        eprintln!("Decrypted pw will be {} chars (ciphertext - 16 byte GCM tag)", pw_len);
+
+        if nonce_bytes.len() != 12 {
+            eprintln!("WARNING: nonce is {} bytes, expected 12 for AES-GCM", nonce_bytes.len());
+        }
+        if salt_bytes.len() != 32 {
+            eprintln!("WARNING: salt is {} bytes, expected 32", salt_bytes.len());
+        }
+        if pw_len != 32 {
+            eprintln!("WARNING: expected 32-char vault password, got {pw_len} — possible trailing whitespace or version mismatch");
+        }
+    }
+
+    /// Decrypt the actual vault key using a master password from env var.
+    /// Shows the raw bytes of the decrypted vault password — exposes trailing
+    /// newlines/whitespace that would silently corrupt ansible-vault decryption.
+    ///
+    /// Usage:
+    ///   BUSIBOX_TEST_MASTER_PW="yourpassword" cargo test debug_decrypt_actual_vault -- --nocapture
+    #[test]
+    fn debug_decrypt_actual_vault_key() {
+        let master_pw = match std::env::var("BUSIBOX_TEST_MASTER_PW") {
+            Ok(v) => v,
+            Err(_) => {
+                eprintln!(
+                    "SKIP: set BUSIBOX_TEST_MASTER_PW=<password> to run this test\n\
+                     Example: BUSIBOX_TEST_MASTER_PW=mypassword cargo test debug_decrypt_actual_vault -- --nocapture"
+                );
+                return;
+            }
+        };
+
+        let profile = std::env::var("BUSIBOX_TEST_PROFILE")
+            .unwrap_or_else(|_| "local-development-docker".into());
+
+        let path = vault_key_path(&profile).unwrap();
+        eprintln!("=== Decrypt actual vault key ===");
+        eprintln!("Profile: {profile}");
+        eprintln!("Path:    {}", path.display());
+
+        if !path.exists() {
+            eprintln!("SKIP: vault key not found");
+            return;
+        }
+
+        let enc = load_encrypted_vault(&path).unwrap();
+        match decrypt_vault_password(&enc, &master_pw) {
+            Ok(vault_pw) => {
+                eprintln!("✓ AES-GCM decryption succeeded");
+                eprintln!("Vault password length:    {} chars", vault_pw.len());
+                eprintln!("Vault password hex:       {}", hex(vault_pw.as_bytes()));
+                eprintln!("Has trailing newline:     {}", vault_pw.ends_with('\n'));
+                eprintln!("Has trailing CR:          {}", vault_pw.ends_with('\r'));
+                eprintln!("Has leading/trailing ws:  {:?} vs trimmed {:?}", vault_pw, vault_pw.trim());
+                eprintln!("Is alphanumeric:          {}", vault_pw.chars().all(|c| c.is_ascii_alphanumeric()));
+            }
+            Err(e) => {
+                eprintln!("✗ Decryption failed: {e}");
+                eprintln!("This means the master password is wrong OR Argon2/AES params changed.");
+                eprintln!("Run debug_argon2_params_are_stable on the machine that encrypted this key to compare.");
+            }
+        }
+    }
+
+    /// Write an encrypted vault, then try to decrypt it with a slightly-mutated
+    /// master password (extra space, trailing newline, uppercase).
+    /// Confirms AES-GCM auth tag correctly rejects all wrong-password variants.
+    #[test]
+    fn debug_password_variants_all_fail() {
+        let vault_pw = "vault-pw-12345";
+        let correct_pw = "correct-master-pw";
+        let enc = encrypt_vault_password(vault_pw, correct_pw).unwrap();
+
+        let bad_variants = [
+            ("trailing newline", format!("{correct_pw}\n")),
+            ("trailing space", format!("{correct_pw} ")),
+            ("leading space", format!(" {correct_pw}")),
+            ("uppercase", correct_pw.to_uppercase()),
+            ("empty", String::new()),
+        ];
+
+        eprintln!("=== Wrong-password rejection test ===");
+        for (label, bad_pw) in &bad_variants {
+            let result = decrypt_vault_password(&enc, bad_pw);
+            eprintln!("  [{label}] → {}", if result.is_err() { "correctly rejected ✓" } else { "INCORRECTLY ACCEPTED ✗" });
+            assert!(result.is_err(), "variant '{label}' should have failed decryption");
+        }
+
+        // Correct password must still work
+        let result = decrypt_vault_password(&enc, correct_pw);
+        eprintln!("  [correct pw] → {}", if result.is_ok() { "accepted ✓" } else { "FAILED ✗" });
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vault_pw);
+    }
+
+    /// Test that the vault password written to ansible-vault has no hidden bytes.
+    /// Ansible expects a password file with no trailing newline, or with exactly one.
+    /// This test exercises the exact bytes that verify_vault_decryption sends via stdin.
+    #[test]
+    fn debug_vault_password_has_no_extra_bytes() {
+        let vault_pw = generate_vault_password();
+        let master_pw = "debug-master";
+
+        let enc = encrypt_vault_password(&vault_pw, master_pw).unwrap();
+        let decrypted = decrypt_vault_password(&enc, master_pw).unwrap();
+
+        eprintln!("=== Vault password byte inspection ===");
+        eprintln!("Original:  {:?} ({} bytes)", vault_pw, vault_pw.len());
+        eprintln!("Decrypted: {:?} ({} bytes)", decrypted, decrypted.len());
+        eprintln!("Byte-for-byte match: {}", vault_pw.as_bytes() == decrypted.as_bytes());
+
+        // What gets sent to ansible-vault via stdin in verify_vault_decryption
+        let stdin_bytes = decrypted.as_bytes();
+        eprintln!("Bytes sent to ansible-vault stdin: {:?}", stdin_bytes);
+        eprintln!("Last byte: 0x{:02x} (should be alphanumeric, not 0x0a/newline)", stdin_bytes.last().unwrap_or(&0));
+
+        assert_eq!(vault_pw, decrypted, "round-trip produced different value");
+        assert!(!decrypted.ends_with('\n'), "vault password has trailing newline — would break ansible-vault");
+        assert!(!decrypted.ends_with('\r'), "vault password has trailing CR");
+    }
+
     #[test]
     fn generate_vault_password_has_correct_length() {
         let pw = generate_vault_password();

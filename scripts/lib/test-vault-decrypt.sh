@@ -10,6 +10,9 @@
 # Expects: ANSIBLE_VAULT_PASSWORD env var
 set -euo pipefail
 
+# Ensure ansible-vault is on PATH — busibox installs it into its own venv.
+[ -x "$HOME/.busibox/venv/bin/ansible-vault" ] && export PATH="$HOME/.busibox/venv/bin:$PATH"
+
 VAULT_FILE="${1:?Usage: test-vault-decrypt.sh <vault_file> [--check-templates|--strip-legacy|--upgrade <example>]}"
 MODE="${2:-decrypt}"
 PW="${ANSIBLE_VAULT_PASSWORD:-}"
