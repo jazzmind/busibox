@@ -16,5 +16,6 @@ pub mod run_tests;
 pub mod setup_mode;
 pub mod ssh_setup;
 pub mod tailscale_setup;
+pub mod utilities;
 pub mod validate_secrets;
 pub mod welcome;

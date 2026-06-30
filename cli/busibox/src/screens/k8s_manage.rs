@@ -3,6 +3,13 @@ use crate::theme;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Margin;
 use ratatui::prelude::*;
+
+fn ansible_vault_path() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let venv_bin = format!("{home}/.busibox/venv/bin");
+    let current = std::env::var("PATH").unwrap_or_default();
+    if current.is_empty() { venv_bin } else { format!("{venv_bin}:{current}") }
+}
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState, *};
 use std::sync::mpsc;
 
@@ -684,6 +691,7 @@ fn spawn_k8s_raw_action(app: &mut App, make_target: &str) {
                     let test_result = std::process::Command::new("ansible-vault")
                         .args(["view", &vault_path.to_string_lossy(), "--vault-password-file", &env_script.to_string_lossy()])
                         .env("ANSIBLE_VAULT_PASSWORD", vp.as_str())
+                        .env("PATH", ansible_vault_path())
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
                         .status();
@@ -699,6 +707,7 @@ fn spawn_k8s_raw_action(app: &mut App, make_target: &str) {
                             let encrypt_result = std::process::Command::new("ansible-vault")
                                 .args(["encrypt", &vault_path.to_string_lossy(), "--vault-password-file", &env_script.to_string_lossy()])
                                 .env("ANSIBLE_VAULT_PASSWORD", vp.as_str())
+                                .env("PATH", ansible_vault_path())
                                 .stdout(std::process::Stdio::null())
                                 .stderr(std::process::Stdio::null())
                                 .status();
@@ -723,6 +732,7 @@ fn spawn_k8s_raw_action(app: &mut App, make_target: &str) {
                     let encrypt_result = std::process::Command::new("ansible-vault")
                         .args(["encrypt", &vault_path.to_string_lossy(), "--vault-password-file", &env_script.to_string_lossy()])
                         .env("ANSIBLE_VAULT_PASSWORD", vp.as_str())
+                        .env("PATH", ansible_vault_path())
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
                         .status();

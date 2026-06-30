@@ -34,6 +34,7 @@ import os
 import json
 import pathlib
 import re
+import socket
 import uuid
 import yaml
 from pydantic import BaseModel
@@ -405,15 +406,169 @@ COMPOSE_FILES = COMPOSE_FILES_STR.split()
 
 def get_docker_compose_base_cmd(busibox_host_path: str) -> list:
     """Build the base docker compose command with compose files.
-    
-    Environment variables are passed through from the deploy-api container environment.
+
+    Passes --env-file so docker-compose picks up HOST_PORT overrides written
+    by the TUI installer (e.g. LITELLM_HOST_PORT=4001 when port 4000 was busy).
     """
-    return [
-        'docker', 'compose',
-        '-p', COMPOSE_PROJECT_NAME,
+    prefix = os.getenv('CONTAINER_PREFIX', 'dev')
+    env_file = os.path.join(busibox_host_path, f'.env.{prefix}')
+    cmd = ['docker', 'compose', '-p', COMPOSE_PROJECT_NAME]
+    if os.path.exists(env_file):
+        cmd += ['--env-file', env_file]
+    cmd += [
         '-f', f'{busibox_host_path}/docker-compose.yml',
-        '-f', f'{busibox_host_path}/docker-compose.local-dev.yml'
+        '-f', f'{busibox_host_path}/docker-compose.local-dev.yml',
     ]
+    return cmd
+
+
+def _get_active_profile() -> dict:
+    """Read the active busibox profile from .busibox/profiles.json in the repo."""
+    busibox_path = os.getenv('BUSIBOX_HOST_PATH', '/busibox')
+    profiles_file = os.path.join(busibox_path, '.busibox', 'profiles.json')
+    try:
+        with open(profiles_file) as f:
+            data = json.load(f)
+        active = data.get('active', '')
+        return data.get('profiles', {}).get(active, {})
+    except Exception:
+        return {}
+
+
+# Maps docker service name → (default_host_port, compose_env_var_name)
+_SERVICE_PORT_MAP: dict[str, tuple[int, str]] = {
+    'litellm':       (4000,  'LITELLM_HOST_PORT'),
+    'redis':         (6379,  'REDIS_HOST_PORT'),
+    'minio':         (9000,  'MINIO_HOST_PORT'),
+    'milvus':        (19530, 'MILVUS_HOST_PORT'),
+    'neo4j':         (7474,  'NEO4J_HOST_PORT'),
+    'embedding-api': (8005,  'EMBEDDING_HOST_PORT'),
+    'data-api':      (8002,  'DATA_HOST_PORT'),
+    'search-api':    (8003,  'SEARCH_HOST_PORT'),
+    'agent-api':     (8000,  'AGENT_HOST_PORT'),
+    'docs-api':      (8004,  'DOCS_HOST_PORT'),
+    'bridge-api':    (8081,  'BRIDGE_HOST_PORT'),
+    'postgres':      (5432,  'POSTGRES_HOST_PORT'),
+    'authz-api':     (8010,  'AUTHZ_HOST_PORT'),
+    'vllm':          (8080,  'VLLM_HOST_PORT'),
+}
+
+
+def _is_host_port_in_use(port: int) -> bool:
+    """Check if a port is in use on the Docker host (from inside the container).
+
+    Uses host.docker.internal so the check is against the HOST network namespace,
+    not the container's. Returns True if something is listening on that port.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            return s.connect_ex(('host.docker.internal', port)) == 0
+    except Exception:
+        return False
+
+
+def _find_free_host_port(start: int, count: int = 50) -> int:
+    """Return the first free host port at or after start."""
+    for port in range(start, start + count):
+        if not _is_host_port_in_use(port):
+            return port
+    return start  # unlikely fallback
+
+
+def _is_container_running(service: str) -> bool:
+    """Return True if the docker container for this service is currently running."""
+    prefix = os.getenv('CONTAINER_PREFIX', 'dev')
+    container = f"{prefix}-{service}"
+    try:
+        result = subprocess.run(
+            ['docker', 'inspect', '--format', '{{.State.Status}}', container],
+            capture_output=True, text=True, timeout=3,
+        )
+        return result.returncode == 0 and result.stdout.strip() == 'running'
+    except Exception:
+        return False
+
+
+def _write_env_var_to_file(env_var: str, value: str, busibox_path: str, prefix: str) -> None:
+    """Upsert a KEY=VALUE line in .env.{prefix}."""
+    env_file = os.path.join(busibox_path, f'.env.{prefix}')
+    try:
+        lines: list[str] = []
+        found = False
+        if os.path.exists(env_file):
+            with open(env_file) as f:
+                for line in f:
+                    if line.startswith(f'{env_var}='):
+                        lines.append(f'{env_var}={value}\n')
+                        found = True
+                    else:
+                        lines.append(line)
+        if not found:
+            lines.append(f'{env_var}={value}\n')
+        with open(env_file, 'w') as f:
+            f.writelines(lines)
+    except Exception as e:
+        logger.warning(f"Could not update env file {env_file}: {e}")
+
+
+def _save_port_override_to_profile(service: str, port: int, busibox_path: str) -> None:
+    """Persist a port override to the active profile in .busibox/profiles.json."""
+    profiles_file = os.path.join(busibox_path, '.busibox', 'profiles.json')
+    try:
+        with open(profiles_file) as f:
+            data = json.load(f)
+        active = data.get('active', '')
+        if active and active in data.get('profiles', {}):
+            profile = data['profiles'][active]
+            profile.setdefault('port_overrides', {})[service] = port
+            with open(profiles_file, 'w') as f:
+                json.dump(data, f, indent=4)
+    except Exception as e:
+        logger.warning(f"Could not save port override to profile: {e}")
+
+
+def _apply_port_overrides(service: str, env: dict) -> dict:
+    """Check for port conflicts on the host and add HOST_PORT override env vars.
+
+    Checks the active profile for a previously saved override first, then falls
+    back to live detection via host.docker.internal. Saves any newly discovered
+    override to the profile and .env file for future restarts.
+    """
+    entry = _SERVICE_PORT_MAP.get(service)
+    if not entry:
+        return env
+
+    default_port, env_var = entry
+    busibox_path = os.getenv('BUSIBOX_HOST_PATH', '/busibox')
+    prefix = os.getenv('CONTAINER_PREFIX', 'dev')
+
+    # 1. If already set in env (e.g. from --env-file), honour it as-is.
+    if env.get(env_var):
+        return env
+
+    # 2. Check the active profile for a previously saved override.
+    profile = _get_active_profile()
+    saved_override = profile.get('port_overrides', {}).get(service)
+    if saved_override:
+        logger.info(f"[port] Using saved override {service}:{saved_override} from profile")
+        env[env_var] = str(saved_override)
+        return env
+
+    # 3. Live detection: port is free if the container is currently running
+    #    (Docker already holds it and will release/re-acquire during recreate).
+    if _is_container_running(service):
+        return env
+
+    # 4. Check if the default port is in use on the host by a non-Docker process.
+    if _is_host_port_in_use(default_port):
+        alt_port = _find_free_host_port(default_port + 1)
+        logger.info(f"[port] Conflict on {default_port} for {service}, using {alt_port}")
+        env[env_var] = str(alt_port)
+        _write_env_var_to_file(env_var, str(alt_port), busibox_path, prefix)
+        _save_port_override_to_profile(service, alt_port, busibox_path)
+
+    return env
 
 
 def _required_env_for_service(service: str) -> list[str]:
@@ -643,8 +798,9 @@ async def start_service(
             up_args.extend(services_to_start)
             cmd.extend(up_args)
             logger.info(f"Running command: {' '.join(cmd)}")
-            
+
             env = os.environ.copy()
+            env = _apply_port_overrides(service, env)
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -1102,12 +1258,16 @@ async def get_platform_info_endpoint(
     token_payload: dict = Depends(verify_admin_token)
 ):
     """
-    Get platform information (backend, tier, memory).
-    
-    Used by Busibox Portal to determine which LLM runtime to use (MLX vs vLLM).
+    Get platform information (backend, tier, memory, service_preset, port_overrides).
+
+    Used by Busibox Portal to determine which LLM runtime to use and which
+    services to install based on the active profile's preset.
     """
     try:
         platform_info = get_platform_info()
+        profile = _get_active_profile()
+        platform_info['service_preset'] = profile.get('service_preset', 'standard')
+        platform_info['port_overrides'] = profile.get('port_overrides', {})
         return platform_info
     except Exception as e:
         logger.error(f"Error getting platform info: {e}")
@@ -1430,6 +1590,7 @@ async def start_service_sse(
                 # Start docker compose with real-time output
                 # Pass environment variables so docker compose can validate all services
                 env = os.environ.copy()
+                env = _apply_port_overrides(service, env)
                 
                 # Build docker compose command
                 # Get host path - busibox is mounted at this same path inside the container

@@ -228,7 +228,7 @@ available_models:
   "qwen3.6-35b-a3b-mlx-8bit":
     provider: "mlx"
     model: "qwen3.6-35b-a3b"
-    model_name: "unsloth/Qwen3.6-35B-A3B-UD-MLX-8bit"
+    model_name: "unsloth/Qwen3.6-35B-A3B-MLX-8bit"
     description: "Qwen3.6 MoE 35B/A3B at MLX dynamic 8-bit (~38GB) — near-lossless. Default for Mac Studio / 96GB+."
     tool_calling: true
     tool_call_parser: "qwen3_coder"
@@ -363,6 +363,14 @@ default_purposes:
   vision: "agent"
   parsing: "agent"
   cleanup: "agent"
+
+  # --- Code agent purposes ---
+  code-writing: "agent"
+  code-reading: "agent"
+  code-testing: "agent"
+  code-securing: "agent"
+  code-planning: "agent"
+  code-documenting: "agent"
 
   # --- Frontier (cloud) ---
   frontier: "claude-sonnet-4-5"

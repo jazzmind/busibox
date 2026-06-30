@@ -1044,6 +1044,13 @@ fn handle_action_select(app: &mut App, action: &str) {
             app.test_action_complete = false;
             app.screen = Screen::RunTests;
         }
+        "Utilities" => {
+            app.utilities_selected = 0;
+            app.utilities_log.clear();
+            app.utilities_log_visible = false;
+            app.utilities_action_running = false;
+            app.screen = Screen::Utilities;
+        }
         _ => {}
     }
 }

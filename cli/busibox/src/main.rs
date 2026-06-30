@@ -376,6 +376,9 @@ fn main() -> Result<()> {
         if app.screen == Screen::ValidateSecrets && app.validate_secrets_loading {
             app.manage_tick = app.manage_tick.wrapping_add(1);
         }
+        if app.screen == Screen::Utilities && app.utilities_action_running {
+            app.utilities_tick = app.utilities_tick.wrapping_add(1);
+        }
 
         // Drain health check updates
         screens::welcome::process_health_updates(&mut app);
@@ -640,6 +643,34 @@ fn main() -> Result<()> {
                         app::MessageKind::Error,
                     );
                 }
+            }
+        }
+
+        // Drain utilities updates
+        if let Some(rx) = app.utilities_rx.take() {
+            use std::sync::mpsc::TryRecvError;
+            let mut put_back = true;
+            loop {
+                match rx.try_recv() {
+                    Ok(app::UtilitiesUpdate::Log(msg)) => {
+                        app.utilities_log.push(msg);
+                    }
+                    Ok(app::UtilitiesUpdate::Complete { success }) => {
+                        app.utilities_action_running = false;
+                        app.utilities_action_success = success;
+                        put_back = false;
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        app.utilities_action_running = false;
+                        put_back = false;
+                        break;
+                    }
+                }
+            }
+            if put_back {
+                app.utilities_rx = Some(rx);
             }
         }
 
@@ -1035,6 +1066,7 @@ fn render(app: &App, f: &mut ratatui::Frame) {
         Screen::K8sManage => screens::k8s_manage::render(f, app),
         Screen::ValidateSecrets => screens::validate_secrets::render(f, app),
         Screen::RunTests => screens::run_tests::render(f, app),
+        Screen::Utilities => screens::utilities::render(f, app),
     }
 
     // Profile header bar overlay (except Welcome and ProfileSelect)
@@ -1115,6 +1147,7 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
         && app.screen != Screen::AdminLogin
         && app.screen != Screen::ModelBenchmark
         && app.screen != Screen::ValidateSecrets
+        && app.screen != Screen::ModelBrowse
     {
         app.should_quit = true;
         return;
@@ -1143,6 +1176,7 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
         Screen::K8sManage => screens::k8s_manage::handle_key(app, key),
         Screen::ValidateSecrets => screens::validate_secrets::handle_key(app, key),
         Screen::RunTests => screens::run_tests::handle_key(app, key),
+        Screen::Utilities => screens::utilities::handle_key(app, key),
     }
 }
 
@@ -2064,29 +2098,20 @@ fn handle_vault_setup(app: &mut App) -> Option<(String, app::MessageKind)> {
                                     .unwrap_or(false);
                                 if is_decrypt_failure {
                                     eprintln!("⚠ The vault file exists but can't be decrypted with this vault key.");
-                                    eprintln!("  This usually means the vault file was encrypted during a previous install.");
-                                    eprintln!();
-                                    eprintln!("  [r] Reset vault — back up old vault and recreate from template");
-                                    eprintln!("  [s] Skip — continue with this warning (secrets won't load)");
-                                    eprint!("  Choice [r/s]: ");
-                                    let mut choice = String::new();
-                                    let _ = std::io::stdin().read_line(&mut choice);
-                                    if choice.trim().eq_ignore_ascii_case("r") {
-                                        let vault_rel = format!(
-                                            "provision/ansible/roles/secrets/vars/vault.{vault_prefix}.yml"
-                                        );
-                                        let vault_path = app.repo_root.join(&vault_rel);
-                                        if vault_path.exists() {
-                                            let backup = vault_path.with_extension("yml.bak");
-                                            if std::fs::rename(&vault_path, &backup).is_ok() {
-                                                eprintln!("  ✓ Backed up old vault to {}", backup.display());
-                                            }
+                                    eprintln!("  Recreating vault from template with the current password...");
+                                    let vault_rel = format!(
+                                        "provision/ansible/roles/secrets/vars/vault.{vault_prefix}.yml"
+                                    );
+                                    let vault_path = app.repo_root.join(&vault_rel);
+                                    if vault_path.exists() {
+                                        let backup = vault_path.with_extension("yml.bak");
+                                        if std::fs::rename(&vault_path, &backup).is_ok() {
+                                            eprintln!("  ✓ Backed up old vault to {}", backup.display());
                                         }
-                                        let result2 = run_vault_upgrade(&app.repo_root, &vault_prefix, &vault_pw, true);
-                                        app.vault_password = Some(vault_pw);
-                                        return result2;
                                     }
-                                    eprintln!("  Skipped. Use vault setup from the profile menu to reset later.");
+                                    let result2 = run_vault_upgrade(&app.repo_root, &vault_prefix, &vault_pw, true);
+                                    app.vault_password = Some(vault_pw);
+                                    return result2;
                                 }
                                 app.vault_password = Some(vault_pw);
                                 return result;
@@ -2277,10 +2302,37 @@ fn handle_vault_setup(app: &mut App) -> Option<(String, app::MessageKind)> {
     create_ansible_vault(app, &vault_pw, &vault_prefix);
 
     let result = run_vault_upgrade(&app.repo_root, &vault_prefix, &vault_pw, true);
+    let is_decrypt_failure = result.as_ref()
+        .map(|(msg, _)| msg.contains("vault_decrypt_failed"))
+        .unwrap_or(false);
+    if is_decrypt_failure {
+        eprintln!("  ⚠ Vault file from a previous install detected — recreating with current password...");
+        let vault_rel = format!("provision/ansible/roles/secrets/vars/vault.{vault_prefix}.yml");
+        let vault_path = app.repo_root.join(&vault_rel);
+        if vault_path.exists() {
+            let backup = vault_path.with_extension("yml.bak");
+            if std::fs::rename(&vault_path, &backup).is_ok() {
+                eprintln!("  ✓ Backed up old vault to {}", backup.display());
+            }
+        }
+        create_ansible_vault(app, &vault_pw, &vault_prefix);
+        let result2 = run_vault_upgrade(&app.repo_root, &vault_prefix, &vault_pw, true);
+        app.vault_password = Some(vault_pw);
+        eprintln!("\n✓ Vault setup complete. Starting installation...\n");
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        return result2;
+    }
     app.vault_password = Some(vault_pw);
     eprintln!("\n✓ Vault setup complete. Starting installation...\n");
     std::thread::sleep(std::time::Duration::from_secs(1));
     result
+}
+
+fn ansible_vault_path() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let venv_bin = format!("{home}/.busibox/venv/bin");
+    let current = std::env::var("PATH").unwrap_or_default();
+    if current.is_empty() { venv_bin } else { format!("{venv_bin}:{current}") }
 }
 
 /// Run vault auto-upgrade after vault password becomes available.
@@ -2486,6 +2538,7 @@ fn create_ansible_vault(app: &App, vault_pw: &str, vault_prefix: &str) {
 
         let result = std::process::Command::new("ansible-vault")
             .args(["encrypt", &target_path.to_string_lossy(), "--vault-password-file", &env_script.to_string_lossy()])
+            .env("PATH", ansible_vault_path())
             .env("ANSIBLE_VAULT_PASSWORD", vault_pw)
             .output();
 

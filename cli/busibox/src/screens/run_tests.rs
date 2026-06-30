@@ -584,6 +584,12 @@ fn extract_vault_creds_locally(
     let vault_output = Command::new("ansible-vault")
         .args(["view", vault_file.to_str().unwrap_or(""), "--vault-password-file"])
         .arg(&tmp_path)
+        .env("PATH", {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let venv = format!("{home}/.busibox/venv/bin");
+            let cur = std::env::var("PATH").unwrap_or_default();
+            if cur.is_empty() { venv } else { format!("{venv}:{cur}") }
+        })
         .output();
     let _ = std::fs::remove_file(&tmp_path);
 

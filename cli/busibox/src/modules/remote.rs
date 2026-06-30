@@ -3,6 +3,13 @@ use color_eyre::{eyre::eyre, Result};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+fn ansible_vault_path() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let venv_bin = format!("{home}/.busibox/venv/bin");
+    let current = std::env::var("PATH").unwrap_or_default();
+    if current.is_empty() { venv_bin } else { format!("{venv_bin}:{current}") }
+}
+
 pub use busibox_core::shell::SHELL_PATH_PREAMBLE;
 
 /// Extra patterns to exclude beyond what .gitignore covers.
@@ -786,6 +793,7 @@ pub fn validate_vault_secrets(
 
     let output = Command::new("ansible-vault")
         .args(["view", &local_vault.to_string_lossy(), "--vault-password-file", &tmp_pw.to_string_lossy()])
+        .env("PATH", ansible_vault_path())
         .output();
 
     let _ = std::fs::remove_file(&tmp_pw);
@@ -1785,6 +1793,7 @@ pub fn decrypt_local_vault(
 
     let output = Command::new("ansible-vault")
         .args(["view", &local_vault.to_string_lossy(), "--vault-password-file", &tmp_pw.to_string_lossy()])
+        .env("PATH", ansible_vault_path())
         .output();
 
     let _ = std::fs::remove_file(&tmp_pw);

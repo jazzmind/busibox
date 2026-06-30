@@ -114,7 +114,7 @@ pub const CATALOG: &[CatalogModel] = &[
     },
     CatalogModel {
         family: "qwen",
-        hf_repo: "unsloth/Qwen3.6-35B-A3B-UD-MLX-8bit",
+        hf_repo: "unsloth/Qwen3.6-35B-A3B-MLX-8bit",
         display_name: "Qwen3.6 35B-A3B MoE (8-bit)",
         param_billions: 35.0,
         quantization: "8-bit dynamic",

@@ -115,6 +115,7 @@ pub fn populate_from_catalog(app: &mut App) {
                 curated: true,
                 downloads: 0,
                 engines,
+                last_modified: 0,
             }
         })
         .collect();
@@ -126,17 +127,23 @@ pub fn populate_from_catalog(app: &mut App) {
     app.browse_model_scroll = 0;
 }
 
-/// Sort models by: version-rank desc, then fits-soft, then param-count desc.
+/// Sort models: API results (last_modified > 0) by recency first; curated below by version rank.
 fn sort_models(models: &mut Vec<BrowsableModel>, soft_gb: f32) {
     models.sort_by(|a, b| {
-        // 1. Version rank (newer first)
+        // 1. API models with a known modification date come first, sorted newest first.
+        //    Curated models (last_modified == 0) fall below all dated API results.
+        let time_cmp = b.last_modified.cmp(&a.last_modified);
+        if time_cmp != std::cmp::Ordering::Equal {
+            return time_cmp;
+        }
+        // 2. Version rank descending (for curated models: newer model series first)
         let va = model_catalog::version_rank(&a.display_name);
         let vb = model_catalog::version_rank(&b.display_name);
         let ver_cmp = vb.cmp(&va);
         if ver_cmp != std::cmp::Ordering::Equal {
             return ver_cmp;
         }
-        // 2. Fits-in-soft-budget first
+        // 3. Fits-in-soft-budget first
         let a_fits = a.size_gb <= soft_gb;
         let b_fits = b.size_gb <= soft_gb;
         match (a_fits, b_fits) {
@@ -144,7 +151,7 @@ fn sort_models(models: &mut Vec<BrowsableModel>, soft_gb: f32) {
             (false, true) => return std::cmp::Ordering::Greater,
             _ => {}
         }
-        // 3. Larger param count first (more capable)
+        // 4. Larger param count first (more capable)
         b.param_billions
             .partial_cmp(&a.param_billions)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -227,11 +234,13 @@ fn query_hf_api(
         ("mlx-community", "mlx"),
         ("bartowski", "gguf"),
         ("unsloth", "gguf"),
+        ("unsloth", "mlx"),
+        ("lmstudio-community", "gguf"),
     ];
 
     for (author, tag) in queries {
         let url = format!(
-            "https://huggingface.co/api/models?author={}&tags={}&sort=lastModified&limit=20",
+            "https://huggingface.co/api/models?author={}&tags={}&sort=lastModified&limit=50",
             author, tag
         );
 
@@ -255,11 +264,20 @@ fn query_hf_api(
                 continue;
             };
 
-            // Must mention the family in the repo name
-            let repo_lower = repo.to_lowercase();
-            let family_match = family_prefixes
-                .iter()
-                .any(|p| repo_lower.contains(&p.to_lowercase()));
+            // Must mention the family in the model *name* part (after the author slash).
+            // Checking the full path would let "unsloth/GLM-..." match when author="unsloth"
+            // is in family_prefixes for qwen — so we only check the name component.
+            let name_part = repo.split('/').nth(1).unwrap_or(repo);
+            let name_lower = name_part.to_lowercase();
+            let family_name_prefixes: &[&str] = match family {
+                "qwen"     => &["qwen"],
+                "deepseek" => &["deepseek"],
+                "gemma"    => &["gemma"],
+                "glm"      => &["glm", "chatglm"],
+                "kimi"     => &["kimi"],
+                _          => family_prefixes,
+            };
+            let family_match = family_name_prefixes.iter().any(|p| name_lower.contains(p));
             if !family_match {
                 continue;
             }
@@ -286,6 +304,10 @@ fn query_hf_api(
 
             let downloads = item["downloads"].as_u64().unwrap_or(0);
             let gated = item["gated"].as_bool().unwrap_or(false);
+            let last_modified: u64 = item["lastModified"]
+                .as_str()
+                .and_then(parse_iso8601_to_unix)
+                .unwrap_or(0);
 
             // Infer which engine this repo targets
             let inferred_engines = infer_engines_from_repo(repo, *tag);
@@ -312,6 +334,7 @@ fn query_hf_api(
                 curated: false,
                 downloads,
                 engines: inferred_engines,
+                last_modified,
             });
         }
     }
@@ -415,6 +438,101 @@ fn estimate_size_from_repo(repo: &str) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
+// ISO-8601 timestamp parser (no chrono dependency — parse manually)
+// ---------------------------------------------------------------------------
+
+/// Parse a HuggingFace ISO-8601 date string ("2025-04-15T12:34:56.000Z") into
+/// a Unix timestamp in seconds. Returns None on any parse failure.
+fn parse_iso8601_to_unix(s: &str) -> Option<u64> {
+    // Expected format: YYYY-MM-DDTHH:MM:SS[.mmm]Z (or +00:00)
+    let s = s.trim().trim_end_matches('Z').trim_end_matches("+00:00");
+    let (date_part, time_part) = s.split_once('T')?;
+    let mut dp = date_part.split('-');
+    let year:  u64 = dp.next()?.parse().ok()?;
+    let month: u64 = dp.next()?.parse().ok()?;
+    let day:   u64 = dp.next()?.parse().ok()?;
+
+    let time_part = time_part.split('.').next().unwrap_or(time_part);
+    let mut tp = time_part.split(':');
+    let hour: u64 = tp.next()?.parse().ok()?;
+    let min:  u64 = tp.next()?.parse().ok()?;
+    let sec:  u64 = tp.next()?.parse().ok()?;
+
+    // Days since Unix epoch (simplified; good enough for sorting)
+    let days_in_months: [u64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let mut total_days: u64 = (year - 1970) * 365 + (year - 1969) / 4;
+    for m in 1..month {
+        let mdays = if m == 2 && leap { 29 } else { days_in_months[(m - 1) as usize] };
+        total_days += mdays;
+    }
+    total_days += day - 1;
+
+    Some(total_days * 86400 + hour * 3600 + min * 60 + sec)
+}
+
+// ---------------------------------------------------------------------------
+// Two-step model selection helpers
+// ---------------------------------------------------------------------------
+
+/// Derive a "base model name" from a BrowsableModel — strips the quantization
+/// suffix to get the canonical model identity (e.g. "Qwen3.5 4B").
+pub fn derive_base_model_name(m: &crate::app::BrowsableModel) -> String {
+    if m.curated {
+        // Curated display_names are "Model Name (Quant)" — strip the parenthetical
+        m.display_name
+            .rfind(" (")
+            .map(|pos| m.display_name[..pos].to_string())
+            .unwrap_or_else(|| m.display_name.clone())
+    } else {
+        // API display_names are repo tails like "Qwen3.5-4B-MLX-8bit" — strip quant suffixes
+        strip_quant_suffix_from_repo_name(&m.display_name)
+    }
+}
+
+/// Strip known quantization suffixes from a raw HF repo name component.
+fn strip_quant_suffix_from_repo_name(name: &str) -> String {
+    let upper = name.to_uppercase();
+    let markers: &[&str] = &[
+        "-GGUF", "-MLX", "-AWQ", "-GPTQ", "-FP8", "-BF16", "-INT8",
+        "-Q4", "-Q5", "-Q6", "-Q8", "-4BIT", "-8BIT", "-UD-",
+    ];
+    let mut cut = name.len();
+    for marker in markers {
+        if let Some(pos) = upper.find(marker) {
+            if pos > 0 && pos < cut {
+                cut = pos;
+            }
+        }
+    }
+    name[..cut].trim_end_matches('-').to_string()
+}
+
+/// Build the deduplicated list of base model names from the full model list,
+/// preserving the first-occurrence order. Returns (base_name, first_occurrence_index).
+pub fn base_model_groups(models: &[crate::app::BrowsableModel]) -> Vec<(String, usize)> {
+    let mut groups: Vec<(String, usize)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (i, m) in models.iter().enumerate() {
+        let base = derive_base_model_name(m);
+        if seen.insert(base.clone()) {
+            groups.push((base, i));
+        }
+    }
+    groups
+}
+
+/// Return the indices into `models` for all entries whose base name matches `base_name`.
+pub fn quants_for_base<'a>(models: &'a [crate::app::BrowsableModel], base_name: &str) -> Vec<usize> {
+    models
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| derive_base_model_name(m) == base_name)
+        .map(|(i, _)| i)
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Drain background receiver
 // ---------------------------------------------------------------------------
 
@@ -433,6 +551,8 @@ pub fn drain_browse_rx(app: &mut App) {
                 app.browse_models = models;
                 app.browse_model_selected = 0;
                 app.browse_model_scroll = 0;
+                app.browse_quant_selected = 0;
+                app.browse_quant_scroll = 0;
                 app.browse_loading = false;
             }
             BrowseUpdate::Error(e) => {
@@ -462,24 +582,26 @@ pub fn render(f: &mut Frame, app: &App) {
         .margin(2)
         .split(area);
 
-    // Step numbering: Engine is skipped when locked, making it 4 steps.
+    // Step numbering: Engine is skipped when locked, making it 5 steps total.
     let engine_locked = app.browse_engine_locked;
-    let total_steps = if engine_locked { 4 } else { 5 };
+    let total_steps = if engine_locked { 5 } else { 6 };
     let (step_num, step_title) = if engine_locked {
         match &app.browse_step {
             BrowseStep::Token   => (1, "HuggingFace Token"),
             BrowseStep::Family  => (2, "Model Family"),
             BrowseStep::Models  => (3, "Select Model"),
-            BrowseStep::Engine  => (3, "Select Model"), // shouldn't show when locked
-            BrowseStep::Confirm => (4, "Confirm Download"),
+            BrowseStep::Quant   => (4, "Select Quantization"),
+            BrowseStep::Engine  => (4, "Select Quantization"), // shouldn't show when locked
+            BrowseStep::Confirm => (5, "Confirm Download"),
         }
     } else {
         match &app.browse_step {
             BrowseStep::Token   => (1, "HuggingFace Token"),
             BrowseStep::Family  => (2, "Model Family"),
             BrowseStep::Models  => (3, "Select Model"),
-            BrowseStep::Engine  => (4, "Inference Engine"),
-            BrowseStep::Confirm => (5, "Confirm Download"),
+            BrowseStep::Quant   => (4, "Select Quantization"),
+            BrowseStep::Engine  => (5, "Inference Engine"),
+            BrowseStep::Confirm => (6, "Confirm Download"),
         }
     };
 
@@ -504,6 +626,7 @@ pub fn render(f: &mut Frame, app: &App) {
         BrowseStep::Token   => render_token(f, app, chunks[1]),
         BrowseStep::Family  => render_family(f, app, chunks[1]),
         BrowseStep::Models  => render_models(f, app, chunks[1]),
+        BrowseStep::Quant   => render_quant(f, app, chunks[1]),
         BrowseStep::Engine  => render_engine(f, app, chunks[1]),
         BrowseStep::Confirm => render_confirm(f, app, chunks[1]),
     }
@@ -616,24 +739,39 @@ fn render_models(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let mut lines = Vec::new();
+    let groups = base_model_groups(&app.browse_models);
     let loading_tag = if app.browse_loading { " ⟳" } else { "" };
 
-    for (i, m) in app.browse_models.iter().enumerate() {
-        let fits_soft = m.size_gb <= soft;
-        let fits_hard = m.size_gb <= hard;
-        let is_selected = i == app.browse_model_selected;
+    let mut lines = Vec::new();
+    for (row_idx, (base_name, first_idx)) in groups.iter().enumerate() {
+        let m = &app.browse_models[*first_idx];
+        let is_selected = row_idx == app.browse_model_selected;
 
-        // Determine if the locked engine is compatible with this model
+        // Collect size range and engine set across all quants for this base model
+        let quants = quants_for_base(&app.browse_models, base_name);
+        let min_gb = quants.iter().map(|&i| app.browse_models[i].size_gb).fold(f32::INFINITY, f32::min);
+        let max_gb = quants.iter().map(|&i| app.browse_models[i].size_gb).fold(0.0_f32, f32::max);
+        let quant_count = quants.len();
+
+        let mut all_engines: Vec<&str> = Vec::new();
+        for &i in &quants {
+            for e in &app.browse_models[i].engines {
+                if !all_engines.contains(&e.as_str()) {
+                    all_engines.push(e.as_str());
+                }
+            }
+        }
+
+        // Engine-lock compatibility: any quant must match
         let engine_ok = if app.browse_engine_locked {
-            let locked_id = ENGINES
-                .get(app.browse_engine_selected)
-                .map(|(id, _)| *id)
-                .unwrap_or("");
-            m.engines.iter().any(|e| e == locked_id)
+            let locked_id = ENGINES.get(app.browse_engine_selected).map(|(id, _)| *id).unwrap_or("");
+            quants.iter().any(|&i| app.browse_models[i].engines.iter().any(|e| e == locked_id))
         } else {
             true
         };
+
+        let fits_soft = min_gb <= soft;
+        let fits_hard = max_gb <= hard || min_gb <= hard;
 
         let name_style = if is_selected {
             theme::selected()
@@ -645,24 +783,20 @@ fn render_models(f: &mut Frame, app: &App, area: Rect) {
             theme::warning()
         };
 
-        let (size_style, fits_icon) = if fits_soft {
+        let (size_style, fits_icon) = if min_gb <= soft {
             (theme::success(), "✓")
-        } else if fits_hard {
+        } else if min_gb <= hard {
             (theme::warning(), "~")
         } else {
             (theme::error(), "✗")
         };
 
         let curated_tag = if m.curated { " ★" } else { "" };
-        let gated_tag = if m.gated { " 🔒" } else { "" };
-        let incompatible_tag = if !engine_ok { " [incompatible engine]" } else { "" };
         let prefix = if is_selected { "▶ " } else { "  " };
 
-        // Engine tags: show up to 3 short labels
-        let engine_tags: String = m
-            .engines
+        let engine_tags: String = all_engines
             .iter()
-            .map(|e| match e.as_str() {
+            .map(|e| match *e {
                 "mlx"  => "[MLX]",
                 "vllm" => "[vLLM]",
                 "gguf" => "[GGUF]",
@@ -671,20 +805,23 @@ fn render_models(f: &mut Frame, app: &App, area: Rect) {
             .collect::<Vec<_>>()
             .join(" ");
 
+        let size_range = if (max_gb - min_gb).abs() < 0.1 {
+            format!("{:.1}GB", min_gb)
+        } else {
+            format!("{:.1}–{:.1}GB", min_gb, max_gb)
+        };
+
         lines.push(Line::from(vec![
-            Span::styled(format!("{prefix}{}", m.display_name), name_style),
+            Span::styled(format!("{prefix}{base_name}"), name_style),
             Span::styled(curated_tag, theme::warning()),
-            Span::styled(gated_tag, theme::dim()),
-            Span::styled(incompatible_tag, theme::error()),
         ]));
 
         if is_selected {
             lines.push(Line::from(vec![
                 Span::styled("    ", theme::dim()),
                 Span::styled(fits_icon, size_style),
-                Span::styled(format!(" {:.1}GB", m.size_gb), size_style),
-                Span::styled(" · ", theme::dim()),
-                Span::styled(&m.quantization, theme::info()),
+                Span::styled(format!(" {size_range}"), size_style),
+                Span::styled(format!(" · {quant_count} variants"), theme::info()),
                 Span::styled(" · ", theme::dim()),
                 Span::styled(engine_tags, theme::info()),
                 if !m.description.is_empty() {
@@ -705,12 +842,116 @@ fn render_models(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(theme::dim())
         .title(format!(
-            " Models ({} available, soft budget {:.0}GB, hard limit {:.0}GB){} ",
-            app.browse_models.len(),
-            soft,
-            hard,
-            loading_tag,
+            " Models ({} base models, {soft:.0}GB soft / {hard:.0}GB hard budget){loading_tag} ",
+            groups.len(),
         ))
+        .title_style(theme::heading());
+
+    f.render_widget(
+        Paragraph::new(lines).scroll((scroll as u16, 0)).block(block),
+        area,
+    );
+
+    if total > content_height {
+        let mut scrollbar_state = ScrollbarState::new(total).position(scroll);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("↑"))
+            .end_symbol(Some("↓"));
+        f.render_stateful_widget(
+            scrollbar,
+            area.inner(Margin { vertical: 1, horizontal: 0 }),
+            &mut scrollbar_state,
+        );
+    }
+}
+
+fn render_quant(f: &mut Frame, app: &App, area: Rect) {
+    let (soft, hard) = budget_gb(app);
+    let quant_indices = quants_for_base(&app.browse_models, &app.browse_base_model_name);
+
+    if quant_indices.is_empty() {
+        let content = Paragraph::new("  No quantization variants found.")
+            .style(theme::muted())
+            .block(Block::default().borders(Borders::ALL).border_style(theme::dim()));
+        f.render_widget(content, area);
+        return;
+    }
+
+    let mut lines = Vec::new();
+    for (row_idx, &model_idx) in quant_indices.iter().enumerate() {
+        let m = &app.browse_models[model_idx];
+        let is_selected = row_idx == app.browse_quant_selected;
+
+        let engine_ok = if app.browse_engine_locked {
+            let locked_id = ENGINES.get(app.browse_engine_selected).map(|(id, _)| *id).unwrap_or("");
+            m.engines.iter().any(|e| e == locked_id)
+        } else {
+            true
+        };
+
+        let fits_soft = m.size_gb <= soft;
+        let fits_hard = m.size_gb <= hard;
+
+        let name_style = if is_selected {
+            theme::selected()
+        } else if !engine_ok || !fits_hard {
+            theme::dim()
+        } else if fits_soft {
+            theme::normal()
+        } else {
+            theme::warning()
+        };
+
+        let (size_style, fits_icon) = if fits_soft {
+            (theme::success(), "✓")
+        } else if fits_hard {
+            (theme::warning(), "~")
+        } else {
+            (theme::error(), "✗")
+        };
+
+        let engine_tags: String = m.engines.iter()
+            .map(|e| match e.as_str() {
+                "mlx"  => "[MLX]",
+                "vllm" => "[vLLM]",
+                "gguf" => "[GGUF]",
+                _      => "[?]",
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let gated_tag = if m.gated { " 🔒" } else { "" };
+        let curated_tag = if m.curated { " ★" } else { "" };
+        let prefix = if is_selected { "▶ " } else { "  " };
+        let incompatible_tag = if !engine_ok { " [incompatible engine]" } else { "" };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("{prefix}{}", m.quantization), name_style),
+            Span::styled(format!("  "), theme::dim()),
+            Span::styled(fits_icon, size_style),
+            Span::styled(format!(" {:.1}GB", m.size_gb), size_style),
+            Span::styled(format!("  {engine_tags}"), theme::info()),
+            Span::styled(curated_tag, theme::warning()),
+            Span::styled(gated_tag, theme::dim()),
+            Span::styled(incompatible_tag, theme::error()),
+        ]));
+
+        if is_selected && !m.description.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled(format!("    {}", m.description), theme::dim()),
+            ]));
+        }
+    }
+
+    let content_height = area.height.saturating_sub(4) as usize;
+    let total = lines.len();
+    let max_scroll = total.saturating_sub(content_height);
+    let scroll = app.browse_quant_scroll.min(max_scroll);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::dim())
+        .title(format!(" Quantization — {} ", app.browse_base_model_name))
         .title_style(theme::heading());
 
     f.render_widget(
@@ -875,6 +1116,7 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
         BrowseStep::Token   => " Enter Confirm/Skip  Esc Back  (type to enter token)",
         BrowseStep::Family  => " ↑↓ Navigate  Enter Select  Esc Back",
         BrowseStep::Models  => " ↑↓ Navigate  Enter Select  r Refresh from HF  Esc Back",
+        BrowseStep::Quant   => " ↑↓ Navigate  Enter Select  Esc Back",
         BrowseStep::Engine  => " ↑↓ Navigate  Enter Select  Esc Back",
         BrowseStep::Confirm => " Enter Download  s Skip  Esc Back",
     };
@@ -895,6 +1137,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         BrowseStep::Token   => handle_token(app, key),
         BrowseStep::Family  => handle_family(app, key),
         BrowseStep::Models  => handle_models(app, key),
+        BrowseStep::Quant   => handle_quant(app, key),
         BrowseStep::Engine  => handle_engine(app, key),
         BrowseStep::Confirm => handle_confirm(app, key),
     }
@@ -988,7 +1231,11 @@ fn handle_family(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_models(app: &mut App, key: KeyEvent) {
-    let count = app.browse_models.len();
+    let groups = base_model_groups(&app.browse_models);
+    let count = groups.len();
+    // Estimate visible rows (2 per selected item, 1 otherwise); use conservative page size
+    let est_page: usize = 15;
+
     match key.code {
         KeyCode::Esc => {
             app.browse_loading = false;
@@ -1006,6 +1253,11 @@ fn handle_models(app: &mut App, key: KeyEvent) {
         KeyCode::Down | KeyCode::Char('j') => {
             if count > 0 && app.browse_model_selected + 1 < count {
                 app.browse_model_selected += 1;
+                // Scroll viewport down when selection moves below visible area
+                let bottom = app.browse_model_scroll + est_page;
+                if app.browse_model_selected >= bottom {
+                    app.browse_model_scroll = app.browse_model_selected.saturating_sub(est_page - 1);
+                }
             }
         }
         KeyCode::Char('r') => {
@@ -1014,10 +1266,61 @@ fn handle_models(app: &mut App, key: KeyEvent) {
             app.set_message("Refreshing from HuggingFace…", MessageKind::Info);
         }
         KeyCode::Enter => {
+            if count == 0 || app.browse_models.is_empty() {
+                return;
+            }
+            // Record which base model was selected, then go to Quant step
+            let base_name = groups
+                .get(app.browse_model_selected)
+                .map(|(n, _)| n.clone())
+                .unwrap_or_default();
+            app.browse_base_model_name = base_name;
+            app.browse_quant_selected = 0;
+            app.browse_quant_scroll = 0;
+            app.browse_step = BrowseStep::Quant;
+        }
+        _ => {}
+    }
+}
+
+fn handle_quant(app: &mut App, key: KeyEvent) {
+    let quant_indices = quants_for_base(&app.browse_models, &app.browse_base_model_name);
+    let count = quant_indices.len();
+    let est_page: usize = 15;
+
+    match key.code {
+        KeyCode::Esc => {
+            app.browse_step = BrowseStep::Models;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if app.browse_quant_selected > 0 {
+                app.browse_quant_selected -= 1;
+                if app.browse_quant_selected < app.browse_quant_scroll {
+                    app.browse_quant_scroll = app.browse_quant_selected;
+                }
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if count > 0 && app.browse_quant_selected + 1 < count {
+                app.browse_quant_selected += 1;
+                let bottom = app.browse_quant_scroll + est_page;
+                if app.browse_quant_selected >= bottom {
+                    app.browse_quant_scroll = app.browse_quant_selected.saturating_sub(est_page - 1);
+                }
+            }
+        }
+        KeyCode::Enter => {
             if count == 0 {
                 return;
             }
-            // If engine is locked from wizard, check compatibility
+            // Map the selected quant row back to an index in browse_models
+            let model_idx = quant_indices
+                .get(app.browse_quant_selected)
+                .copied()
+                .unwrap_or(0);
+            app.browse_model_selected = model_idx;
+
+            // Reuse the same engine-selection logic as before
             if app.browse_engine_locked {
                 let locked_id = ENGINES
                     .get(app.browse_engine_selected)
@@ -1030,11 +1333,8 @@ fn handle_models(app: &mut App, key: KeyEvent) {
                     .unwrap_or(false);
 
                 if compatible {
-                    // Engine is locked and compatible — skip Engine step, go to Confirm
                     app.browse_step = BrowseStep::Confirm;
                 } else {
-                    // Engine locked but model not compatible — warn and go to Engine step
-                    // so user can see and pick a compatible engine (unlocks engine for this model)
                     app.browse_engine_locked = false;
                     let compatible_engines = engines_for_selected_model(app);
                     if !compatible_engines.is_empty() {
@@ -1049,13 +1349,11 @@ fn handle_models(app: &mut App, key: KeyEvent) {
             } else {
                 let compatible = engines_for_selected_model(app);
                 if compatible.len() == 1 {
-                    // Only one engine available — auto-select and skip Engine step
                     app.browse_engine_selected = compatible[0].0;
                     app.browse_step = BrowseStep::Confirm;
                 } else if compatible.is_empty() {
                     app.set_message("No compatible engines found for this model.", MessageKind::Warning);
                 } else {
-                    // Pre-select first compatible engine then let user choose
                     app.browse_engine_selected = compatible[0].0;
                     app.browse_step = BrowseStep::Engine;
                 }
@@ -1104,10 +1402,10 @@ fn handle_engine(app: &mut App, key: KeyEvent) {
 fn handle_confirm(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
-            // If engine was auto-selected (only one compatible), go back to Models
+            // If engine was auto-selected (only one compatible), go back to Quant
             let compatible = engines_for_selected_model(app);
             if compatible.len() <= 1 {
-                app.browse_step = BrowseStep::Models;
+                app.browse_step = BrowseStep::Quant;
             } else {
                 app.browse_step = BrowseStep::Engine;
             }

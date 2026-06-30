@@ -104,6 +104,13 @@ fn verify_local_vault_encrypted(vault_path: &std::path::Path) -> bool {
     }
 }
 
+fn ansible_vault_path() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let venv_bin = format!("{home}/.busibox/venv/bin");
+    let current = std::env::var("PATH").unwrap_or_default();
+    if current.is_empty() { venv_bin } else { format!("{venv_bin}:{current}") }
+}
+
 /// Encrypt a vault file locally using the ANSIBLE_VAULT_PASSWORD env var.
 /// Returns Ok(true) if encrypted and verified, Ok(false) if verification failed.
 fn encrypt_vault_local(vault_path: &std::path::Path, vault_password: &str) -> color_eyre::Result<bool> {
@@ -121,6 +128,7 @@ fn encrypt_vault_local(vault_path: &std::path::Path, vault_password: &str) -> co
 
     let output = std::process::Command::new("ansible-vault")
         .args(["encrypt", &vault_path.to_string_lossy(), "--vault-password-file", &env_script.to_string_lossy()])
+        .env("PATH", ansible_vault_path())
         .env("ANSIBLE_VAULT_PASSWORD", vault_password)
         .output()?;
 
@@ -1524,6 +1532,7 @@ fn spawn_install_worker(app: &mut App) {
                 if vault_path.exists() {
                     let test_result = std::process::Command::new("ansible-vault")
                         .args(["view", &vault_path.to_string_lossy(), "--vault-password-file", &env_script.to_string_lossy()])
+                        .env("PATH", ansible_vault_path())
                         .env("ANSIBLE_VAULT_PASSWORD", vp.as_str())
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
@@ -1877,6 +1886,7 @@ fn spawn_install_worker(app: &mut App) {
                 if vault_path.exists() {
                     let test_result = std::process::Command::new("ansible-vault")
                         .args(["view", &vault_path.to_string_lossy(), "--vault-password-file", &env_script.to_string_lossy()])
+                        .env("PATH", ansible_vault_path())
                         .env("ANSIBLE_VAULT_PASSWORD", vp.as_str())
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())

@@ -63,11 +63,12 @@ pub fn render(f: &mut Frame, app: &App) {
 
     // Step progress
     let step_label = match app.wizard_step {
-        WizardStep::Target      => "Step 1 of 4 — Where will Busibox run?",
-        WizardStep::Preset      => "Step 2 of 4 — Choose a service preset",
-        WizardStep::LlmBackend  => "Step 2b — Choose a local LLM backend",
-        WizardStep::ModelSelect => "Step 3 of 4 — Select an initial model (optional)",
-        WizardStep::Confirm     => "Step 4 of 4 — Review and create profile",
+        WizardStep::Target         => "Step 1 of 4 — Where will Busibox run?",
+        WizardStep::DockerRuntime  => "Step 1 of 4 — Choose a Docker runtime",
+        WizardStep::Preset         => "Step 2 of 4 — Choose a service preset",
+        WizardStep::LlmBackend     => "Step 2 of 4 — Choose a service preset",
+        WizardStep::ModelSelect    => "Step 3 of 4 — Select an initial model (optional)",
+        WizardStep::Confirm        => "Step 4 of 4 — Review and create profile",
     };
     let subtitle = Paragraph::new(step_label)
         .style(theme::muted())
@@ -75,11 +76,12 @@ pub fn render(f: &mut Frame, app: &App) {
     f.render_widget(subtitle, chunks[1]);
 
     match app.wizard_step {
-        WizardStep::Target      => render_target(f, app, chunks[2]),
-        WizardStep::Preset      => render_preset(f, app, chunks[2]),
-        WizardStep::LlmBackend  => render_llm_backend(f, app, chunks[2]),
-        WizardStep::ModelSelect => render_model_select(f, app, chunks[2]),
-        WizardStep::Confirm     => render_confirm(f, app, chunks[2]),
+        WizardStep::Target         => render_target(f, app, chunks[2]),
+        WizardStep::DockerRuntime  => render_docker_runtime(f, app, chunks[2]),
+        WizardStep::Preset         => render_preset(f, app, chunks[2]),
+        WizardStep::LlmBackend     => render_llm_backend(f, app, chunks[2]),
+        WizardStep::ModelSelect    => render_model_select(f, app, chunks[2]),
+        WizardStep::Confirm        => render_confirm(f, app, chunks[2]),
     }
 
     // Help bar
@@ -120,6 +122,45 @@ fn render_target(f: &mut Frame, app: &App, area: Rect) {
             .borders(Borders::ALL)
             .border_style(theme::dim())
             .title(" Installation Target ")
+            .title_style(theme::heading()),
+    );
+    f.render_widget(list, area);
+}
+
+fn render_docker_runtime(f: &mut Frame, app: &App, area: Rect) {
+    let runtime_info: &[(&str, &str, &str)] = &[
+        ("docker-desktop", "Docker Desktop", "GUI-managed Docker engine (Docker Inc.)"),
+        ("colima", "Colima", "Lightweight container runtime for macOS (open source)"),
+    ];
+
+    let items: Vec<ListItem> = app
+        .wizard_available_runtimes
+        .iter()
+        .enumerate()
+        .map(|(i, rt_id)| {
+            let (_, label, desc) = runtime_info
+                .iter()
+                .find(|(id, _, _)| *id == rt_id.as_str())
+                .copied()
+                .unwrap_or((rt_id.as_str(), rt_id.as_str(), ""));
+            let style = if i == app.wizard_docker_selected {
+                theme::selected()
+            } else {
+                theme::normal()
+            };
+            ListItem::new(vec![
+                Line::from(Span::styled(format!("  {label}"), style)),
+                Line::from(Span::styled(format!("    {desc}"), theme::muted())),
+                Line::from(""),
+            ])
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme::dim())
+            .title(" Docker Runtime ")
             .title_style(theme::heading()),
     );
     f.render_widget(list, area);
@@ -307,11 +348,12 @@ fn render_confirm(f: &mut Frame, app: &App, area: Rect) {
 
 pub fn handle_key(app: &mut App, key: KeyEvent) {
     match app.wizard_step {
-        WizardStep::Target      => handle_target(app, key),
-        WizardStep::Preset      => handle_preset(app, key),
-        WizardStep::LlmBackend  => handle_llm_backend(app, key),
-        WizardStep::ModelSelect => handle_model_select(app, key),
-        WizardStep::Confirm     => handle_confirm(app, key),
+        WizardStep::Target         => handle_target(app, key),
+        WizardStep::DockerRuntime  => handle_docker_runtime(app, key),
+        WizardStep::Preset         => handle_preset(app, key),
+        WizardStep::LlmBackend     => handle_llm_backend(app, key),
+        WizardStep::ModelSelect    => handle_model_select(app, key),
+        WizardStep::Confirm        => handle_confirm(app, key),
     }
 }
 
@@ -337,10 +379,19 @@ fn handle_target(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Enter => match app.wizard_target_selected {
             0 => {
-                // Local install — proceed to preset selection
+                // Local install — detect Docker runtimes, then proceed
                 app.setup_target = SetupTarget::Local;
                 app.wizard_preset_selected = 0;
-                app.wizard_step = WizardStep::Preset;
+                let runtimes = detect_available_runtimes();
+                if runtimes.len() > 1 {
+                    app.wizard_docker_selected = 0;
+                    app.wizard_available_runtimes = runtimes;
+                    app.wizard_step = WizardStep::DockerRuntime;
+                } else {
+                    // Auto-select the only available runtime (stored as empty = auto)
+                    app.wizard_available_runtimes = runtimes;
+                    app.wizard_step = WizardStep::Preset;
+                }
             }
             1 => {
                 // Remote install — hand off to SSH setup flow
@@ -357,10 +408,39 @@ fn handle_target(app: &mut App, key: KeyEvent) {
     }
 }
 
-fn handle_preset(app: &mut App, key: KeyEvent) {
+fn handle_docker_runtime(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
             app.wizard_step = WizardStep::Target;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if app.wizard_docker_selected > 0 {
+                app.wizard_docker_selected -= 1;
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if app.wizard_docker_selected < app.wizard_available_runtimes.len().saturating_sub(1) {
+                app.wizard_docker_selected += 1;
+            }
+        }
+        KeyCode::Enter => {
+            // Selection is stored in wizard_docker_selected; proceed to preset
+            app.wizard_preset_selected = 0;
+            app.wizard_step = WizardStep::Preset;
+        }
+        _ => {}
+    }
+}
+
+fn handle_preset(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => {
+            // If a docker runtime choice was shown, go back to that step; else back to Target
+            if app.wizard_available_runtimes.len() > 1 {
+                app.wizard_step = WizardStep::DockerRuntime;
+            } else {
+                app.wizard_step = WizardStep::Target;
+            }
         }
         KeyCode::Up | KeyCode::Char('k') => {
             if app.wizard_preset_selected > 0 {
@@ -373,16 +453,15 @@ fn handle_preset(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::Enter => {
+            // Go straight to model selection for all presets.
+            // For Lite+Local, populate available backends from hardware so
+            // create_profile_from_wizard can still auto-select the best backend.
             if app.wizard_preset_selected == 1 {
-                // Lite + Local LLM: populate available backends from hardware
                 populate_available_backends(app);
                 app.wizard_backend_selected = 0;
-                app.wizard_step = WizardStep::LlmBackend;
-            } else {
-                // Lite or Full: still offer model selection
-                app.wizard_target_selected = 0;
-                app.wizard_step = WizardStep::ModelSelect;
             }
+            app.wizard_target_selected = 0;
+            app.wizard_step = WizardStep::ModelSelect;
         }
         _ => {}
     }
@@ -416,12 +495,7 @@ fn handle_llm_backend(app: &mut App, key: KeyEvent) {
 fn handle_model_select(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
-            // Go back to whichever step led here
-            if app.wizard_preset_selected == 1 {
-                app.wizard_step = WizardStep::LlmBackend;
-            } else {
-                app.wizard_step = WizardStep::Preset;
-            }
+            app.wizard_step = WizardStep::Preset;
         }
         KeyCode::Up | KeyCode::Char('k') => {
             if app.wizard_target_selected > 0 {
@@ -512,11 +586,50 @@ fn open_model_browser_from_wizard(app: &mut App) {
     app.browse_loading = false;
     app.browse_rx = None;
     app.browse_return_to_wizard = true;
-    // Engine pre-selected from wizard. In Models step, incompatible models are dimmed.
-    // If the selected model is compatible, the Engine step is auto-skipped to Confirm.
-    // If not compatible, the lock is cleared and the user picks a compatible engine.
-    app.browse_engine_locked = true;
+    // Engine is NOT locked — the user picks their backend as part of model selection.
+    app.browse_engine_locked = false;
     app.screen = Screen::ModelBrowse;
+}
+
+/// Detect which Docker runtimes are available on this machine.
+/// Returns a vec containing "docker-desktop" and/or "colima" in preference order.
+fn detect_available_runtimes() -> Vec<String> {
+    let mut runtimes = Vec::new();
+
+    // Docker Desktop: check for the application bundle (macOS)
+    let docker_desktop = std::path::Path::new("/Applications/Docker.app").exists();
+    if docker_desktop {
+        runtimes.push("docker-desktop".to_string());
+    }
+
+    // Colima: check if the binary is on PATH or in common Homebrew locations
+    let colima_paths = [
+        "/opt/homebrew/bin/colima",
+        "/usr/local/bin/colima",
+    ];
+    let colima_found = colima_paths.iter().any(|p| std::path::Path::new(p).exists())
+        || std::process::Command::new("which")
+            .arg("colima")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+    if colima_found {
+        runtimes.push("colima".to_string());
+    }
+
+    // Fallback: if docker binary exists but neither Desktop nor Colima detected, treat as generic docker
+    if runtimes.is_empty() {
+        let docker_in_path = std::process::Command::new("which")
+            .arg("docker")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if docker_in_path {
+            runtimes.push("docker-desktop".to_string());
+        }
+    }
+
+    runtimes
 }
 
 /// Populate `wizard_available_backends` based on detected local hardware.
@@ -551,8 +664,8 @@ fn populate_available_backends(app: &mut App) {
 /// Resolve the flat service list for the wizard's current selections.
 fn resolved_services(app: &App) -> Vec<String> {
     let base = match app.wizard_preset_selected {
-        1 | 2 => BusiboxProfile::Standard, // Lite+Local or Full both start from standard shape
-        _ => BusiboxProfile::Lite,
+        2 => BusiboxProfile::Standard, // Full starts from Standard (adds milvus, embedding, search)
+        _ => BusiboxProfile::Lite,     // Lite and Lite+LocalLLM both use Lite base (no RAG stack)
     };
     let full = app.wizard_preset_selected == 2;
     let base_profile = if full { BusiboxProfile::Full } else { base };
@@ -566,10 +679,27 @@ fn resolved_services(app: &App) -> Vec<String> {
         packs.push(AddonPack::Graph);
     }
 
-    resolve_services(base_profile, &packs)
+    let mut svcs: Vec<String> = resolve_services(base_profile, &packs)
         .iter()
         .map(|s| s.to_string())
-        .collect()
+        .collect();
+
+    // For Lite+LocalLLM (preset 1), replace the generic "vllm" placeholder with the
+    // hardware-appropriate service name so the wizard confirm screen shows the correct service.
+    if app.wizard_preset_selected == 1 {
+        let llm_svc = match engine_for_wizard(app) {
+            "mlx"  => "mlx",
+            "gguf" => "ollama",
+            _      => "vllm",
+        };
+        for s in &mut svcs {
+            if s == "vllm" {
+                *s = llm_svc.to_string();
+            }
+        }
+    }
+
+    svcs
 }
 
 /// Create the deployment profile from wizard state and save it to profiles.json.
@@ -653,7 +783,7 @@ fn create_profile_from_wizard(app: &mut App) -> bool {
         ssl_cert_name: None,
         network_base_octets: None,
         use_production_vllm: None,
-        docker_runtime: None,
+        docker_runtime: app.wizard_available_runtimes.get(app.wizard_docker_selected).cloned(),
         github_token: None,
         cloud_provider: None,
         cloud_api_key: None,
