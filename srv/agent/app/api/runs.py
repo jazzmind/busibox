@@ -274,7 +274,7 @@ async def invoke_agent_async(
             run_payload["response_schema"] = payload.response_schema
 
         from app.models.domain import RunRecord
-        from app.services.run_service import add_run_event, capture_definition_snapshot
+        from app.services.run_service import add_run_event, capture_definition_snapshot, redact_images_for_persistence
 
         try:
             definition_snapshot = await capture_definition_snapshot(
@@ -286,7 +286,7 @@ async def invoke_agent_async(
         run_record = RunRecord(
             agent_id=resolved_agent_id,
             status="pending",
-            input=run_payload,
+            input=redact_images_for_persistence(run_payload),
             created_by=principal.sub,
             definition_snapshot=definition_snapshot,
             events=[],
