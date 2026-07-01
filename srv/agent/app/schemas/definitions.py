@@ -85,6 +85,12 @@ class AgentDefinitionCreate(BaseModel):
         default=False,
         description="Allow automatic fallback to frontier cloud model when context window is exceeded. Only enable for non-sensitive data."
     )
+    response_schema: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional JSON Schema envelope ({name, strict, schema}) enforced on every run output. "
+        "When set, response_format is sent to the LLM on every run so the output always matches this shape. "
+        "Invoke-time response_schema overrides this definition-level value."
+    )
     context_compression: Optional[ContextCompressionConfig] = Field(
         default_factory=ContextCompressionConfig,
         description="Configuration for conversation history compression"
@@ -126,6 +132,7 @@ class AgentDefinitionUpdate(BaseModel):
     visibility: Optional[AgentVisibility] = None
     app_id: Optional[str] = None
     allow_frontier_fallback: Optional[bool] = None
+    response_schema: Optional[Dict[str, Any]] = None
 
 
 class ToolDefinitionCreate(BaseModel):

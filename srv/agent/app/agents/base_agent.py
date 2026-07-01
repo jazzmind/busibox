@@ -1633,97 +1633,92 @@ class BaseStreamingAgent(StreamingAgent):
         Conversation history is passed via message_history for proper multi-turn context.
         """
         
-        # For deterministic workflow/programmatic calls, disable tool usage and
-        # force structured output via response_schema.
-        force_structured_output = context.response_schema is not None
-
         # Get tool functions for this agent, wrapped with result truncation
         # to prevent large tool outputs from exceeding the LLM context window
         tools = []
-        if not force_structured_output:
-            for tool_name in self.config.tools:
-                tool_func = ToolRegistry.get(tool_name)
-                if tool_func:
-                    wrapped_tool = _wrap_tool_with_truncation(tool_func)
+        for tool_name in self.config.tools:
+            tool_func = ToolRegistry.get(tool_name)
+            if tool_func:
+                wrapped_tool = _wrap_tool_with_truncation(tool_func)
 
-                    @functools.wraps(wrapped_tool)
-                    async def monitored_tool(*args, _tool_name=tool_name, _tool=wrapped_tool, **kwargs):
-                        if cancel.is_set():
-                            return ""
-                        input_payload: Dict[str, Any]
-                        if kwargs:
-                            input_payload = dict(kwargs)
-                        elif args:
-                            input_payload = {"args": [str(a) for a in args]}
-                        else:
-                            input_payload = {}
+                @functools.wraps(wrapped_tool)
+                async def monitored_tool(*args, _tool_name=tool_name, _tool=wrapped_tool, **kwargs):
+                    if cancel.is_set():
+                        return ""
+                    input_payload: Dict[str, Any]
+                    if kwargs:
+                        input_payload = dict(kwargs)
+                    elif args:
+                        input_payload = {"args": [str(a) for a in args]}
+                    else:
+                        input_payload = {}
 
-                        # Deduplication: skip if identical call already made
-                        dedup_key = f"{_tool_name}:{json.dumps(input_payload, sort_keys=True, default=str)}"
-                        if dedup_key in context._tool_call_dedup:
-                            logger.info(f"Tool {_tool_name} dedup hit, returning cached result")
-                            return context._tool_call_dedup[dedup_key]
+                    # Deduplication: skip if identical call already made
+                    dedup_key = f"{_tool_name}:{json.dumps(input_payload, sort_keys=True, default=str)}"
+                    if dedup_key in context._tool_call_dedup:
+                        logger.info(f"Tool {_tool_name} dedup hit, returning cached result")
+                        return context._tool_call_dedup[dedup_key]
 
-                        await stream(tool_start(
+                    await stream(tool_start(
+                        source=_tool_name,
+                        message=f"Using {_tool_name}...",
+                        data={
+                            "tool_name": _tool_name,
+                            "input": input_payload,
+                        },
+                    ))
+                    tool_class = TOOL_CLASSES.get(_tool_name, TOOL_CLASS_DEFAULT)
+                    timeout_s = tool_class["timeout"]
+                    t_tool = time.monotonic()
+                    try:
+                        result = await asyncio.wait_for(
+                            _tool(*args, **kwargs), timeout=timeout_s
+                        )
+                        tool_ms = round((time.monotonic() - t_tool) * 1000)
+                        logger.info(
+                            f"Tool {_tool_name} complete",
+                            extra={"elapsed_ms": tool_ms},
+                        )
+                        context.tool_results[_tool_name] = result
+                        context._tool_call_dedup[dedup_key] = result
+                        result_data = (
+                            result.model_dump()
+                            if hasattr(result, "model_dump")
+                            else {"result": str(result)}
+                        )
+                        if not isinstance(result_data, dict):
+                            result_data = {"result": str(result_data)}
+                        await stream(tool_result(
                             source=_tool_name,
-                            message=f"Using {_tool_name}...",
-                            data={
-                                "tool_name": _tool_name,
-                                "input": input_payload,
-                            },
+                            message=self._format_tool_result_message(_tool_name, result),
+                            data=result_data,
                         ))
-                        tool_class = TOOL_CLASSES.get(_tool_name, TOOL_CLASS_DEFAULT)
-                        timeout_s = tool_class["timeout"]
-                        t_tool = time.monotonic()
-                        try:
-                            result = await asyncio.wait_for(
-                                _tool(*args, **kwargs), timeout=timeout_s
-                            )
-                            tool_ms = round((time.monotonic() - t_tool) * 1000)
-                            logger.info(
-                                f"Tool {_tool_name} complete",
-                                extra={"elapsed_ms": tool_ms},
-                            )
-                            context.tool_results[_tool_name] = result
-                            context._tool_call_dedup[dedup_key] = result
-                            result_data = (
-                                result.model_dump()
-                                if hasattr(result, "model_dump")
-                                else {"result": str(result)}
-                            )
-                            if not isinstance(result_data, dict):
-                                result_data = {"result": str(result_data)}
-                            await stream(tool_result(
-                                source=_tool_name,
-                                message=self._format_tool_result_message(_tool_name, result),
-                                data=result_data,
-                            ))
-                            return result
-                        except asyncio.TimeoutError:
-                            tool_ms = round((time.monotonic() - t_tool) * 1000)
-                            logger.error(
-                                f"Tool {_tool_name} timed out after {timeout_s}s ({tool_ms}ms elapsed)"
-                            )
-                            await stream(error(
-                                source=_tool_name,
-                                message=f"{_tool_name} timed out after {timeout_s}s",
-                            ))
-                            raise RuntimeError(f"{_tool_name} timed out after {timeout_s}s")
-                        except Exception as e:
-                            logger.error(
-                                f"Tool {_tool_name} failed after {round((time.monotonic() - t_tool) * 1000)}ms: {e}",
-                            )
-                            await stream(error(
-                                source=_tool_name,
-                                message=f"{_tool_name} failed: {str(e)}",
-                            ))
-                            raise
+                        return result
+                    except asyncio.TimeoutError:
+                        tool_ms = round((time.monotonic() - t_tool) * 1000)
+                        logger.error(
+                            f"Tool {_tool_name} timed out after {timeout_s}s ({tool_ms}ms elapsed)"
+                        )
+                        await stream(error(
+                            source=_tool_name,
+                            message=f"{_tool_name} timed out after {timeout_s}s",
+                        ))
+                        raise RuntimeError(f"{_tool_name} timed out after {timeout_s}s")
+                    except Exception as e:
+                        logger.error(
+                            f"Tool {_tool_name} failed after {round((time.monotonic() - t_tool) * 1000)}ms: {e}",
+                        )
+                        await stream(error(
+                            source=_tool_name,
+                            message=f"{_tool_name} failed: {str(e)}",
+                        ))
+                        raise
 
-                    monitored_tool.__name__ = tool_name
-                    monitored_tool.__qualname__ = tool_name
-                    monitored_tool.__signature__ = inspect.signature(wrapped_tool)
-                    monitored_tool.__annotations__ = getattr(wrapped_tool, "__annotations__", {})
-                    tools.append(monitored_tool)
+                monitored_tool.__name__ = tool_name
+                monitored_tool.__qualname__ = tool_name
+                monitored_tool.__signature__ = inspect.signature(wrapped_tool)
+                monitored_tool.__annotations__ = getattr(wrapped_tool, "__annotations__", {})
+                tools.append(monitored_tool)
         
         if not tools:
             # No tools configured - run as conversational agent without tool capabilities
@@ -2998,6 +2993,21 @@ def create_agent_from_definition(definition: Any) -> BaseStreamingAgent:
     raw_mcp = getattr(definition, 'mcp_servers', None) or []
     mcp_configs = parse_mcp_server_configs(raw_mcp) if raw_mcp else []
 
+    # Convert definition-level response_schema to a Pydantic output_type so that
+    # response_format is enforced on every run for this agent.
+    definition_output_type = None
+    raw_response_schema = getattr(definition, 'response_schema', None)
+    if raw_response_schema:
+        try:
+            from app.utils.json_schema_to_pydantic import json_schema_to_pydantic
+            definition_output_type = json_schema_to_pydantic(raw_response_schema)
+            logger.info(f"Agent {definition.name}: response_schema converted to output_type")
+        except Exception as exc:
+            logger.warning(
+                f"Agent {definition.name}: failed to convert response_schema to output_type "
+                f"({exc}); response_format will not be enforced at the definition level"
+            )
+
     # Create config
     config = AgentConfig(
         name=definition.name,
@@ -3011,6 +3021,7 @@ def create_agent_from_definition(definition: Any) -> BaseStreamingAgent:
         max_iterations=workflows.get("max_iterations", 5),
         allow_frontier_fallback=getattr(definition, 'allow_frontier_fallback', False),
         mcp_servers=mcp_configs,
+        output_type=definition_output_type,
     )
     
     # Check for predefined pipeline

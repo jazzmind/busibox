@@ -108,9 +108,9 @@ For programmatic tasks that need deterministic JSON output (scoring, classificat
 ### How It Works
 
 1. App calls `POST /runs/invoke` with `agent_name`, `input.prompt`, and `response_schema`
-2. The agent runs with tools disabled and structured output enforced
+2. The agent runs normally (tools still available if the agent has them); `response_format` is enforced on the LLM's final response
 3. The agent sends `response_format: { type: "json_schema", json_schema: <schema> }` to the LLM via LiteLLM
-4. Response is validated against the schema with `jsonschema.validate()`; retries once on validation failure
+4. For no-tool agents: the response is validated against the schema with `jsonschema.validate()`; retries once on validation failure
 5. The validated JSON is returned in `output`
 
 ### Schema Format

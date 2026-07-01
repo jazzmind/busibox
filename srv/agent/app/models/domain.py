@@ -66,6 +66,10 @@ class AgentDefinition(Base):
         JSON, default=None, nullable=True,
         comment="External MCP server configs [{name, transport, url/command, ...}]"
     )
+    response_schema: Mapped[Optional[dict]] = mapped_column(
+        JSON, default=None, nullable=True,
+        comment="Optional JSON Schema envelope ({name, strict, schema}) enforced on every run output"
+    )
     created_by: Mapped[Optional[str]] = mapped_column(String(255))
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
