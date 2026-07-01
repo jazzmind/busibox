@@ -2,7 +2,12 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+ALLOWED_IMAGE_MEDIA_TYPES = {"image/jpeg", "image/png", "image/webp"}
+MAX_IMAGES_PER_CALL = 4
+MAX_IMAGE_B64_CHARS = 7_000_000  # ~5 MB of binary, base64-encoded
 
 
 class RunCreate(BaseModel):
@@ -38,6 +43,30 @@ class RunInvoke(BaseModel):
         description="Execution tier: simple (30s/512MB), complex (5min/2GB), batch (30min/4GB)",
         pattern="^(simple|complex|batch)$",
     )
+
+    @field_validator("input")
+    @classmethod
+    def _validate_images(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        images = v.get("images")
+        if images is None:
+            return v
+        if not isinstance(images, list):
+            raise ValueError("input.images must be a list")
+        if len(images) > MAX_IMAGES_PER_CALL:
+            raise ValueError(f"input.images supports at most {MAX_IMAGES_PER_CALL} images per call")
+        for i, img in enumerate(images):
+            if not isinstance(img, dict):
+                raise ValueError(f"input.images[{i}] must be an object")
+            if img.get("media_type") not in ALLOWED_IMAGE_MEDIA_TYPES:
+                raise ValueError(
+                    f"input.images[{i}].media_type must be one of {sorted(ALLOWED_IMAGE_MEDIA_TYPES)}"
+                )
+            data = img.get("data")
+            if not isinstance(data, str) or not data:
+                raise ValueError(f"input.images[{i}].data must be a non-empty base64 string")
+            if len(data) > MAX_IMAGE_B64_CHARS:
+                raise ValueError(f"input.images[{i}].data exceeds the size limit (~5 MB binary)")
+        return v
 
 
 class RunInvokeResponse(BaseModel):

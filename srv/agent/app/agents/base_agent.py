@@ -54,6 +54,7 @@ from app.agents.streaming_agent import StreamingAgent, StreamCallback
 from app.clients.busibox import BusiboxClient
 from app.config.settings import get_settings
 from app.schemas.auth import Principal
+from app.schemas.run import ALLOWED_IMAGE_MEDIA_TYPES
 from app.schemas.streaming import StreamEvent, thought, tool_start, tool_result, content, error, complete, clarify_parallel, progress
 from app.services.attachment_resolver import attachment_resolver
 from app.services.token_service import get_or_exchange_token
@@ -660,6 +661,11 @@ class AgentContext:
     current_query: Optional[str] = None
     # Optional per-run token budget override.
     max_tokens: Optional[int] = None
+    # Base64 images for multimodal structured-output calls (from /runs/invoke).
+    # Shape is enforced by RunInvoke._validate_images for /runs/invoke;
+    # _build_user_content skips malformed entries from unvalidated paths.
+    # Each item: {"media_type": "image/jpeg", "data": "<base64>"}
+    images: List[Dict[str, str]] = field(default_factory=list)
     # Deduplication cache for tool calls: maps (tool_name, args_json) -> result
     _tool_call_dedup: Dict[str, Any] = field(default_factory=dict)
 
@@ -1059,7 +1065,8 @@ class BaseStreamingAgent(StreamingAgent):
             agent_context.attachment_metadata = context.get("attachment_metadata", []) or []
             agent_context.response_schema = context.get("response_schema")
             agent_context.max_tokens = context.get("max_tokens")
-        
+            agent_context.images = context.get("images") or []
+
         # Check what scopes this agent's tools require
         scopes = self.config.get_required_scopes()
         requires_auth = len(scopes) > 0
@@ -1779,6 +1786,7 @@ class BaseStreamingAgent(StreamingAgent):
                             response_schema=context.response_schema,
                             max_tokens=context.max_tokens or self.config.max_tokens,
                             message_history=plain_history,
+                            images=context.images or None,
                         )
                         context.tool_results["llm_response"] = structured_output
                     except Exception as fallback_err:
@@ -2170,6 +2178,7 @@ class BaseStreamingAgent(StreamingAgent):
             response_schema=response_schema,
             max_tokens=context.max_tokens or self.config.max_tokens,
             message_history=message_history,
+            images=context.images or None,
         )
 
     @staticmethod
@@ -2215,6 +2224,32 @@ class BaseStreamingAgent(StreamingAgent):
         return cleaned
 
     @staticmethod
+    def _build_user_content(prompt: str, images: Optional[List[Dict[str, str]]]) -> Any:
+        """Plain string when no images; OpenAI content-part list otherwise.
+
+        Entries that don't match the validated shape (see
+        RunInvoke._validate_images) are skipped: /runs/invoke enforces the
+        shape upstream, but POST /runs payloads are unvalidated.
+        """
+        if not images:
+            return prompt
+        parts: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for img in images:
+            if not isinstance(img, dict):
+                continue
+            media_type = img.get("media_type")
+            data = img.get("data")
+            if media_type not in ALLOWED_IMAGE_MEDIA_TYPES or not isinstance(data, str) or not data:
+                continue
+            parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{media_type};base64,{data}"},
+            })
+        if len(parts) == 1:
+            return prompt
+        return parts
+
+    @staticmethod
     def _fixup_arrays(data: Any, schema: Dict[str, Any]) -> Any:
         """Deduplicate and truncate arrays that exceed maxItems.
 
@@ -2258,6 +2293,7 @@ class BaseStreamingAgent(StreamingAgent):
         response_schema: Dict[str, Any],
         max_tokens: Optional[int] = None,
         message_history: Optional[List[Dict[str, str]]] = None,
+        images: Optional[List[Dict[str, str]]] = None,
     ) -> str:
         """
         Call the LLM directly via the OpenAI client with response_format enforced.
@@ -2293,13 +2329,14 @@ class BaseStreamingAgent(StreamingAgent):
             max_tokens = await _get_model_max_output_tokens(model_name)
 
         effective_prompt = "/no_think\n" + prompt
+        user_content = self._build_user_content(effective_prompt, images)
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
         ]
         if message_history:
             messages.extend(message_history)
-        messages.append({"role": "user", "content": effective_prompt})
+        messages.append({"role": "user", "content": user_content})
 
         kwargs: Dict[str, Any] = {
             "model": model_name,
@@ -2348,7 +2385,7 @@ class BaseStreamingAgent(StreamingAgent):
                     if message_history:
                         retry_messages.extend(message_history)
                     retry_messages.extend([
-                        {"role": "user", "content": effective_prompt},
+                        {"role": "user", "content": user_content},
                         {"role": "assistant", "content": raw_content},
                         {"role": "user", "content": (
                             "/no_think\n"
@@ -2378,7 +2415,7 @@ class BaseStreamingAgent(StreamingAgent):
                     if message_history:
                         retry_messages.extend(message_history)
                     retry_messages.extend([
-                        {"role": "user", "content": effective_prompt},
+                        {"role": "user", "content": user_content},
                         {"role": "assistant", "content": content},
                         {"role": "user", "content": (
                             "/no_think\n"
