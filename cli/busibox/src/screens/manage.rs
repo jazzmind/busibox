@@ -12,6 +12,17 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// PATH that includes the venv bin dir where `ansible-vault` is installed.
+/// Needed because secrets-sync.sh shells out to `ansible-vault` locally and
+/// the TUI's own PATH may not include the venv (see modules/remote.rs and
+/// screens/install.rs for the same helper).
+fn ansible_vault_path() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let venv_bin = format!("{home}/.busibox/venv/bin");
+    let current = std::env::var("PATH").unwrap_or_default();
+    if current.is_empty() { venv_bin } else { format!("{venv_bin}:{current}") }
+}
+
 /// Map display name to make SERVICE= value for manage commands.
 fn service_to_make_name(display_name: &str) -> &str {
     match display_name {
@@ -3303,6 +3314,7 @@ fn fetch_secrets_sync(
 
     let mut cmd = std::process::Command::new("bash");
     cmd.args(&args);
+    cmd.env("PATH", ansible_vault_path());
     if let Some(pw) = vault_password {
         cmd.env("ANSIBLE_VAULT_PASSWORD", pw);
     }

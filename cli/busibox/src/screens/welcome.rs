@@ -1118,7 +1118,8 @@ pub fn trigger_health_checks(app: &mut App) {
     let network_base = profile.effective_network_base().to_string();
     let vllm_network_base = profile.vllm_network_base().to_string();
     let docker_runtime = profile.effective_docker_runtime().to_string();
-    let rx = health::start_health_checks(is_remote, is_mlx, &host, &prefix, ssh_details, is_proxmox, &network_base, &vllm_network_base, &docker_runtime);
+    let port_overrides = profile.port_overrides.clone();
+    let rx = health::start_health_checks_with_overrides(is_remote, is_mlx, &host, &prefix, ssh_details, is_proxmox, &network_base, &vllm_network_base, &docker_runtime, port_overrides);
     app.health_rx = Some(rx);
 }
 

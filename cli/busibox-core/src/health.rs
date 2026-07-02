@@ -154,7 +154,7 @@ const API_SERVICES: &[ServiceHealthDef] = &[
         name: "deploy",
         group: "APIs",
         check: CheckMethod::Http {
-            path: "/health/live",
+            path: "/health",
             port: 8011,
         },
         proxmox_container_id: Some(210),
@@ -973,6 +973,23 @@ pub fn start_health_checks(
     vllm_network_base: &str,
     docker_runtime: &str,
 ) -> mpsc::Receiver<HealthUpdate> {
+    start_health_checks_with_overrides(is_remote, is_mlx, host, prefix, ssh_details, is_proxmox, network_base, vllm_network_base, docker_runtime, std::collections::HashMap::new())
+}
+
+/// Same as `start_health_checks`, but applies per-service port overrides (e.g. when
+/// a profile's litellm was reassigned to a non-default port during install).
+pub fn start_health_checks_with_overrides(
+    is_remote: bool,
+    is_mlx: bool,
+    host: &str,
+    prefix: &str,
+    ssh_details: Option<(String, String, String)>,
+    is_proxmox: bool,
+    network_base: &str,
+    vllm_network_base: &str,
+    docker_runtime: &str,
+    port_overrides: std::collections::HashMap<String, u16>,
+) -> mpsc::Receiver<HealthUpdate> {
     let (tx, rx) = mpsc::channel();
     let defs = all_service_defs(is_mlx);
     let host = if is_remote {
@@ -981,6 +998,6 @@ pub fn start_health_checks(
         "localhost".to_string()
     };
 
-    run_health_checks(defs, host, prefix.to_string(), ssh_details, is_proxmox, network_base.to_string(), vllm_network_base.to_string(), tx, docker_runtime.to_string());
+    run_health_checks_with_overrides(defs, host, prefix.to_string(), ssh_details, is_proxmox, network_base.to_string(), vllm_network_base.to_string(), tx, docker_runtime.to_string(), port_overrides);
     rx
 }
