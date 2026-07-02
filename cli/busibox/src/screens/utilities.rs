@@ -21,9 +21,25 @@ const MENU: &[MenuItem] = &[
     MenuItem { label: "Run Tests",                description: "Run unit, integration & security tests" },
     MenuItem { label: "Clean Install",            description: "Wipe containers and reinstall from scratch" },
     MenuItem { label: "Install SSL Certificate",  description: "Generate & trust a local SSL cert (mkcert)" },
-    MenuItem { label: "Configure Local Agents",   description: "Write ~/.claude/settings.json + agent files" },
+    MenuItem { label: "Toggle Agent Mode",        description: "Switch Claude Code between Local (busibox) and Normal (Anthropic)" },
     MenuItem { label: "Benchmark Models",         description: "Run LLM benchmark suite" },
 ];
+
+// Index of the toggle item — kept as a constant so it's easy to find.
+const TOGGLE_AGENT_IDX: usize = 4;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mode detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns true when ~/.claude/settings.json routes through a local LiteLLM proxy.
+pub fn detect_agents_mode() -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = format!("{home}/.claude/settings.json");
+    std::fs::read_to_string(&path)
+        .map(|c| c.contains("\"ANTHROPIC_BASE_URL\"") && c.contains("localhost"))
+        .unwrap_or(false)
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Render
@@ -105,8 +121,21 @@ fn render_menu_panel(f: &mut Frame, app: &App, area: Rect) {
         } else {
             theme::dim()
         };
+
+        // For the toggle item, show the current mode badge in the label.
+        let label = if i == TOGGLE_AGENT_IDX {
+            let badge = if app.agents_mode_is_local {
+                " [LOCAL ●]"
+            } else {
+                " [NORMAL ○]"
+            };
+            format!("  {}{}", item.label, badge)
+        } else {
+            format!("  {}", item.label)
+        };
+
         ListItem::new(vec![
-            Line::from(Span::styled(format!("  {}", item.label), style)),
+            Line::from(Span::styled(label, style)),
             Line::from(Span::styled(format!("    {}", item.description), desc_style)),
             Line::from(""),
         ])
@@ -201,12 +230,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
 fn dispatch_selected(app: &mut App) {
     match app.utilities_selected {
         0 => {
-            // Validate Secrets — navigate to existing screen
             app.set_message("⠋ Validating vault secrets…", crate::app::MessageKind::Info);
             app.pending_compare_secrets = true;
         }
         1 => {
-            // Run Tests — navigate to existing screen
             app.test_service_selected = 0;
             app.test_suite_selected = 0;
             app.test_focus_suite = false;
@@ -219,19 +246,15 @@ fn dispatch_selected(app: &mut App) {
             app.screen = Screen::RunTests;
         }
         2 => {
-            // Clean Install
             app.pending_clean_install_confirm = true;
         }
         3 => {
-            // Install SSL Certificate
             spawn_ssl_install(app);
         }
-        4 => {
-            // Configure Local Agents
-            spawn_configure_agents(app);
+        TOGGLE_AGENT_IDX => {
+            spawn_toggle_agents(app);
         }
         5 => {
-            // Benchmark Models
             crate::screens::model_benchmark::init_screen(app, None);
             app.screen = Screen::ModelBenchmark;
         }
@@ -296,113 +319,189 @@ fn spawn_ssl_install(app: &mut App) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Configure local agents worker
+// Agent mode toggle worker
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn extract_litellm_key(repo_root: &Path, vault_prefix: &str, vault_password: &str) -> Option<String> {
-    let vault_file = repo_root.join(format!(
-        "provision/ansible/roles/secrets/vars/vault.{vault_prefix}.yml"
-    ));
-    if !vault_file.exists() {
-        return None;
-    }
-
-    let tmp_path = std::env::temp_dir()
-        .join(format!("busibox-util-vp-{}.sh", std::process::id()));
-    let pw_escaped = vault_password.replace('\'', "'\\''");
-    if std::fs::write(&tmp_path, format!("#!/bin/sh\necho '{pw_escaped}'")).is_err() {
-        return None;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o700));
-    }
-
+fn spawn_toggle_agents(app: &mut App) {
     let home = std::env::var("HOME").unwrap_or_default();
-    let venv_bin = format!("{home}/.busibox/venv/bin");
-    let cur_path = std::env::var("PATH").unwrap_or_default();
-    let full_path = if cur_path.is_empty() { venv_bin.clone() } else { format!("{venv_bin}:{cur_path}") };
+    let settings_path     = format!("{home}/.claude/settings.json");
+    let settings_local    = format!("{home}/.claude/settings.local.json");
+    let settings_normal   = format!("{home}/.claude/settings.normal.json");
+    let currently_local   = app.agents_mode_is_local;
 
-    let output = Command::new("ansible-vault")
-        .args(["view", vault_file.to_str().unwrap_or(""), "--vault-password-file"])
-        .arg(&tmp_path)
-        .env("PATH", &full_path)
-        .output();
-    let _ = std::fs::remove_file(&tmp_path);
+    app.utilities_log.clear();
+    app.utilities_log_visible = true;
+    app.utilities_action_running = true;
+    app.utilities_action_success = false;
 
-    let yaml_content = match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-        _ => return None,
-    };
+    let (tx, rx) = mpsc::channel::<UtilitiesUpdate>();
+    app.utilities_rx = Some(rx);
 
-    // Extract litellm_master_key via Python
-    let python_script = r#"
-import yaml, sys
-vault = yaml.safe_load(sys.stdin.read()) or {}
-secrets = vault.get('secrets', {})
-key = secrets.get('litellm_master_key', '') or secrets.get('litellm_api_key', '')
-print(key)
-"#;
-
-    let result = Command::new("python3")
-        .args(["-c", python_script])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .and_then(|mut child| {
-            if let Some(mut stdin) = child.stdin.take() {
-                use std::io::Write;
-                let _ = stdin.write_all(yaml_content.as_bytes());
+    if currently_local {
+        // ── Switch to Normal ─────────────────────────────────────────────────
+        std::thread::spawn(move || {
+            if Path::new(&settings_normal).exists() {
+                match std::fs::copy(&settings_normal, &settings_path) {
+                    Ok(_) => { let _ = tx.send(UtilitiesUpdate::Log("✓ Restored settings.normal.json".into())); }
+                    Err(e) => {
+                        let _ = tx.send(UtilitiesUpdate::Log(format!("✗ Restore failed: {e}")));
+                        let _ = tx.send(UtilitiesUpdate::Complete { success: false });
+                        return;
+                    }
+                }
+            } else {
+                match std::fs::write(&settings_path, "{}") {
+                    Ok(_) => { let _ = tx.send(UtilitiesUpdate::Log("✓ Wrote empty settings.json (normal mode)".into())); }
+                    Err(e) => {
+                        let _ = tx.send(UtilitiesUpdate::Log(format!("✗ Write failed: {e}")));
+                        let _ = tx.send(UtilitiesUpdate::Complete { success: false });
+                        return;
+                    }
+                }
             }
-            child.wait_with_output()
+            let _ = tx.send(UtilitiesUpdate::Log("✓ Agent mode → Normal (direct Anthropic)".into()));
+            let _ = tx.send(UtilitiesUpdate::Log("Restart Claude Code to pick up new settings.".into()));
+            let _ = tx.send(UtilitiesUpdate::Complete { success: true });
         });
+    } else {
+        // ── Switch to Local ──────────────────────────────────────────────────
+        // If settings.local.json already exists, just swap — no vault needed.
+        let local_cached = Path::new(&settings_local).exists();
 
-    match result {
-        Ok(out) if out.status.success() => {
-            let key = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if key.is_empty() { None } else { Some(key) }
-        }
-        _ => None,
+        let vault_password = if !local_cached {
+            match app.vault_password.clone() {
+                Some(pw) => pw,
+                None => {
+                    app.utilities_log.push(
+                        "✗ No cached settings.local.json and vault is locked — unlock profile first".into()
+                    );
+                    app.utilities_action_running = false;
+                    return;
+                }
+            }
+        } else {
+            String::new() // unused
+        };
+
+        let vault_prefix: String = app
+            .active_profile()
+            .map(|(id, p)| p.vault_prefix.clone().unwrap_or_else(|| id.to_string()))
+            .unwrap_or_else(|| "dev".to_string());
+
+        let litellm_port: u16 = app
+            .active_profile()
+            .map(|(_, p)| p.port_overrides.get("litellm").copied().unwrap_or(4000))
+            .unwrap_or(4000);
+
+        let repo_root = app.repo_root.clone();
+
+        std::thread::spawn(move || {
+            // Backup current settings.json once so we can restore it later.
+            if !Path::new(&settings_normal).exists() {
+                let backup_content = std::fs::read_to_string(&settings_path).unwrap_or_else(|_| "{}".to_string());
+                if std::fs::write(&settings_normal, &backup_content).is_ok() {
+                    let _ = tx.send(UtilitiesUpdate::Log("✓ Backed up settings.json → settings.normal.json".into()));
+                }
+            }
+
+            if local_cached {
+                // Fast path: just copy cached local settings.
+                match std::fs::copy(&settings_local, &settings_path) {
+                    Ok(_) => { let _ = tx.send(UtilitiesUpdate::Log("✓ Restored settings.local.json".into())); }
+                    Err(e) => {
+                        let _ = tx.send(UtilitiesUpdate::Log(format!("✗ Restore failed: {e}")));
+                        let _ = tx.send(UtilitiesUpdate::Complete { success: false });
+                        return;
+                    }
+                }
+            } else {
+                // First-time setup: extract key from vault and write both files.
+                let _ = tx.send(UtilitiesUpdate::Log(
+                    format!("Extracting LITELLM_MASTER_KEY (prefix: {vault_prefix})…")
+                ));
+                let master_key = match extract_litellm_key(&repo_root, &vault_prefix, &vault_password) {
+                    Some(k) => {
+                        let _ = tx.send(UtilitiesUpdate::Log("✓ LITELLM_MASTER_KEY found".into()));
+                        k
+                    }
+                    None => {
+                        let _ = tx.send(UtilitiesUpdate::Log("✗ Could not extract LITELLM_MASTER_KEY from vault".into()));
+                        let _ = tx.send(UtilitiesUpdate::Complete { success: false });
+                        return;
+                    }
+                };
+
+                let _ = tx.send(UtilitiesUpdate::Log(format!("Writing local settings (litellm port: {litellm_port})…")));
+                if !write_local_settings(&tx, litellm_port, &master_key, &settings_path, &settings_local) {
+                    let _ = tx.send(UtilitiesUpdate::Complete { success: false });
+                    return;
+                }
+                write_agent_files(&tx, &master_key);
+            }
+
+            let _ = tx.send(UtilitiesUpdate::Log("✓ Agent mode → Local (busibox/LiteLLM)".into()));
+            let _ = tx.send(UtilitiesUpdate::Log("Restart Claude Code to pick up new settings.".into()));
+            let _ = tx.send(UtilitiesUpdate::Complete { success: true });
+        });
     }
 }
 
-fn write_agent_files(tx: &mpsc::Sender<UtilitiesUpdate>, litellm_port: u16, master_key: &str) {
+// ─────────────────────────────────────────────────────────────────────────────
+// Settings file writers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Write settings.json (and cache it as settings.local.json). Returns true on success.
+fn write_local_settings(
+    tx: &mpsc::Sender<UtilitiesUpdate>,
+    litellm_port: u16,
+    master_key: &str,
+    settings_path: &str,
+    settings_local: &str,
+) -> bool {
+    let settings = serde_json::json!({
+        "env": {
+            "ANTHROPIC_API_KEY": "",
+            "ANTHROPIC_AUTH_TOKEN": master_key,
+            "ANTHROPIC_BASE_URL": format!("http://localhost:{litellm_port}"),
+            "ANTHROPIC_MODEL": "frontier",
+            "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            "CLAUDE_CODE_ENABLE_TELEMETRY": "0"
+        }
+    });
+
+    let content = match serde_json::to_string_pretty(&settings) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = tx.send(UtilitiesUpdate::Log(format!("✗ Serialize error: {e}")));
+            return false;
+        }
+    };
+
+    // Write active settings.json
+    if let Err(e) = std::fs::write(settings_path, &content) {
+        let _ = tx.send(UtilitiesUpdate::Log(format!("✗ Write {settings_path}: {e}")));
+        return false;
+    }
+    let _ = tx.send(UtilitiesUpdate::Log(format!("✓ Written {settings_path}")));
+
+    // Cache as settings.local.json for future fast toggles
+    let _ = std::fs::write(settings_local, &content);
+    let _ = tx.send(UtilitiesUpdate::Log(format!("✓ Cached {settings_local}")));
+
+    true
+}
+
+/// Write ~/.claude/agents/*.md files for the four code-agent purposes.
+fn write_agent_files(tx: &mpsc::Sender<UtilitiesUpdate>, _master_key: &str) {
     let home = std::env::var("HOME").unwrap_or_default();
-    let claude_dir = format!("{home}/.claude");
     let agents_dir = format!("{home}/.claude/agents");
 
-    // Create dirs
     if let Err(e) = std::fs::create_dir_all(&agents_dir) {
         let _ = tx.send(UtilitiesUpdate::Log(format!("✗ Could not create ~/.claude/agents: {e}")));
         return;
     }
 
-    // settings.json
-    let settings = serde_json::json!({
-        "env": {
-            "ANTHROPIC_BASE_URL": format!("http://localhost:{litellm_port}"),
-            "ANTHROPIC_API_KEY": "",
-            "ANTHROPIC_AUTH_TOKEN": master_key,
-            "ANTHROPIC_MODEL": "coding",
-            "CLAUDE_CODE_ENABLE_TELEMETRY": "0",
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-            "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
-        }
-    });
-    let settings_path = format!("{claude_dir}/settings.json");
-    match serde_json::to_string_pretty(&settings) {
-        Ok(content) => {
-            match std::fs::write(&settings_path, &content) {
-                Ok(_) => { let _ = tx.send(UtilitiesUpdate::Log(format!("✓ Written {settings_path}"))); }
-                Err(e) => { let _ = tx.send(UtilitiesUpdate::Log(format!("✗ {settings_path}: {e}"))); }
-            }
-        }
-        Err(e) => { let _ = tx.send(UtilitiesUpdate::Log(format!("✗ settings.json serialize: {e}"))); }
-    }
-
-    // Agent files
     let agents: &[(&str, &str, &str, &str)] = &[
         (
             "local-coder.md",
@@ -443,55 +542,74 @@ fn write_agent_files(tx: &mpsc::Sender<UtilitiesUpdate>, litellm_port: u16, mast
     }
 }
 
-fn spawn_configure_agents(app: &mut App) {
-    let vault_password = match app.vault_password.clone() {
-        Some(pw) => pw,
-        None => {
-            app.utilities_log.clear();
-            app.utilities_log.push("✗ Vault password not set — unlock profile first".into());
-            app.utilities_log_visible = true;
-            return;
-        }
+// ─────────────────────────────────────────────────────────────────────────────
+// Vault key extraction
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn extract_litellm_key(repo_root: &Path, vault_prefix: &str, vault_password: &str) -> Option<String> {
+    let vault_file = repo_root.join(format!(
+        "provision/ansible/roles/secrets/vars/vault.{vault_prefix}.yml"
+    ));
+    if !vault_file.exists() {
+        return None;
+    }
+
+    let tmp_path = std::env::temp_dir()
+        .join(format!("busibox-util-vp-{}.sh", std::process::id()));
+    let pw_escaped = vault_password.replace('\'', "'\\''");
+    if std::fs::write(&tmp_path, format!("#!/bin/sh\necho '{pw_escaped}'")).is_err() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o700));
+    }
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let venv_bin = format!("{home}/.busibox/venv/bin");
+    let cur_path = std::env::var("PATH").unwrap_or_default();
+    let full_path = if cur_path.is_empty() { venv_bin.clone() } else { format!("{venv_bin}:{cur_path}") };
+
+    let output = Command::new("ansible-vault")
+        .args(["view", vault_file.to_str().unwrap_or(""), "--vault-password-file"])
+        .arg(&tmp_path)
+        .env("PATH", &full_path)
+        .output();
+    let _ = std::fs::remove_file(&tmp_path);
+
+    let yaml_content = match output {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => return None,
     };
 
-    let vault_prefix: String = app
-        .active_profile()
-        .map(|(id, p)| p.vault_prefix.clone().unwrap_or_else(|| id.to_string()))
-        .unwrap_or_else(|| "dev".to_string());
+    let python_script = r#"
+import yaml, sys
+vault = yaml.safe_load(sys.stdin.read()) or {}
+secrets = vault.get('secrets', {})
+key = secrets.get('litellm_master_key', '') or secrets.get('litellm_api_key', '')
+print(key)
+"#;
 
-    let litellm_port: u16 = app
-        .active_profile()
-        .map(|(_, p)| p.port_overrides.get("litellm").copied().unwrap_or(4000))
-        .unwrap_or(4000);
-
-    let repo_root = app.repo_root.clone();
-    app.utilities_log.clear();
-    app.utilities_log_visible = true;
-    app.utilities_action_running = true;
-    app.utilities_action_success = false;
-
-    let (tx, rx) = mpsc::channel::<UtilitiesUpdate>();
-    app.utilities_rx = Some(rx);
-
-    std::thread::spawn(move || {
-        let _ = tx.send(UtilitiesUpdate::Log(format!("Extracting LITELLM_MASTER_KEY (prefix: {vault_prefix})…")));
-
-        let master_key = match extract_litellm_key(&repo_root, &vault_prefix, &vault_password) {
-            Some(k) => {
-                let _ = tx.send(UtilitiesUpdate::Log("✓ LITELLM_MASTER_KEY found".into()));
-                k
+    let result = Command::new("python3")
+        .args(["-c", python_script])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .and_then(|mut child| {
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                let _ = stdin.write_all(yaml_content.as_bytes());
             }
-            None => {
-                let _ = tx.send(UtilitiesUpdate::Log("✗ Could not extract LITELLM_MASTER_KEY from vault".into()));
-                let _ = tx.send(UtilitiesUpdate::Complete { success: false });
-                return;
-            }
-        };
+            child.wait_with_output()
+        });
 
-        let _ = tx.send(UtilitiesUpdate::Log(format!("Writing files (litellm port: {litellm_port})…")));
-        write_agent_files(&tx, litellm_port, &master_key);
-
-        let _ = tx.send(UtilitiesUpdate::Log("Done. Restart Claude Code to pick up new settings.".into()));
-        let _ = tx.send(UtilitiesUpdate::Complete { success: true });
-    });
+    match result {
+        Ok(out) if out.status.success() => {
+            let key = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if key.is_empty() { None } else { Some(key) }
+        }
+        _ => None,
+    }
 }

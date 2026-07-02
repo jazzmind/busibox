@@ -466,6 +466,7 @@ pub struct App {
     pub utilities_action_success: bool,
     pub utilities_tick: usize,
     pub utilities_rx: Option<mpsc::Receiver<UtilitiesUpdate>>,
+    pub agents_mode_is_local: bool,
 
     // Admin login screen state
     pub admin_login_magic_link: Option<String>,
@@ -1097,6 +1098,7 @@ impl App {
             utilities_action_success: false,
             utilities_tick: 0,
             utilities_rx: None,
+            agents_mode_is_local: false,
         }
     }
 

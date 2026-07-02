@@ -658,6 +658,7 @@ fn main() -> Result<()> {
                     Ok(app::UtilitiesUpdate::Complete { success }) => {
                         app.utilities_action_running = false;
                         app.utilities_action_success = success;
+                        app.agents_mode_is_local = crate::screens::utilities::detect_agents_mode();
                         put_back = false;
                         break;
                     }

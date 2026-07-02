@@ -1049,6 +1049,7 @@ fn handle_action_select(app: &mut App, action: &str) {
             app.utilities_log.clear();
             app.utilities_log_visible = false;
             app.utilities_action_running = false;
+            app.agents_mode_is_local = crate::screens::utilities::detect_agents_mode();
             app.screen = Screen::Utilities;
         }
         _ => {}
