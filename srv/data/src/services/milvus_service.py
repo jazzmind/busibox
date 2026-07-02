@@ -374,17 +374,24 @@ class MilvusService:
     # Partition Management
     # ========================================================================
     
+    # Partition name used for visibility=authenticated documents.
+    # All authenticated users can search this partition.
+    AUTHENTICATED_PARTITION = "authenticated"
+
     def get_partition_name(self, visibility: str, user_id: str, role_id: Optional[str] = None) -> str:
         """
         Get partition name based on document visibility.
         
-        Personal docs: personal_{user_id}
-        Shared docs: role_{role_id}
+        Personal docs:       personal_{user_id}
+        Shared docs:         role_{role_id}
+        Authenticated docs:  authenticated
         """
         if visibility == "personal":
             return f"personal_{user_id}"
         elif visibility == "shared" and role_id:
             return f"role_{role_id}"
+        elif visibility == "authenticated":
+            return self.AUTHENTICATED_PARTITION
         else:
             raise ValueError(f"Invalid visibility '{visibility}' or missing role_id for shared doc")
     
@@ -397,8 +404,9 @@ class MilvusService:
         """
         Get all partition names for a document.
         
-        For personal docs: [personal_{user_id}]
-        For shared docs: [role_{role_id} for each role_id]
+        For personal docs:      [personal_{user_id}]
+        For shared docs:        [role_{role_id} for each role_id]
+        For authenticated docs: [authenticated]
         """
         if visibility == "personal":
             return [f"personal_{user_id}"]
@@ -406,6 +414,8 @@ class MilvusService:
             if not role_ids:
                 raise ValueError("Shared documents must have at least one role_id")
             return [f"role_{role_id}" for role_id in role_ids]
+        elif visibility == "authenticated":
+            return [self.AUTHENTICATED_PARTITION]
         else:
             raise ValueError(f"Invalid visibility: {visibility}")
     

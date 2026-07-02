@@ -251,6 +251,15 @@ async def create_task(
             
             logger.info(f"Created task {task.id} for user {principal.sub}")
             
+            # Hot-register: schedule with APScheduler immediately
+            try:
+                from app.services.scheduler import task_scheduler
+                task_scheduler.cancel_task(task.id)
+                task_scheduler.schedule_task(task.id, cron, SessionLocal)
+                logger.info(f"[hot-reg] Registered cron task {task.id} ({cron}) via tool")
+            except Exception as e:
+                logger.warning(f"[hot-reg] Failed to hot-register task {task.id} via tool: {e}")
+            
             return TaskCreationOutput(
                 success=True,
                 task_id=str(task.id),

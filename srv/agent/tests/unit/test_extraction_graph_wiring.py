@@ -208,6 +208,7 @@ class TestBuildRecordsResponseSchema:
         assert "records" in response_schema["schema"]["required"]
 
     def test_properties_present(self):
+        """LLM schema includes extraction fields only; provenance is added post-hoc."""
         schema_obj = {
             "fields": {
                 "name": {"type": "string"},
@@ -218,7 +219,10 @@ class TestBuildRecordsResponseSchema:
         items = response_schema["schema"]["properties"]["records"]["items"]
         assert "name" in items["properties"]
         assert "age" in items["properties"]
-        assert "_provenance" in items["properties"]
+        assert "_provenance" not in items["properties"], (
+            "_provenance must not be in the LLM response schema; "
+            "it is populated after extraction via _populate_provenance_from_markdown"
+        )
 
 
 # =============================================================================

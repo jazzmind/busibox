@@ -11,7 +11,7 @@
         spot-check spot-swap spot-price \
         connect disconnect k8s-connect-status \
         build-manager \
-        busibox-build busibox
+        busibox-build busibox busibox-install
 
 # Default target - interactive menu with health check
 .DEFAULT_GOAL := menu
@@ -392,7 +392,7 @@ endif
 # Direct:      make test SERVICE=authz INV=staging
 test:
 ifdef SERVICE
-	@PYTEST_ARGS="$(ARGS)" bash scripts/make/test.sh $(SERVICE) $(INV) $(MODE)
+	@PYTEST_ARGS="$(ARGS)" PYTEST_STEPWISE_RESET="$(PYTEST_STEPWISE_RESET)" VAULT_PREFIX="$(VAULT_PREFIX)" bash scripts/make/test.sh $(SERVICE) $(INV) $(MODE)
 else
 	@bash scripts/make/test-menu.sh
 endif
@@ -703,20 +703,20 @@ docker-clean-all:
 #   make warmup FORCE=1  # Re-download (interactive selection)
 
 # Interactive install with wizard OR deploy specific service
-# Usage: make install                      # Install menu (Continue/Full/Clean if existing)
+# Usage: make install                      # Install CLI to PATH and launch TUI wizard
 #        make install VERBOSE=1            # Show all logs
 #        make install SERVICE=authz        # Deploy specific service (uses Ansible)
 #        make install SERVICE=authz,agent  # Deploy multiple services
 #
-# When called without SERVICE=, shows the same install options as `make` -> Install:
-# - Fresh install if no existing installation
-# - Continue/Full/Clean menu if existing installation detected
+# When called without SERVICE=, builds and installs the busibox CLI binary to
+# the system PATH and then launches it so the TUI install wizard can run.
 install:
 ifeq ($(USE_MANAGER),1)
 ifdef SERVICE
 	@$(MANAGER_RUN) bash scripts/make/service-deploy.sh "$(SERVICE)"
 else
-	@USE_ANSIBLE_FOR_DOCKER=$(USE_ANSIBLE) $(MANAGER_RUN_IT) bash scripts/make/install-menu.sh $(if $(VERBOSE),-v)
+	@bash scripts/make/busibox-cli.sh install
+	@bash scripts/make/busibox-cli.sh run
 endif
 	@if [ -f .mlx-setup-needed ]; then \
 		rm -f .mlx-setup-needed; \
@@ -743,7 +743,8 @@ else
 ifdef SERVICE
 	@bash scripts/make/service-deploy.sh "$(SERVICE)"
 else
-	@USE_ANSIBLE_FOR_DOCKER=$(USE_ANSIBLE) bash scripts/make/install-menu.sh $(if $(VERBOSE),-v)
+	@bash scripts/make/busibox-cli.sh install
+	@bash scripts/make/busibox-cli.sh run
 endif
 endif
 
@@ -1465,11 +1466,15 @@ k8s-connect-status:
 # management. Gradually replaces bash scripts with native Rust.
 #
 # Usage:
-#   make busibox-build    # Compile the CLI binary
-#   make busibox          # Build and run the CLI
+#   make busibox-build              # Compile the CLI binary
+#   make busibox                    # Build and run the CLI (TUI)
+#   make busibox ARGS="import <f>"  # Run a CLI subcommand (e.g. import)
 
 busibox-build:
 	@bash scripts/make/busibox-cli.sh build
 
 busibox:
-	@bash scripts/make/busibox-cli.sh run
+	@bash scripts/make/busibox-cli.sh run $(ARGS)
+
+busibox-install:
+	@bash scripts/make/busibox-cli.sh install

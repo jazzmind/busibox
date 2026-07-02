@@ -228,7 +228,7 @@ available_models:
   "qwen3.6-35b-a3b-mlx-8bit":
     provider: "mlx"
     model: "qwen3.6-35b-a3b"
-    model_name: "unsloth/Qwen3.6-35B-A3B-UD-MLX-8bit"
+    model_name: "unsloth/Qwen3.6-35B-A3B-MLX-8bit"
     description: "Qwen3.6 MoE 35B/A3B at MLX dynamic 8-bit (~38GB) — near-lossless. Default for Mac Studio / 96GB+."
     tool_calling: true
     tool_call_parser: "qwen3_coder"
@@ -364,6 +364,18 @@ default_purposes:
   parsing: "agent"
   cleanup: "agent"
 
+  # --- Code agent purposes ---
+  # Tiered by task difficulty: repo-scanning uses the cheapest/fastest local
+  # model, writing/testing/documenting stay on the general local agent model,
+  # and planning/security review (highest-stakes, typically short-context)
+  # default to frontier. See model_purposes_dev below for the local dev override.
+  code-reading: "fast"
+  code-writing: "agent"
+  code-testing: "agent"
+  code-documenting: "agent"
+  code-planning: "frontier"
+  code-securing: "frontier"
+
   # --- Frontier (cloud) ---
   frontier: "claude-sonnet-4-5"
   frontier-fast: "claude-haiku-4-5"
@@ -431,6 +443,11 @@ model_purposes_dev:
   agent: "qwen3.5-4b-mlx"           # 24GB MacBook default (35B-A3B is too tight at 4-bit here)
   chat: "qwen3.5-4b-mlx"            # Same model as agent, thinking disabled at app level
   research: "qwen3.5-4b-mlx"        # Same model as agent, longer thinking budget at app level
+  # code-planning/code-securing default to frontier in default_purposes (matches
+  # prod); overridden to a local model here so dev machines don't need cloud
+  # credentials or incur cost just to exercise these two purposes locally.
+  code-planning: "agent"
+  code-securing: "agent"
   image: "flux2-klein-4b-mlx"       # MLX local FLUX
   transcribe: "whisper-tiny-mlx"    # Whisper Tiny ~150 MB for dev
   voice: "kokoro-82m-mlx"           # Kokoro MLX

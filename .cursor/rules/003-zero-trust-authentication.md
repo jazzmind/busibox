@@ -60,6 +60,20 @@ for r in roles:
 # New token gets aggregated scopes from all user's roles
 ```
 
+**Exception: Source-Gated Scopes**
+
+Some scopes are never in any role's scope list but are injected conditionally by authz based on the **origin** (`aud`) of the incoming subject token. This is an approved pattern called "source gating".
+
+Currently source-gated scopes:
+
+| Scope | Injected when subject token `aud` is | Target audience |
+|-------|--------------------------------------|-----------------|
+| `config.secrets.read` | `agent-api` | `config-api` |
+
+This allows agent-api to read raw LLM credentials from config-api without any other caller being able to do the same — even an admin user with a direct config-api token exchange cannot obtain this scope.
+
+Implementation: `srv/authz/src/routes/oauth.py` — `_AGENT_API_CONFIG_EXTRA_SCOPES` constant.
+
 ### 4. Pass Tokens Through the Call Chain
 
 Services should store and pass along user tokens for downstream calls:

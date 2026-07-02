@@ -1969,7 +1969,7 @@ async def move_file(fileId: str, request: Request):
     if not postgres_service.pool:
         await postgres_service.connect()
 
-    # Fetch current record under RLS
+    # Fetch current record and role bindings under RLS
     async with postgres_service.acquire(request) as conn:
         row = await conn.fetchrow(
             """
@@ -1993,7 +1993,14 @@ async def move_file(fileId: str, request: Request):
                 content={"error": "Only the owner can move a shared file to personal"},
             )
 
-    # Update visibility + roles atomically
+        # Fetch existing role bindings so we know which Milvus partitions to clean up
+        current_role_rows = await conn.fetch(
+            "SELECT role_id::text FROM document_roles WHERE file_id = $1",
+            uuid.UUID(fileId),
+        )
+        current_role_ids = [str(r["role_id"]) for r in current_role_rows]
+
+    # Update visibility + roles atomically in Postgres
     try:
         await postgres_service.update_document_visibility_and_roles(
             file_id=fileId,
@@ -2004,7 +2011,7 @@ async def move_file(fileId: str, request: Request):
             request=request,
         )
         logger.info(
-            "File moved",
+            "File moved (Postgres updated)",
             file_id=fileId,
             actor_id=actor_id,
             from_visibility=current_visibility,
@@ -2014,6 +2021,84 @@ async def move_file(fileId: str, request: Request):
     except Exception as exc:
         logger.error("Failed to move file", file_id=fileId, target_visibility=target_visibility, error=str(exc), exc_info=True)
         return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": f"Failed to move file: {str(exc)}"})
+
+    # Sync Milvus partitions to match the new visibility/roles.
+    # Vectors must live in partitions that mirror document_roles so that
+    # search-api finds them when filtering by role partitions.
+    import asyncio as _asyncio
+    try:
+        config = Config().to_dict()
+        milvus_service = MilvusService(config)
+
+        # Compute old and new Milvus partition names
+        if current_visibility == "personal":
+            old_partitions = [f"personal_{owner_id}"]
+        elif current_visibility == "shared" and current_role_ids:
+            old_partitions = [f"role_{rid}" for rid in current_role_ids]
+        elif current_visibility == "authenticated":
+            old_partitions = ["authenticated"]
+        else:
+            old_partitions = []
+
+        if target_visibility == "personal":
+            new_partitions = [f"personal_{owner_id}"]
+        elif target_visibility == "shared" and role_ids:
+            new_partitions = [f"role_{rid}" for rid in role_ids]
+        elif target_visibility == "authenticated":
+            new_partitions = ["authenticated"]
+        else:
+            new_partitions = []
+
+        old_set = set(old_partitions)
+        new_set = set(new_partitions)
+        partitions_to_add = new_set - old_set
+        partitions_to_remove = old_set - new_set
+
+        if partitions_to_add or partitions_to_remove:
+            # Source partition: prefer old partitions (vectors exist there); fall back to any
+            source_partition = old_partitions[0] if old_partitions else None
+
+            # Copy vectors into partitions that don't have them yet
+            if source_partition and partitions_to_add:
+                for target_partition in partitions_to_add:
+                    await _asyncio.to_thread(
+                        milvus_service.copy_vectors_to_partition,
+                        fileId,
+                        source_partition,
+                        target_partition,
+                    )
+
+            # Remove vectors from partitions that are no longer applicable
+            for old_partition in partitions_to_remove:
+                await _asyncio.to_thread(
+                    milvus_service.delete_vectors_from_partition,
+                    fileId,
+                    old_partition,
+                )
+
+            logger.info(
+                "File moved (Milvus partitions updated)",
+                file_id=fileId,
+                from_partitions=list(old_set),
+                to_partitions=list(new_set),
+                added=list(partitions_to_add),
+                removed=list(partitions_to_remove),
+            )
+        else:
+            logger.info(
+                "File moved (Milvus partitions unchanged)",
+                file_id=fileId,
+                partitions=list(old_set),
+            )
+    except Exception as milvus_exc:
+        # Log the error but don't fail the move - Postgres is already updated.
+        # The backfill script can re-sync Milvus if needed.
+        logger.error(
+            "Failed to update Milvus partitions after move (Postgres already updated)",
+            file_id=fileId,
+            error=str(milvus_exc),
+            exc_info=True,
+        )
 
     return {"status": "ok", "visibility": target_visibility, "roleIds": role_ids}
 

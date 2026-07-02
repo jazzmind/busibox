@@ -9,7 +9,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from auth import require_admin, require_admin_or_scope
+from auth import require_admin, require_admin_or_scope, require_secrets_scope, SENSITIVE_CATEGORIES
 
 _config_read = require_admin_or_scope("config.email.read")
 from config import config as svc_config
@@ -166,16 +166,22 @@ async def list_categories(_user: dict = Depends(require_admin)):
 
 @router.get("/config/export")
 async def export_configs(_user: dict = Depends(require_admin)):
-    """Export all config entries including raw secret values. Backup use only."""
+    """Export all config entries. Sensitive category values are redacted unless
+    the caller also has config.secrets.read scope (only granted to agent-api)."""
+    has_secrets_scope = "config.secrets.read" in _user.get("scopes", [])
     entries = await config_store.export_all()
     configs = {}
     for e in entries:
+        category = e.get("category") or ""
+        is_sensitive = category in SENSITIVE_CATEGORIES
         value = e["value"]
-        if e["encrypted"] and svc_config.encryption_key:
+        if is_sensitive and not has_secrets_scope:
+            value = "********"
+        elif e["encrypted"] and svc_config.encryption_key:
             try:
                 value = decrypt_value(value, svc_config.encryption_key)
             except Exception:
-                pass
+                value = "********"
         configs[e["key"]] = {
             "value": value,
             "encrypted": e["encrypted"],
@@ -234,12 +240,24 @@ async def get_config_raw(
     app_id: Optional[str] = Query(None),
     _user: dict = Depends(_config_read),
 ):
-    """Get raw (unmasked/decrypted) value."""
+    """Get raw (unmasked/decrypted) value.
+
+    For entries in sensitive categories (e.g. llm-keys), the caller must also
+    hold config.secrets.read scope, which is only injected by authz when the
+    token exchange originated inside agent-api (subject token aud=agent-api).
+    This prevents admins from directly exfiltrating cloud provider credentials.
+    """
     entry = await config_store.get_entry(key, app_id=app_id)
     if not entry:
         raise HTTPException(status_code=404, detail=f"Config key not found: {key}")
     if _user.get("_scope_only") and entry.get("category") != "smtp":
         raise HTTPException(status_code=403, detail="Scope restricted to smtp config")
+    category = entry.get("category") or ""
+    if category in SENSITIVE_CATEGORIES and "config.secrets.read" not in _user.get("scopes", []):
+        raise HTTPException(
+            status_code=403,
+            detail="config.secrets.read scope required to read raw values for this config category",
+        )
     value = entry["value"]
     if entry["encrypted"] and svc_config.encryption_key:
         value = decrypt_value(value, svc_config.encryption_key)

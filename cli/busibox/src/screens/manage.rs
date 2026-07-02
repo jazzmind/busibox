@@ -12,6 +12,17 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// PATH that includes the venv bin dir where `ansible-vault` is installed.
+/// Needed because secrets-sync.sh shells out to `ansible-vault` locally and
+/// the TUI's own PATH may not include the venv (see modules/remote.rs and
+/// screens/install.rs for the same helper).
+fn ansible_vault_path() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let venv_bin = format!("{home}/.busibox/venv/bin");
+    let current = std::env::var("PATH").unwrap_or_default();
+    if current.is_empty() { venv_bin } else { format!("{venv_bin}:{current}") }
+}
+
 /// Map display name to make SERVICE= value for manage commands.
 fn service_to_make_name(display_name: &str) -> &str {
     match display_name {
@@ -546,10 +557,12 @@ pub fn render(f: &mut Frame, app: &App) {
                     Style::default()
                 };
 
+                let endpoint_text = svc.endpoint.as_deref().unwrap_or("—").to_string();
                 Row::new(vec![
                     Cell::from(svc.group.clone()).style(theme::muted()),
                     Cell::from(svc.name.clone()).style(theme::normal()),
                     Cell::from(svc.status.clone()).style(status_style),
+                    Cell::from(endpoint_text).style(theme::dim()),
                     Cell::from(deployed_text).style(deployed_style),
                     Cell::from(available_text).style(available_style),
                     Cell::from(secrets_text).style(secrets_style),
@@ -594,9 +607,10 @@ pub fn render(f: &mut Frame, app: &App) {
                 Constraint::Length(14),
                 Constraint::Length(16),
                 Constraint::Length(10),
+                Constraint::Length(16),
                 Constraint::Length(10),
                 Constraint::Length(14),
-                Constraint::Min(20),
+                Constraint::Min(16),
             ],
         )
         .header(
@@ -604,6 +618,7 @@ pub fn render(f: &mut Frame, app: &App) {
                 Cell::from("Group").style(theme::muted()),
                 Cell::from("Service").style(theme::muted()),
                 Cell::from("Status").style(theme::muted()),
+                Cell::from("Endpoint").style(theme::muted()),
                 Cell::from("Deployed").style(theme::muted()),
                 Cell::from("Available").style(theme::muted()),
                 Cell::from("Secrets").style(theme::muted()),
@@ -952,6 +967,7 @@ pub fn load_service_status(app: &mut App) {
             needs_update: false,
             source_repo: source_repo.to_string(),
             secrets_status: "checking...".into(),
+            endpoint: None,
         });
     }
 
@@ -989,6 +1005,24 @@ pub fn load_service_status(app: &mut App) {
         "localhost".to_string()
     };
 
+    // Populate endpoint (host:port) for each service that has an HTTP check.
+    {
+        use crate::modules::health::{all_service_defs, CheckMethod};
+        let defs = all_service_defs(is_mlx);
+        for svc in &mut app.manage_services {
+            if let Some(def) = defs.iter().find(|d| d.name == svc.name) {
+                let host_port = profile.port_overrides.get(svc.name.as_str()).copied()
+                    .or_else(|| match def.check {
+                        CheckMethod::Http { port, .. } => Some(port),
+                        _ => None,
+                    });
+                if let Some(port) = host_port {
+                    svc.endpoint = Some(format!("{host}:{port}"));
+                }
+            }
+        }
+    }
+
     let ssh_details = if is_remote {
         let ssh_host = profile.effective_host().unwrap_or("localhost").to_string();
         let ssh_user = profile.effective_user().to_string();
@@ -1006,6 +1040,8 @@ pub fn load_service_status(app: &mut App) {
     let service_names: Vec<String> = app.manage_services.iter().map(|s| s.name.clone()).collect();
     let network_base = profile.effective_network_base().to_string();
     let vllm_network_base = profile.vllm_network_base().to_string();
+    let docker_runtime = profile.effective_docker_runtime().to_string();
+    let port_overrides = profile.port_overrides.clone();
     let repo_root = app.repo_root.clone();
 
     // Resolve busibox-frontend sibling directory (shared by version + remote threads)
@@ -1066,7 +1102,7 @@ pub fn load_service_status(app: &mut App) {
 
             for def in &check_defs {
                 let status = health::check_service_pub(
-                    def, &host, &prefix, ssh.as_ref(), true, &network_base, &vllm_network_base,
+                    def, &host, &prefix, ssh.as_ref(), true, &network_base, &vllm_network_base, None,
                 );
                 let status_str = match status {
                     HealthStatus::Healthy => "healthy".to_string(),
@@ -1080,6 +1116,7 @@ pub fn load_service_status(app: &mut App) {
                 });
             }
         } else {
+            let docker_context = health::resolve_docker_context_pub(&docker_runtime, &prefix);
             let mut handles = Vec::new();
             for def in check_defs {
                 let def = def.clone();
@@ -1089,13 +1126,16 @@ pub fn load_service_status(app: &mut App) {
                 let network_base = network_base.clone();
                 let vllm_network_base = vllm_network_base.clone();
                 let health_tx = health_tx.clone();
+                let docker_context = docker_context.clone();
+                let port_override = port_overrides.get(def.name).copied();
 
                 let handle = std::thread::spawn(move || {
                     let ssh = ssh_details.as_ref().map(|(h, u, k)| {
                         crate::modules::ssh::SshConnection::new(h, u, k)
                     });
-                    let status = health::check_service_pub(
+                    let status = health::check_service_pub_with_override(
                         &def, &host, &prefix, ssh.as_ref(), false, &network_base, &vllm_network_base,
+                        docker_context.as_deref(), port_override,
                     );
                     let status_str = match status {
                         HealthStatus::Healthy => "healthy".to_string(),
@@ -2181,7 +2221,7 @@ fn spawn_update_worker(app: &mut App, service_list: &str) {
                 Err(color_eyre::eyre::eyre!("No SSH connection"))
             }
         } else if let Some(ref vp) = vault_password {
-            remote::run_local_make_quiet_with_vault_streaming(&repo_root, &make_args, vp, on_line)
+            remote::run_local_make_quiet_with_vault_streaming(&repo_root, &make_args, vp, None, on_line)
         } else {
             remote::run_local_make_quiet_streaming(&repo_root, &make_args, on_line)
         };
@@ -2672,7 +2712,7 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
                 Err(color_eyre::eyre::eyre!("No SSH connection"))
             }
         } else if let Some(ref vp) = vault_password {
-            remote::run_local_make_quiet_with_vault_streaming(&repo_root, &make_args, vp, on_line)
+            remote::run_local_make_quiet_with_vault_streaming(&repo_root, &make_args, vp, None, on_line)
         } else {
             remote::run_local_make_quiet_streaming(&repo_root, &make_args, on_line)
         };
@@ -3195,7 +3235,7 @@ pub fn spawn_install_with_env(app: &mut App, services: &str, extra_env: &str) {
                 Err(color_eyre::eyre::eyre!("No SSH connection"))
             }
         } else if let Some(ref vp) = vault_password {
-            remote::run_local_make_quiet_with_vault_streaming(&repo_root, &make_args, vp, on_line)
+            remote::run_local_make_quiet_with_vault_streaming(&repo_root, &make_args, vp, None, on_line)
         } else {
             remote::run_local_make_quiet_streaming(&repo_root, &make_args, on_line)
         };
@@ -3274,6 +3314,7 @@ fn fetch_secrets_sync(
 
     let mut cmd = std::process::Command::new("bash");
     cmd.args(&args);
+    cmd.env("PATH", ansible_vault_path());
     if let Some(pw) = vault_password {
         cmd.env("ANSIBLE_VAULT_PASSWORD", pw);
     }

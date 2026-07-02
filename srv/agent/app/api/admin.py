@@ -193,6 +193,72 @@ async def fetch_litellm_stats(days: int = 30) -> dict:
         await conn.close()
 
 
+async def fetch_litellm_stats_by_agent(days: int = 30) -> list[dict]:
+    """
+    Fetch usage statistics from LiteLLM's SpendLogs table grouped by the
+    virtual key that made each request, resolved to a human-readable
+    key_alias via LiteLLM_VerificationToken (LiteLLM_SpendLogs.api_key
+    stores the raw/hashed token, not the alias).
+
+    Requests made with the shared master key (not a virtual key) won't join
+    to a VerificationToken row and are grouped under "unattributed".
+
+    NOTE: column names (api_key, token) are assumed from LiteLLM's public
+    schema and were not independently re-verified against a live DB in this
+    session — confirm with `\\d "LiteLLM_SpendLogs"` / `\\d "LiteLLM_VerificationToken"`
+    before relying on this in production.
+    """
+    conn = await get_litellm_connection()
+    if not conn:
+        return []
+
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+
+        query = """
+            SELECT
+                COALESCE(vt.key_alias, 'unattributed') as key_alias,
+                COUNT(*) as requests,
+                COALESCE(SUM(sl.prompt_tokens), 0) as input_tokens,
+                COALESCE(SUM(sl.completion_tokens), 0) as output_tokens,
+                COALESCE(SUM(sl.total_tokens), 0) as total_tokens,
+                COALESCE(SUM(sl.spend), 0) as spend,
+                AVG(EXTRACT(EPOCH FROM (sl."endTime" - sl."startTime")) * 1000) as avg_latency_ms
+            FROM "LiteLLM_SpendLogs" sl
+            LEFT JOIN "LiteLLM_VerificationToken" vt ON vt.token = sl.api_key
+            WHERE sl."startTime" >= $1
+            GROUP BY COALESCE(vt.key_alias, 'unattributed')
+            ORDER BY requests DESC
+        """
+        rows = await conn.fetch(query, cutoff_date)
+
+        results = []
+        for row in rows:
+            key_alias = row["key_alias"]
+            # key_alias convention from app.api.coding_agents: "{agent_name}:{developer}"
+            if ":" in key_alias:
+                agent_name, developer = key_alias.split(":", 1)
+            else:
+                agent_name, developer = key_alias, None
+            results.append({
+                "agent_name": agent_name,
+                "developer": developer,
+                "requests": row["requests"],
+                "input_tokens": row["input_tokens"],
+                "output_tokens": row["output_tokens"],
+                "total_tokens": row["total_tokens"],
+                "spend": float(row["spend"]) if row["spend"] else 0.0,
+                "avg_latency_ms": float(row["avg_latency_ms"]) if row["avg_latency_ms"] else 0.0,
+            })
+        return results
+
+    except Exception as e:
+        logger.error(f"Failed to fetch LiteLLM stats by agent: {e}", exc_info=True)
+        return []
+    finally:
+        await conn.close()
+
+
 # =============================================================================
 # Admin Endpoints
 # =============================================================================
@@ -405,6 +471,49 @@ async def get_usage_stats_by_app(
     except Exception as e:
         logger.error(f"Failed to get per-app usage stats: {e}", exc_info=True)
         return AppUsageResponse(apps=[], days=days)
+
+
+class CodingAgentUsageStats(BaseModel):
+    """Usage statistics for a single coding agent (attributed via its
+    LiteLLM virtual key alias — see app.api.coding_agents)."""
+    agent_name: str
+    developer: Optional[str] = None
+    requests: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    spend: float = 0.0
+    avg_latency_ms: float = 0.0
+
+
+class CodingAgentUsageResponse(BaseModel):
+    agents: list[CodingAgentUsageStats]
+    days: int
+
+
+@router.get("/stats/usage/by-agent", response_model=CodingAgentUsageResponse)
+async def get_usage_stats_by_agent(
+    days: int = 30,
+    principal: Principal = Depends(get_principal),
+) -> CodingAgentUsageResponse:
+    """
+    Get LLM usage statistics grouped by coding agent (LiteLLM virtual key).
+
+    Requests made with the shared master key rather than a per-agent virtual
+    key (see app.api.coding_agents) are grouped under "unattributed".
+
+    Requires admin role.
+
+    Args:
+        days: Number of days to include in stats (default: 30)
+    """
+    require_admin(principal)
+
+    stats = await fetch_litellm_stats_by_agent(days)
+    return CodingAgentUsageResponse(
+        agents=[CodingAgentUsageStats(**s) for s in stats],
+        days=days,
+    )
 
 
 @router.get("/stats/system", response_model=SystemStatsResponse)

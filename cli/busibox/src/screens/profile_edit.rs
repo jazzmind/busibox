@@ -738,6 +738,10 @@ fn default_profile() -> profile::Profile {
         dev_apps_dir: None,
         huggingface_token: None,
         direct_access: None,
+        port_overrides: Default::default(),
+        service_preset: None,
+        addon_packs: Vec::new(),
+        local_llm_backend: None,
     }
 }
 

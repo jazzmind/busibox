@@ -81,16 +81,35 @@ def allocate_port(
     The assignment is persisted so that re-deploys of the same app
     get the same port.
 
+    If the manifest's defaultPort differs from the persisted assignment,
+    the old assignment is released and the new port is claimed.  This
+    ensures that edits to busibox.json (e.g. changing defaultPort) are
+    picked up on the next deploy.
+
     Raises ``RuntimeError`` if no free port can be found.
     """
     assignments = get_port_assignments()
 
-    # 1. Already assigned -- reuse for stability across redeploys.
+    # 1. Already assigned — reuse unless the manifest changed the preferred port.
     if app_id in assignments:
-        port = assignments[app_id]
-        logs.append(f"🔌 Reusing persisted port {port} for {app_id}")
-        logger.info(f"Reusing persisted port {port} for {app_id}")
-        return port
+        persisted = assignments[app_id]
+        if preferred_port is not None and preferred_port != persisted:
+            # Manifest port changed — release old assignment and fall through
+            # so the new preferred port gets allocated below.
+            logs.append(
+                f"🔌 Manifest port changed {persisted} → {preferred_port} for {app_id}; "
+                f"releasing old assignment"
+            )
+            logger.info(
+                f"Port changed for {app_id}: {persisted} → {preferred_port}; releasing"
+            )
+            del assignments[app_id]
+            save_port_assignments(assignments)
+            # Fall through to normal allocation with new preferred_port.
+        else:
+            logs.append(f"🔌 Reusing persisted port {persisted} for {app_id}")
+            logger.info(f"Reusing persisted port {persisted} for {app_id}")
+            return persisted
 
     claimed_ports = set(assignments.values()) | RESERVED_PORTS
 

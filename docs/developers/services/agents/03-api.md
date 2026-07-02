@@ -923,6 +923,123 @@ Cancel a schedule.
 
 ---
 
+### LLM Key Management
+
+These endpoints manage cloud provider credentials used by LiteLLM. All writes go through agent-api — do not write directly to config-api or LiteLLM.
+
+#### GET /llm/keys
+
+List configured LLM providers and their status.
+
+**Authentication**: Required (Admin role)
+
+**Response**:
+```json
+[
+  {
+    "provider": "bedrock",
+    "configured": true,
+    "config_api_persisted": true,
+    "last_verified_at": "2026-05-11T14:23:00Z"
+  },
+  {
+    "provider": "openai",
+    "configured": false,
+    "config_api_persisted": false,
+    "last_verified_at": null
+  }
+]
+```
+
+**Fields**:
+- `configured` — provider credentials are present in LiteLLM right now
+- `config_api_persisted` — a durable encrypted copy exists in config-api (survives restarts)
+
+**Status Codes**:
+- `200 OK` - Success
+- `401 Unauthorized` - Invalid/missing token
+- `403 Forbidden` - Admin role required
+
+#### POST /llm/keys
+
+Save or update credentials for a cloud LLM provider. This is the **only** supported path for writing provider credentials.
+
+**Authentication**: Required (Admin role)
+
+**Request Body** (AWS Bedrock example):
+```json
+{
+  "provider": "bedrock",
+  "aws_access_key_id": "AKIA...",
+  "aws_secret_access_key": "...",
+  "aws_region": "us-east-1"
+}
+```
+
+**What happens**:
+1. Credentials are stored in LiteLLM via `/credentials` and `/config/update`
+2. An encrypted copy is saved to config-api under the `llm-keys` category (mandatory with retry)
+3. `os.environ` is updated for the current process
+
+**Response**:
+```json
+{
+  "success": true,
+  "provider": "bedrock",
+  "message": "Credentials saved",
+  "config_api_persisted": true,
+  "warning": null
+}
+```
+
+If `config_api_persisted` is `false`, the credentials were saved to LiteLLM but the config-api backup failed after 3 retries. The warning field will contain a message. Re-save to retry.
+
+**Status Codes**:
+- `200 OK` - Credentials saved
+- `400 Bad Request` - Invalid or missing fields
+- `401 Unauthorized` - Invalid/missing token
+- `403 Forbidden` - Admin role required
+
+#### POST /llm/keys/verify-restore
+
+Force an immediate restore of credentials from config-api to LiteLLM. Resets the in-memory restore flag so the full restore loop runs even if it already ran once in this process lifetime.
+
+**Authentication**: Required (Admin role)
+
+**Use cases**:
+- LiteLLM was restarted (OOM, container recreate) and credentials aren't auto-restoring fast enough
+- After a `LITELLM_SALT_KEY` rotation caused stale DB entries
+- Integration test: verify credentials survive a restart
+
+**Response**:
+```json
+{
+  "restored": true,
+  "providers_found": ["bedrock"],
+  "providers_missing": [],
+  "message": "Credentials restored from config-api to LiteLLM"
+}
+```
+
+**Status Codes**:
+- `200 OK` - Restore attempted (check `restored` and `providers_found`)
+- `401 Unauthorized` - Invalid/missing token
+- `403 Forbidden` - Admin role required
+
+#### Credential Persistence Design
+
+Credentials are stored in three places:
+
+| Location | Survives restart | Notes |
+|----------|-----------------|-------|
+| LiteLLM PostgreSQL | Yes (unless salt key changes) | Active routing |
+| `os.environ` in agent-api | No | In-process cache |
+| config-api `llm-keys` | Yes (permanent) | Encrypted durable backup |
+
+**Automatic restore**: On the first authenticated request to `/runs` or `/chat` after an agent-api startup, `_ensure_litellm_keys` checks whether LiteLLM has usable credentials. If not, it exchanges the current user's token chain for a config-api token (using the source-gated `config.secrets.read` scope), reads all `llm-keys`, and pushes them back to LiteLLM. No manual action is needed for normal restarts.
+
+---
+
 ## Error Responses
 
 All errors follow this format:

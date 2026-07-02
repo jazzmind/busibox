@@ -1,8 +1,13 @@
 ---
 # Neo4j Docker Deployment Tasks
 #
-# Deploys Neo4j graph database via Docker Compose
-# Used when deploy_target == 'docker'
+# Deploys Neo4j graph database via Docker Compose.
+# Used when deploy_target == 'docker'.
+#
+# Includes auth-store resync: if the vault password drifts from what Neo4j
+# has persisted in its volume, we reset the password automatically.
+# Graph data in the neo4j database is preserved; only the system database
+# (which holds auth) is wiped during resync.
 
 - name: Start Neo4j
   include_role:
@@ -20,6 +25,196 @@
   vars:
     docker_wait_service: neo4j
     docker_wait_timeout: 120
+
+# ---------------------------------------------------------------------------
+# Auth-store resync (idempotent) — Docker equivalent of the LXC resync block
+#
+# NEO4J_AUTH is only consumed on first init of an empty data volume.
+# If the vault password changes after that, Neo4j keeps the old one.
+# We probe with the vault password and reset if it doesn't match.
+# ---------------------------------------------------------------------------
+
+- name: Set Neo4j container name
+  ansible.builtin.set_fact:
+    _neo4j_container: "{{ container_prefix | default('dev') }}-neo4j"
+
+- name: Get Neo4j HTTP port mapping
+  ansible.builtin.shell: |
+    docker inspect {{ _neo4j_container }} --format '{%raw%}{{range $p, $conf := .NetworkSettings.Ports}}{{if eq $p "7474/tcp"}}{{(index $conf 0).HostPort}}{{end}}{{end}}{%endraw%}'
+  register: _neo4j_host_port
+  changed_when: false
+  failed_when: false
+
+- name: Determine Neo4j HTTP endpoint
+  ansible.builtin.set_fact:
+    _neo4j_http_url: >-
+      {%- if _neo4j_host_port.stdout | default('') | length > 0 -%}
+        http://localhost:{{ _neo4j_host_port.stdout }}
+      {%- else -%}
+        http://localhost:7474
+      {%- endif -%}
+
+# Try reaching Neo4j via the Docker network (exec into the container)
+# rather than relying on host port mapping which may not be exposed.
+- name: Probe Neo4j auth with vault password (via docker exec)
+  ansible.builtin.shell: |
+    docker exec {{ _neo4j_container }} \
+      wget -q --timeout=5 --header='Content-Type: application/json' \
+        --header='Authorization: Basic {{ ((neo4j_user | default("neo4j")) ~ ":" ~ busibox_secrets.NEO4J_PASSWORD) | b64encode }}' \
+        --post-data='{"statements":[{"statement":"RETURN 1"}]}' \
+        -O - \
+        'http://localhost:7474/db/neo4j/tx/commit' 2>/dev/null
+    echo "EXIT_CODE=$?"
+  register: _neo4j_auth_probe_exec
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Determine auth probe result
+  ansible.builtin.set_fact:
+    _neo4j_auth_ok: "{{ 'results' in (_neo4j_auth_probe_exec.stdout | default('')) }}"
+
+- name: Show auth probe outcome
+  ansible.builtin.debug:
+    msg: >-
+      Neo4j auth probe: {{ 'PASS' if _neo4j_auth_ok else 'FAIL — resync will run' }}
+      (vault password sha256[:8] =
+      {{ busibox_secrets.NEO4J_PASSWORD | hash('sha256') | truncate(8, true, '') }})
+
+- name: Neo4j Docker auth-store resync
+  when: not _neo4j_auth_ok
+  block:
+    - name: Log auth-store drift
+      ansible.builtin.debug:
+        msg: >
+          Neo4j rejected the vault password. Will reset auth store inside
+          the Docker volume. Graph data (neo4j database) is preserved;
+          only the system database (auth) is wiped and re-initialized.
+
+    # Try changing password via cypher-shell with common defaults.
+    # This is the least destructive approach.
+    - name: Attempt password change via cypher-shell (try common passwords)
+      ansible.builtin.shell: |
+        for old_pass in "neo4j" "changeme" "password" "admin"; do
+          result=$(docker exec {{ _neo4j_container }} \
+            cypher-shell -u neo4j -p "$old_pass" \
+            "ALTER CURRENT USER SET PASSWORD FROM '$old_pass' TO '{{ busibox_secrets.NEO4J_PASSWORD }}'" 2>&1)
+          rc=$?
+          if [ $rc -eq 0 ]; then
+            echo "PASSWORD_CHANGED_FROM=$old_pass"
+            exit 0
+          fi
+        done
+        echo "CYPHER_SHELL_FAILED"
+        exit 1
+      register: _neo4j_password_change
+      changed_when: "'PASSWORD_CHANGED_FROM' in _neo4j_password_change.stdout"
+      failed_when: false
+      no_log: true
+
+    - name: Show cypher-shell password change result
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'Password changed via cypher-shell'
+             if _neo4j_password_change.rc == 0
+             else 'cypher-shell change failed — will wipe auth store' }}
+
+    # If cypher-shell didn't work, wipe the auth store inside the volume
+    # and let Neo4j re-initialize with NEO4J_AUTH on next start.
+    - name: Wipe Neo4j auth store in Docker volume (preserving graph data)
+      when: _neo4j_password_change.rc != 0
+      block:
+        - name: Stop Neo4j container for auth reset
+          ansible.builtin.shell: docker stop {{ _neo4j_container }}
+          changed_when: true
+
+        # Remove auth artifacts inside the volume via a temporary container.
+        # The neo4j_data volume is mounted at /data. Auth lives in:
+        #   /data/dbms/auth, /data/dbms/auth.ini
+        # The system database (which holds the migrated auth) lives in:
+        #   /data/databases/system/, /data/transactions/system/
+        # Graph data in /data/databases/neo4j/ is NOT touched.
+        # Resolve the actual Docker volume name from the stopped container's
+        # mount config rather than guessing the compose project name.
+        - name: Get Neo4j data volume name
+          ansible.builtin.shell: |
+            docker inspect {{ _neo4j_container }} \
+              --format '{%raw%}{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}{%endraw%}'
+          register: _neo4j_volume_name
+          changed_when: false
+
+        - name: Show resolved volume name
+          ansible.builtin.debug:
+            msg: "Neo4j data volume: {{ _neo4j_volume_name.stdout }}"
+
+        - name: Remove auth artifacts from Neo4j data volume
+          ansible.builtin.shell: |
+            docker run --rm \
+              -v {{ _neo4j_volume_name.stdout }}:/data \
+              alpine:3.20 \
+              sh -c '
+                rm -f /data/dbms/auth /data/dbms/auth.ini
+                rm -rf /data/databases/system /data/transactions/system
+                echo "AUTH_STORE_WIPED"
+                echo "Remaining in /data/databases:"
+                ls -la /data/databases/ 2>/dev/null || echo "(empty)"
+              '
+          register: _neo4j_wipe_result
+          changed_when: "'AUTH_STORE_WIPED' in _neo4j_wipe_result.stdout"
+
+        - name: Show wipe result
+          ansible.builtin.debug:
+            msg: "{{ _neo4j_wipe_result.stdout_lines | default([]) }}"
+
+        # Restart Neo4j — it will consume NEO4J_AUTH from the environment
+        # since the auth store is now empty (fresh init path).
+        - name: Restart Neo4j with fresh auth
+          include_role:
+            name: docker_common
+            tasks_from: compose_up
+          vars:
+            docker_services_to_start:
+              - neo4j
+            docker_force_recreate: true
+            docker_wait_for_health: true
+
+        - name: Wait for Neo4j after auth reset
+          include_role:
+            name: docker_common
+            tasks_from: wait_healthy
+          vars:
+            docker_wait_service: neo4j
+            docker_wait_timeout: 120
+
+    # Verify the password works after either cypher-shell change or volume wipe
+    - name: Verify vault password works after resync
+      ansible.builtin.shell: |
+        for i in $(seq 1 10); do
+          result=$(docker exec {{ _neo4j_container }} \
+            wget -q --timeout=5 --header='Content-Type: application/json' \
+              --header='Authorization: Basic {{ (neo4j_user | default("neo4j") ~ ":" ~ busibox_secrets.NEO4J_PASSWORD) | b64encode }}' \
+              --post-data='{"statements":[{"statement":"RETURN 1"}]}' \
+              -O - \
+              'http://localhost:7474/db/neo4j/tx/commit' 2>/dev/null)
+          if echo "$result" | grep -q '"results"'; then
+            echo "AUTH_VERIFIED"
+            exit 0
+          fi
+          sleep 3
+        done
+        echo "AUTH_VERIFY_FAILED"
+        exit 1
+      register: _neo4j_auth_verify
+      changed_when: false
+      failed_when: _neo4j_auth_verify.rc != 0
+      no_log: true
+
+    - name: Auth resync result
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'Neo4j auth store re-synced with vault password'
+             if _neo4j_auth_verify.rc == 0
+             else 'FAILED to re-sync Neo4j auth — manual intervention required' }}
 
 - name: Display Neo4j status
   ansible.builtin.debug:

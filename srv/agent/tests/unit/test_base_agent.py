@@ -485,19 +485,18 @@ class TestBaseStreamingAgentAuth:
         assert "session" in mock_stream_callback.events[0].message.lower()
     
     @pytest.mark.asyncio
-    async def test_setup_context_auth_always_required(
+    async def test_setup_context_succeeds_without_auth_when_no_scopes(
         self, test_agent_config_no_auth, mock_stream_callback
     ):
-        """Test _setup_context requires auth even for agents without auth-requiring tools."""
-        # Auth is always required regardless of tool configuration
+        """Test _setup_context succeeds without auth for agents whose tools require no scopes."""
+        # web_search has no scopes, so auth is not required
         agent = BaseStreamingAgent(test_agent_config_no_auth)
-        
+
         result = await agent._setup_context({}, mock_stream_callback)
-        
-        # Should fail without auth
-        assert result is None
-        assert mock_stream_callback.events[0].type == "error"
-        assert "Authentication" in mock_stream_callback.events[0].message
+
+        # Should succeed without auth credentials
+        assert result is not None
+        assert len(mock_stream_callback.events) == 0
 
 
 # =============================================================================
@@ -515,22 +514,20 @@ class TestToolExecution:
         """Test _execute_step streams tool_start event."""
         agent = BaseStreamingAgent(test_agent_config_no_auth)
         context = AgentContext()
-        
-        # Mock the tool
+
         mock_result = MagicMock()
-        mock_result.found = True
-        mock_result.result_count = 5
-        mock_result.results = []
         mock_result.model_dump = MagicMock(return_value={"found": True})
-        
-        with patch.object(ToolRegistry, 'get', return_value=AsyncMock(return_value=mock_result)):
+
+        async def fake_web_search(query: str):
+            return mock_result
+
+        with patch.object(ToolRegistry, 'get', return_value=fake_web_search):
             step = PipelineStep(tool="web_search", args={"query": "test"})
             await agent._execute_step(step, mock_stream_callback, mock_cancel_event, context)
-        
-        # Should have tool_start event
+
         tool_start_events = [e for e in mock_stream_callback.events if e.type == "tool_start"]
         assert len(tool_start_events) == 1
-    
+
     @pytest.mark.asyncio
     async def test_execute_step_streams_tool_result(
         self, test_agent_config_no_auth, mock_stream_callback, mock_cancel_event
@@ -538,19 +535,17 @@ class TestToolExecution:
         """Test _execute_step streams tool_result event on success."""
         agent = BaseStreamingAgent(test_agent_config_no_auth)
         context = AgentContext()
-        
-        # Mock the tool
+
         mock_result = MagicMock()
-        mock_result.found = True
-        mock_result.result_count = 5
-        mock_result.results = []
         mock_result.model_dump = MagicMock(return_value={"found": True})
-        
-        with patch.object(ToolRegistry, 'get', return_value=AsyncMock(return_value=mock_result)):
+
+        async def fake_web_search(query: str):
+            return mock_result
+
+        with patch.object(ToolRegistry, 'get', return_value=fake_web_search):
             step = PipelineStep(tool="web_search", args={"query": "test"})
             await agent._execute_step(step, mock_stream_callback, mock_cancel_event, context)
-        
-        # Should have tool_result event
+
         tool_result_events = [e for e in mock_stream_callback.events if e.type == "tool_result"]
         assert len(tool_result_events) == 1
     
@@ -607,11 +602,14 @@ class TestToolExecution:
         mock_result.found = True
         mock_result.result_count = 3
         mock_result.model_dump = MagicMock(return_value={"found": True})
-        
-        with patch.object(ToolRegistry, 'get', return_value=AsyncMock(return_value=mock_result)):
+
+        async def fake_web_search(query: str):
+            return mock_result
+
+        with patch.object(ToolRegistry, 'get', return_value=fake_web_search):
             step = PipelineStep(tool="web_search", args={"query": "test"})
             await agent._execute_step(step, mock_stream_callback, mock_cancel_event, context)
-        
+
         assert "web_search" in context.tool_results
         assert context.tool_results["web_search"] == mock_result
     
@@ -711,10 +709,13 @@ class TestPipelineExecution:
         mock_result.found = True
         mock_result.result_count = 3
         mock_result.model_dump = MagicMock(return_value={})
-        
-        with patch.object(ToolRegistry, 'get', return_value=AsyncMock(return_value=mock_result)):
+
+        async def fake_web_search(query: str):
+            return mock_result
+
+        with patch.object(ToolRegistry, 'get', return_value=fake_web_search):
             await agent._execute_pipeline("test query", mock_stream_callback, mock_cancel_event, context)
-        
+
         # Should have executed the tool
         assert "web_search" in context.tool_results
     
@@ -956,8 +957,11 @@ class TestStreamingEvents:
             mock_token.access_token = "test-token"
             mock_exchange.return_value = mock_token
             
+            async def fake_web_search(query: str):
+                return mock_result
+
             # Mock synthesis
-            with patch.object(ToolRegistry, 'get', return_value=AsyncMock(return_value=mock_result)):
+            with patch.object(ToolRegistry, 'get', return_value=fake_web_search):
                 with patch.object(agent.synthesis_agent, 'run_stream') as mock_run:
                     mock_stream_result = MagicMock()
                     mock_stream_result.__aenter__ = AsyncMock(return_value=mock_stream_result)

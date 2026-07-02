@@ -167,14 +167,14 @@ async def lifespan(app: FastAPI):
     )
     
     try:
-        # Initialize TextEmbedding with cache_dir if configured
+        # Initialize TextEmbedding with cache_dir and thread control
+        kwargs: dict = {"model_name": config.model_name}
         if config.cache_dir:
-            embedder = TextEmbedding(
-                model_name=config.model_name,
-                cache_dir=config.cache_dir,
-            )
-        else:
-            embedder = TextEmbedding(model_name=config.model_name)
+            kwargs["cache_dir"] = config.cache_dir
+        if config.threads is not None:
+            kwargs["threads"] = config.threads
+            logger.info("ONNX thread limit set", threads=config.threads)
+        embedder = TextEmbedding(**kwargs)
         
         # Warmup: run a test embedding to fully initialize
         logger.info("Warming up model")

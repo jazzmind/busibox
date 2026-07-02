@@ -100,6 +100,20 @@ pub struct Profile {
     /// HuggingFace API token for authenticated model access and higher rate limits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub huggingface_token: Option<String>,
+    /// Per-service host port overrides. Keys are service names (e.g. "litellm"), values are
+    /// the alternative host port to bind on. Set automatically when a port conflict is detected
+    /// during install. Passed to docker-compose as {SERVICE_HOST_PORT} env vars.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub port_overrides: std::collections::HashMap<String, u16>,
+    /// Service preset chosen at install time: "lite", "standard", or "full".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_preset: Option<String>,
+    /// Add-on packs enabled for this profile (e.g. ["local-models", "rag-milvus"]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addon_packs: Vec<String>,
+    /// Local LLM backend selected at install time (e.g. "mlx-lm", "vllm", "ollama").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_llm_backend: Option<String>,
 }
 
 impl Profile {

@@ -122,6 +122,10 @@ fn main() -> Result<()> {
         dev_apps_dir: None,
         huggingface_token: None,
         direct_access: None,
+        port_overrides: Default::default(),
+        service_preset: Some("lite".to_string()),
+        addon_packs: Vec::new(),
+        local_llm_backend: None,
     };
 
     profile::upsert_profile(&repo_root, PROFILE_ID, prof.clone(), true)?;

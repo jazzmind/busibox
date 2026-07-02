@@ -13,11 +13,11 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from opentelemetry import trace
 from pydantic_ai import Agent
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import attributes
 
@@ -42,6 +42,24 @@ AGENT_LIMITS = {
     "complex": {"timeout": 600, "memory_mb": 2048},  # 10 minutes, 2GB
     "batch": {"timeout": 1800, "memory_mb": 4096},  # 30 minutes, 4GB
 }
+
+
+def redact_images_for_persistence(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Replace base64 image data with size metadata before DB persistence.
+
+    Megabytes of base64 do not belong in the runs table; the in-memory payload
+    keeps the real data for execution.
+    """
+    images = payload.get("images")
+    if not images:
+        return payload
+    redacted = dict(payload)
+    redacted["images"] = [
+        {"media_type": img.get("media_type"), "size_b64": len(img.get("data") or "")}
+        for img in images
+        if isinstance(img, dict)
+    ]
+    return redacted
 
 
 def get_agent_timeout(agent_tier: str = "simple") -> int:
@@ -151,6 +169,7 @@ async def create_run(
     scopes: list[str],
     purpose: str,
     agent_tier: str = "simple",
+    existing_run_id: Optional[uuid.UUID] = None,
 ) -> RunRecord:
     """
     Execute an agent run with error handling and tiered timeouts.
@@ -188,20 +207,32 @@ async def create_run(
         logger.error(f"Failed to capture definition snapshot: {e}")
         definition_snapshot = None
     
-    # Create run record with initial event and snapshot
-    run_record = RunRecord(
-        agent_id=agent_id,
-        status="pending",
-        input=payload,
-        created_by=principal.sub,
-        definition_snapshot=definition_snapshot,
-        events=[],
-    )
-    add_run_event(run_record, "created", data={"agent_tier": agent_tier})
-    
-    session.add(run_record)
-    await session.commit()
-    await session.refresh(run_record)
+    # Create (or reuse) a run record
+    if existing_run_id is not None:
+        # Background mode: update the pre-created "pending" record rather than
+        # creating a duplicate.
+        stmt = select(RunRecord).where(RunRecord.id == existing_run_id)
+        result = await session.execute(stmt)
+        run_record = result.scalar_one_or_none()
+        if run_record is None:
+            logger.warning(
+                f"[create_run] existing_run_id={existing_run_id} not found; creating fresh record."
+            )
+            existing_run_id = None  # fall through to creation
+
+    if existing_run_id is None:
+        run_record = RunRecord(
+            agent_id=agent_id,
+            status="pending",
+            input=redact_images_for_persistence(payload),
+            created_by=principal.sub,
+            definition_snapshot=definition_snapshot,
+            events=[],
+        )
+        add_run_event(run_record, "created", data={"agent_tier": agent_tier})
+        session.add(run_record)
+        await session.commit()
+        await session.refresh(run_record)
     
     # Start tracing span for run execution
     with tracer.start_as_current_span(
@@ -316,14 +347,40 @@ async def create_run(
                 prompt = payload.get("prompt", "")
                 
                 if isinstance(agent, BaseStreamingAgent):
-                    # BaseStreamingAgent uses context dict
+                    # BaseStreamingAgent uses context dict.
+                    # IMPORTANT: task/run identifiers go in both the top-level keys
+                    # AND the "metadata" sub-dict so that base_agent.py populates
+                    # BusiboxDeps.metadata correctly (it reads context.get("metadata")).
+                    # The metadata is also injected into the system prompt as
+                    # "## Application Context" so the agent can reference task_id directly.
+                    #
+                    # System keys (starting with "_") and "prompt" are excluded.
+                    # All other payload keys (e.g. mode, documentIdSites, or any
+                    # input_override fields) are forwarded so the agent can read them.
+                    _SYSTEM_KEYS = {"prompt", "response_schema", "max_tokens"}
+                    _task_meta = {
+                        "task_id": payload.get("_task_id"),
+                        "execution_id": payload.get("_execution_id"),
+                        "continuation_depth": payload.get("_continuation_depth", 0),
+                        "run_id": str(run_record.id),
+                        **{
+                            k: v for k, v in payload.items()
+                            if not k.startswith("_") and k not in _SYSTEM_KEYS
+                        },
+                    }
                     context = {
                         "principal": principal,
                         "session": session,
                         "user_id": principal.sub,
                         "agent_id": str(agent_id),
+                        "run_id": str(run_record.id),
+                        "task_id": payload.get("_task_id"),
+                        "execution_id": payload.get("_execution_id"),
+                        "continuation_depth": payload.get("_continuation_depth", 0),
+                        "metadata": _task_meta,
                         "response_schema": payload.get("response_schema"),
                         "max_tokens": payload.get("max_tokens"),
+                        "images": payload.get("images") or [],
                     }
                     logger.info(
                         f"Calling BaseStreamingAgent.run() with context: "
@@ -341,7 +398,16 @@ async def create_run(
                     )
                 else:
                     # PydanticAI Agent uses deps
-                    deps = BusiboxDeps(principal=principal, busibox_client=client)
+                    deps = BusiboxDeps(
+                        principal=principal,
+                        busibox_client=client,
+                        metadata={
+                            "run_id": str(run_record.id),
+                            "task_id": payload.get("_task_id"),
+                            "execution_id": payload.get("_execution_id"),
+                            "continuation_depth": payload.get("_continuation_depth", 0),
+                        },
+                    )
                     logger.info(f"Calling PydanticAI Agent.run() with deps")
                     result = await asyncio.wait_for(
                         agent.run(prompt, deps=deps), timeout=timeout
@@ -455,3 +521,116 @@ async def create_run(
         )
         
         return run_record
+
+
+async def create_run_background(
+    principal: Principal,
+    agent_id: uuid.UUID,
+    payload: Dict[str, Any],
+    scopes: list[str],
+    purpose: str,
+    agent_tier: str = "complex",
+    on_complete: Optional[Callable] = None,
+) -> RunRecord:
+    """
+    Create a run record immediately (in "pending" state) and execute the agent
+    asynchronously in the background.
+
+    Returns the pre-created RunRecord so callers can return `run_id` to the
+    client immediately, allowing the UI to open the activity sidebar before the
+    agent finishes.
+
+    The background task will update the RunRecord to "running" then
+    "succeeded"/"failed" when complete.
+
+    Args:
+        principal: Authenticated user
+        agent_id: Agent to execute
+        payload: Input payload with 'prompt'
+        scopes: OAuth scopes for token exchange
+        purpose: Token purpose
+        agent_tier: Execution tier (simple/complex/batch)
+        on_complete: Optional async callback(run_id, status, output_summary) called after run finishes
+
+    Returns:
+        Pre-created RunRecord (status="pending")
+    """
+    from app.db.session import SessionLocal
+
+    if agent_tier not in AGENT_LIMITS:
+        raise ValueError(f"Invalid agent_tier: {agent_tier}. Must be one of: {list(AGENT_LIMITS.keys())}")
+    if not payload.get("prompt"):
+        raise ValueError("Payload must contain 'prompt' field")
+
+    async with SessionLocal() as session:
+        # Capture definition snapshot
+        try:
+            definition_snapshot = await capture_definition_snapshot(
+                agent_id=agent_id,
+                workflow_id=None,
+                session=session,
+            )
+        except ValueError:
+            definition_snapshot = None
+
+        # Pre-create the run record in pending state
+        run_record = RunRecord(
+            agent_id=agent_id,
+            status="pending",
+            input=payload,
+            created_by=principal.sub,
+            definition_snapshot=definition_snapshot,
+            events=[],
+        )
+        add_run_event(run_record, "created", data={"agent_tier": agent_tier, "mode": "background"})
+        session.add(run_record)
+        await session.commit()
+        await session.refresh(run_record)
+
+    run_id = run_record.id
+
+    async def _bg_execute():
+        final_status = "failed"
+        output_summary = None
+        try:
+            async with SessionLocal() as bg_session:
+                result = await create_run(
+                    session=bg_session,
+                    principal=principal,
+                    agent_id=agent_id,
+                    payload=payload,
+                    scopes=scopes,
+                    purpose=purpose,
+                    agent_tier=agent_tier,
+                    existing_run_id=run_id,
+                )
+                final_status = getattr(result, "status", "succeeded") or "succeeded"
+                output_summary = str(getattr(result, "output", ""))[:500] if getattr(result, "output", None) else None
+        except Exception as exc:
+            logger.exception(
+                f"[bg_execute] Background run {run_id} failed with exception: {exc}"
+            )
+            output_summary = str(exc)[:500]
+            try:
+                async with SessionLocal() as err_session:
+                    await err_session.execute(
+                        update(RunRecord)
+                        .where(RunRecord.id == run_id)
+                        .values(status="failed", output={"error": str(exc)})
+                    )
+                    await err_session.commit()
+            except Exception:
+                pass
+        finally:
+            if on_complete:
+                # #region agent log
+                logger.info("_bg_execute finally: calling on_complete for run=%s status=%s", run_id, final_status)
+                # #endregion
+                try:
+                    await on_complete(run_id, final_status, output_summary)
+                except Exception as cb_err:
+                    logger.warning(f"[bg_execute] on_complete callback failed: {cb_err}")
+
+    asyncio.create_task(_bg_execute())
+
+    return run_record

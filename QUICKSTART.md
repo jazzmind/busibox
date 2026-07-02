@@ -7,6 +7,31 @@ This guide gets you to a working Portal at `http://localhost:3000` in
 ~15 minutes. For multi-host (Proxmox / Kubernetes / fleet) deployments, see
 [docs/administrators/01-quickstart.md](docs/administrators/01-quickstart.md).
 
+## Profiles at a glance
+
+Busibox ships with three named profiles. **Lite is the public default**:
+
+| Profile | Services | LLM | Use it when |
+|---|---|---|---|
+| **lite** *(default)* | identity + Portal + agent + LiteLLM + Postgres + MinIO | cloud key (OpenAI / Anthropic / Bedrock) | first run, eval, demos |
+| **standard** | lite + Milvus + embedding/search APIs | cloud key | you want local RAG over your docs |
+| **full** | everything (`vllm`, `neo4j`, `user-apps`, …) | cloud or local | full historical stack, GPU host |
+
+Inspect them from the CLI:
+
+```bash
+busibox profile list
+busibox profile show lite
+busibox up --profile lite           # prints the deploy plan; does not deploy yet
+busibox doctor --profile lite        # quick environment check
+```
+
+Add-on packs opt back into individual capabilities (e.g.
+`--pack local-models` adds vLLM, `--pack graph` adds Neo4j, `--pack
+rag-milvus` mirrors Standard). Packs marked *placeholder* in `profile
+list` do not yet have services wired in this tree — `doctor` will warn
+about them.
+
 ---
 
 ## 1. Prerequisites

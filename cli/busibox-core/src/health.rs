@@ -154,7 +154,7 @@ const API_SERVICES: &[ServiceHealthDef] = &[
         name: "deploy",
         group: "APIs",
         check: CheckMethod::Http {
-            path: "/health/live",
+            path: "/health",
             port: 8011,
         },
         proxmox_container_id: Some(210),
@@ -344,6 +344,70 @@ pub fn all_service_defs(is_mlx: bool) -> Vec<ServiceHealthDef> {
     defs
 }
 
+/// Detect which Docker context to use for local CLI health checks.
+///
+/// For explicit runtimes ("docker-desktop" / "colima") maps directly.
+/// For "auto" probes each well-known context in preference order and picks
+/// the first one that has containers matching the given prefix running.
+/// Returns None to leave the current default context unchanged.
+fn docker_context_socket_exists(ctx: &str) -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let sock = match ctx {
+        "colima" => format!("{home}/.colima/default/docker.sock"),
+        "desktop-linux" => format!("{home}/.docker/run/docker.sock"),
+        _ => return false,
+    };
+    std::path::Path::new(&sock).exists()
+}
+
+fn resolve_local_docker_context(docker_runtime: &str, prefix: &str) -> Option<String> {
+    // For explicit runtimes, verify the socket is actually present.
+    // If both Colima and Docker Desktop are installed, the configured one takes priority,
+    // but we fall back to whichever is actually running if the preferred one is absent.
+    let preferred: Option<&str> = match docker_runtime {
+        "docker-desktop" => Some("desktop-linux"),
+        "colima" => Some("colima"),
+        _ => None,
+    };
+
+    if let Some(ctx) = preferred {
+        if docker_context_socket_exists(ctx) {
+            return Some(ctx.to_string());
+        }
+        // Configured runtime's socket not found — try the other local runtime
+        let other = if ctx == "colima" { "desktop-linux" } else { "colima" };
+        if docker_context_socket_exists(other) {
+            return Some(other.to_string());
+        }
+        // Neither socket found — return configured name anyway (may use default socket)
+        return Some(ctx.to_string());
+    }
+
+    // Auto mode: first find which context has running containers with this prefix.
+    for ctx in &["colima", "desktop-linux"] {
+        let has_containers = std::process::Command::new("docker")
+            .args(["--context", ctx, "ps", "-q", "--filter", &format!("name={prefix}-")])
+            .output()
+            .map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+            .unwrap_or(false);
+        if has_containers {
+            return Some(ctx.to_string());
+        }
+    }
+    // No containers yet (fresh install) — return whichever daemon socket is present.
+    for ctx in &["colima", "desktop-linux"] {
+        if docker_context_socket_exists(ctx) {
+            return Some(ctx.to_string());
+        }
+    }
+    None
+}
+
+/// Public alias so manage.rs can resolve the context once before spawning check threads.
+pub fn resolve_docker_context_pub(docker_runtime: &str, prefix: &str) -> Option<String> {
+    resolve_local_docker_context(docker_runtime, prefix)
+}
+
 /// Run a single health check, returning the status.
 fn check_service(
     def: &ServiceHealthDef,
@@ -352,6 +416,7 @@ fn check_service(
     ssh: Option<&SshConnection>,
     is_proxmox: bool,
     network_base: &str,
+    docker_context: Option<&str>,
 ) -> HealthStatus {
     if is_proxmox {
         return check_service_proxmox(def, ssh, network_base);
@@ -391,10 +456,12 @@ fn check_service(
                 let full_cmd = format!("{}{cmd}", shell::SHELL_PATH_PREAMBLE);
                 ssh.run(&full_cmd)
             } else {
-                std::process::Command::new("bash")
-                    .arg("-c")
-                    .arg(&cmd)
-                    .output()
+                let mut proc = std::process::Command::new("bash");
+                proc.arg("-c").arg(&cmd);
+                if let Some(ctx) = docker_context {
+                    proc.env("DOCKER_CONTEXT", ctx);
+                }
+                proc.output()
                     .map(|o| {
                         if o.status.success() {
                             String::from_utf8_lossy(&o.stdout).to_string()
@@ -492,9 +559,49 @@ pub fn check_service_pub(
     is_proxmox: bool,
     network_base: &str,
     vllm_network_base: &str,
+    docker_context: Option<&str>,
+) -> HealthStatus {
+    check_service_pub_with_override(def, host, prefix, ssh, is_proxmox, network_base, vllm_network_base, docker_context, None)
+}
+
+pub fn check_service_pub_with_override(
+    def: &ServiceHealthDef,
+    host: &str,
+    prefix: &str,
+    ssh: Option<&SshConnection>,
+    is_proxmox: bool,
+    network_base: &str,
+    vllm_network_base: &str,
+    docker_context: Option<&str>,
+    port_override: Option<u16>,
 ) -> HealthStatus {
     let effective_base = if def.name == "vllm" { vllm_network_base } else { network_base };
-    check_service(def, host, prefix, ssh, is_proxmox, effective_base)
+    if let Some(alt_port) = port_override {
+        if let CheckMethod::Http { path, .. } = &def.check {
+            let url = format!("http://{host}:{alt_port}{path}");
+            let curl_cmd = format!("curl -s -o /dev/null -w '%{{http_code}}' --max-time 3 '{url}'");
+            let output = if let Some(ssh) = ssh {
+                let full_cmd = format!("{}{curl_cmd}", crate::shell::SHELL_PATH_PREAMBLE);
+                ssh.run(&full_cmd).unwrap_or_default()
+            } else {
+                std::process::Command::new("bash")
+                    .arg("-c")
+                    .arg(&curl_cmd)
+                    .output()
+                    .ok()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    .unwrap_or_default()
+            };
+            let code = output.trim().parse::<u16>().unwrap_or(0);
+            return match code {
+                0 => HealthStatus::Down,
+                200..=299 | 301 | 302 | 401 | 403 => HealthStatus::Healthy,
+                500..=599 => HealthStatus::Unhealthy,
+                _ => HealthStatus::Unhealthy,
+            };
+        }
+    }
+    check_service(def, host, prefix, ssh, is_proxmox, effective_base, docker_context)
 }
 
 /// Run all health checks, sending results through the channel as they complete.
@@ -519,6 +626,22 @@ pub fn run_health_checks(
     network_base: String,
     vllm_network_base: String,
     tx: mpsc::Sender<HealthUpdate>,
+    docker_runtime: String,
+) {
+    run_health_checks_with_overrides(defs, host, prefix, ssh_details, is_proxmox, network_base, vllm_network_base, tx, docker_runtime, std::collections::HashMap::new())
+}
+
+pub fn run_health_checks_with_overrides(
+    defs: Vec<ServiceHealthDef>,
+    host: String,
+    prefix: String,
+    ssh_details: Option<(String, String, String)>, // (host, user, key)
+    is_proxmox: bool,
+    network_base: String,
+    vllm_network_base: String,
+    tx: mpsc::Sender<HealthUpdate>,
+    docker_runtime: String,
+    port_overrides: std::collections::HashMap<String, u16>,
 ) {
     std::thread::spawn(move || {
         if is_proxmox {
@@ -526,7 +649,7 @@ pub fn run_health_checks(
         } else if let Some(ref details) = ssh_details {
             run_health_checks_remote_batched(&defs, &host, &prefix, details, &tx);
         } else {
-            run_health_checks_local_parallel(&defs, &host, &prefix, &tx);
+            run_health_checks_local_parallel(&defs, &host, &prefix, &tx, &docker_runtime, &port_overrides);
         }
         let _ = tx.send(HealthUpdate::Complete);
     });
@@ -628,7 +751,11 @@ fn run_health_checks_local_parallel(
     host: &str,
     prefix: &str,
     tx: &mpsc::Sender<HealthUpdate>,
+    docker_runtime: &str,
+    port_overrides: &std::collections::HashMap<String, u16>,
 ) {
+    let docker_context = resolve_local_docker_context(docker_runtime, prefix);
+
     let mut handles = Vec::new();
 
     for def in defs {
@@ -636,16 +763,17 @@ fn run_health_checks_local_parallel(
         let host = host.to_string();
         let prefix = prefix.to_string();
         let tx = tx.clone();
+        let docker_context = docker_context.clone();
+        let port_override = port_overrides.get(def.name).copied();
 
         let handle = std::thread::spawn(move || {
-            let status = check_service(
-                &def,
-                &host,
-                &prefix,
-                None,
-                false,
-                "",
-            );
+            let status = if let Some(alt_port) = port_override {
+                check_service_pub_with_override(
+                    &def, &host, &prefix, None, false, "", "", docker_context.as_deref(), Some(alt_port),
+                )
+            } else {
+                check_service(&def, &host, &prefix, None, false, "", docker_context.as_deref())
+            };
 
             let _ = tx.send(HealthUpdate::ServiceResult(ServiceHealthResult {
                 name: def.name.to_string(),
@@ -843,6 +971,24 @@ pub fn start_health_checks(
     is_proxmox: bool,
     network_base: &str,
     vllm_network_base: &str,
+    docker_runtime: &str,
+) -> mpsc::Receiver<HealthUpdate> {
+    start_health_checks_with_overrides(is_remote, is_mlx, host, prefix, ssh_details, is_proxmox, network_base, vllm_network_base, docker_runtime, std::collections::HashMap::new())
+}
+
+/// Same as `start_health_checks`, but applies per-service port overrides (e.g. when
+/// a profile's litellm was reassigned to a non-default port during install).
+pub fn start_health_checks_with_overrides(
+    is_remote: bool,
+    is_mlx: bool,
+    host: &str,
+    prefix: &str,
+    ssh_details: Option<(String, String, String)>,
+    is_proxmox: bool,
+    network_base: &str,
+    vllm_network_base: &str,
+    docker_runtime: &str,
+    port_overrides: std::collections::HashMap<String, u16>,
 ) -> mpsc::Receiver<HealthUpdate> {
     let (tx, rx) = mpsc::channel();
     let defs = all_service_defs(is_mlx);
@@ -852,6 +998,6 @@ pub fn start_health_checks(
         "localhost".to_string()
     };
 
-    run_health_checks(defs, host, prefix.to_string(), ssh_details, is_proxmox, network_base.to_string(), vllm_network_base.to_string(), tx);
+    run_health_checks_with_overrides(defs, host, prefix.to_string(), ssh_details, is_proxmox, network_base.to_string(), vllm_network_base.to_string(), tx, docker_runtime.to_string(), port_overrides);
     rx
 }

@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_principal
+from app.api.llm import _ensure_litellm_keys
 from app.db.session import SessionLocal, get_session
 from app.models.domain import AgentDefinition
 from app.schemas.auth import Principal
@@ -96,6 +97,10 @@ async def run_agent(
         HTTPException: 400 if validation fails, 404 if agent not found
     """
     try:
+        # Verify LiteLLM has cloud provider keys; restore from config-api if not.
+        # This is a no-op after the first successful check.
+        await _ensure_litellm_keys(principal)
+
         logger.info(
             f"Creating run for agent {payload.agent_id} by user {principal.sub}",
             extra={
@@ -269,7 +274,7 @@ async def invoke_agent_async(
             run_payload["response_schema"] = payload.response_schema
 
         from app.models.domain import RunRecord
-        from app.services.run_service import add_run_event, capture_definition_snapshot
+        from app.services.run_service import add_run_event, capture_definition_snapshot, redact_images_for_persistence
 
         try:
             definition_snapshot = await capture_definition_snapshot(
@@ -281,7 +286,7 @@ async def invoke_agent_async(
         run_record = RunRecord(
             agent_id=resolved_agent_id,
             status="pending",
-            input=run_payload,
+            input=redact_images_for_persistence(run_payload),
             created_by=principal.sub,
             definition_snapshot=definition_snapshot,
             events=[],

@@ -11,13 +11,17 @@ logger = structlog.get_logger()
 
 HIGH_RELEVANCY_THRESHOLD = 0.85
 ADAPTIVE_MULTIPLIER = 2
+# Results that score below this fraction of the top hit are dropped even if they
+# cleared the absolute min_score floor.  Keeps multi-source answers (secondary
+# hits at ≥0.7x the best score) while excluding off-topic docs.
+RELATIVE_SCORE_RATIO = 0.7
 
 
 class DocumentSearchInput(BaseModel):
     """Input schema for document search tool."""
     query: str = Field(description="Search query to find relevant documents")
     limit: int = Field(default=10, description="Maximum number of results (default 10, max 50)")
-    min_score: float = Field(default=0.35, description="Minimum relevancy score to include (0-1, default 0.35)")
+    min_score: float = Field(default=0.5, description="Minimum relevancy score to include (0-1, default 0.5)")
     mode: str = Field(default="hybrid", description="Search mode: hybrid, semantic, or keyword")
     file_ids: Optional[List[str]] = Field(default=None, description="Optional list of file IDs to filter")
     expand_graph: bool = Field(default=False, description="Expand graph relationships (adds latency, default false)")
@@ -47,7 +51,7 @@ async def search_documents(
     ctx: RunContext[BusiboxDeps],
     query: str,
     limit: int = 10,
-    min_score: float = 0.35,
+    min_score: float = 0.5,
     mode: str = "hybrid",
     file_ids: Optional[List[str]] = None,
     expand_graph: bool = False,
@@ -73,14 +77,29 @@ async def search_documents(
     """
     try:
         effective_file_ids = file_ids
+        file_ids_source = "tool_arg" if file_ids else None
         if not effective_file_ids and ctx.deps.metadata:
             ctx_file_ids = ctx.deps.metadata.get("file_ids")
             if ctx_file_ids and isinstance(ctx_file_ids, list):
                 effective_file_ids = ctx_file_ids
+                file_ids_source = "metadata_context"
                 logger.info(
                     "document_search: injecting file_ids from metadata context",
                     extra={"count": len(effective_file_ids)},
                 )
+
+        # Diagnostics: log effective scoping so we can confirm shared-library
+        # docs are in scope vs. only personal docs.
+        logger.info(
+            "document_search: starting search",
+            extra={
+                "query": query[:200],
+                "mode": mode,
+                "effective_file_ids": effective_file_ids,
+                "file_ids_source": file_ids_source,
+                "limit": min(limit, 50),
+            },
+        )
 
         capped_limit = min(limit, 50)
         response = await ctx.deps.busibox_client.search(
@@ -107,12 +126,22 @@ async def search_documents(
             )
 
         score_summary = [round(r.get("score", 0.0), 4) for r in results[:5]]
+        top_result_details = [
+            {
+                "file_id": r.get("file_id", ""),
+                "filename": r.get("filename", ""),
+                "score": round(r.get("score", 0.0), 4),
+                "page": r.get("page_number"),
+            }
+            for r in results[:10]
+        ]
         logger.info(
             "document_search: raw results from search API",
             extra={
                 "total_results": len(results),
                 "min_score_filter": min_score,
                 "top_5_scores": score_summary,
+                "top_10_results": top_result_details,
             },
         )
 
@@ -162,6 +191,26 @@ async def search_documents(
                 results=[],
             )
         
+        # Relative gate: drop any result that is far below the best hit.
+        # This removes off-topic documents that cleared the absolute floor but are
+        # clearly weaker than the top match (e.g. dredging docs for a per-diem query).
+        if relevant_results:
+            relevant_results.sort(key=lambda r: r.get("score", 0.0), reverse=True)
+            top_score = relevant_results[0].get("score", 0.0)
+            relative_cutoff = max(min_score, top_score * RELATIVE_SCORE_RATIO)
+            before_gate = len(relevant_results)
+            relevant_results = [r for r in relevant_results if r.get("score", 0.0) >= relative_cutoff]
+            if len(relevant_results) != before_gate:
+                logger.info(
+                    "document_search: relative gate applied",
+                    extra={
+                        "top_score": round(top_score, 4),
+                        "cutoff": round(relative_cutoff, 4),
+                        "kept": len(relevant_results),
+                        "dropped": before_gate - len(relevant_results),
+                    },
+                )
+
         formatted_results = []
         context_parts = []
         
@@ -185,22 +234,32 @@ async def search_documents(
             if page_num:
                 source_parts.append(f"p.{page_num}")
             source_ref = ", ".join(source_parts)
+            # Citation URL includes page number so the UI can scroll directly to it.
+            citation_url = f"doc:{fid}:{page_num}" if page_num else f"doc:{fid}"
 
             context_parts.append(
-                f"--- Source {idx} [{source_ref}] (score:{score:.2f}, file_id:{fid}) ---\n{result.get('text', '')}"
+                f"--- Source {idx} [{source_ref}] (score:{score:.2f}, file_id:{fid}, citation_url:{citation_url}) ---\n{result.get('text', '')}"
             )
         
-        full_context = (
-            "CRITICAL: Before using ANY of these search results, verify they are "
-            "actually relevant to the user's query. If the documents below are about "
-            "a completely different topic than what the user asked, do NOT use them — "
-            "say you didn't find relevant documents instead.\n\n"
+        # Citation rule is placed at the TOP so it is the first thing the LLM reads.
+        citation_rule = (
+            "CITATION RULE — MANDATORY: Every sentence or claim that uses information "
+            "from these search results MUST end with an inline citation. "
+            "Use EXACTLY this markdown format: [Source: filename, p.N](doc:file_id:page_number) — "
+            "for example: [Source: report.pdf, p.5](doc:abc-123-def:5). "
+            "Use the citation_url value from each source header (e.g. citation_url:doc:abc-123:5). "
+            "Do NOT paraphrase without citing. Do NOT use bare URLs. "
+            "If you use information from multiple sources, cite each one.\n\n"
         )
+        relevancy_rule = (
+            "RELEVANCY CHECK: Before using ANY result, verify it is actually relevant to the "
+            "user's query. If the documents below are about a completely different topic, do NOT "
+            "use them — say you didn't find relevant documents instead.\n\n"
+        )
+        full_context = citation_rule + relevancy_rule
         full_context += "\n\n".join(context_parts)
         full_context += (
-            "\n\nWhen citing information from these sources, always include "
-            "a citation using this format: [Source: filename, p.N](doc:file_id) — "
-            "for example: [Source: report.pdf, p.5](doc:abc-123-def)"
+            "\n\nREMINDER: Cite every factual claim with [Source: filename, p.N](citation_url)."
         )
 
         graph_context_str: Optional[str] = None
@@ -241,10 +300,11 @@ Use this tool when:
 The tool performs hybrid search (combining semantic and keyword matching) for best results.
 Results are automatically filtered based on user permissions (RLS).
 
-IMPORTANT: When you use information from search results in your response, always cite the 
-source using this format: [Source: filename, p.N](doc:file_id)
-
-Example: "What does the compliance document say about data retention?"
+MANDATORY CITATION RULE: Every sentence that uses information from search results MUST end
+with an inline citation in EXACTLY this format: [Source: filename, p.N](doc:file_id:page_number)
+Use the citation_url value from each source's header line. Example:
+  "The policy requires annual reviews. [Source: policy.pdf, p.3](doc:abc-123:3)"
+Never respond with document information without a citation. Never use bare URLs.
 """,
 )
 

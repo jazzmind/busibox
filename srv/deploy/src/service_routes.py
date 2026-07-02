@@ -34,6 +34,7 @@ import os
 import json
 import pathlib
 import re
+import socket
 import uuid
 import yaml
 from pydantic import BaseModel
@@ -59,6 +60,10 @@ from .model_manager import (
     remote_download_model,
     restart_vllm_service,
     vllm_host,
+    model_registry_path,
+    model_overrides_path,
+    model_config_path,
+    ssh_exec_raw,
 )
 
 # Import token exchange for agent-api calls
@@ -93,21 +98,45 @@ def load_model_registry(busibox_path: str = None) -> dict:
 
 
 def get_model_purposes(registry: dict, environment: str = None) -> dict:
-    """Get the appropriate model_purposes based on environment.
-    
-    - development/demo: uses model_purposes_dev (MLX models)
-    - staging/production: uses model_purposes (vLLM + Bedrock)
+    """Get the merged model_purposes for an environment.
+
+    default_purposes provides the base assignment for every purpose;
+    environment-specific maps (model_purposes / model_purposes_dev) only need
+    to list the entries that differ. Mirrors the merge semantics used by
+    scripts/llm/generate-litellm-config.sh's get_model_for_purpose() and
+    provision/ansible/roles/litellm/files/generate_model_config.py.
+
+    - development/demo: default_purposes + model_purposes_dev overrides
+    - staging/production: default_purposes + model_purposes overrides
     """
     if environment is None:
         environment = os.getenv('ENVIRONMENT', os.getenv('NODE_ENV', 'development'))
-    
+
+    purposes = dict(registry.get('default_purposes', {}) or {})
     if environment in ('development', 'demo', 'dev'):
-        purposes = registry.get('model_purposes_dev', {})
-        if purposes:
-            return purposes
-    
-    # Fallback to standard model_purposes
-    return registry.get('model_purposes', {})
+        purposes.update(registry.get('model_purposes_dev', {}) or {})
+    else:
+        purposes.update(registry.get('model_purposes', {}) or {})
+    return purposes
+
+
+def resolve_purpose_to_model_key(purposes: dict, available: dict, purpose: str) -> str | None:
+    """Follow a purpose's alias chain (e.g. chat -> agent -> qwen3.5-4b-mlx)
+    within a merged purposes dict until landing on a concrete available_models
+    key. Mirrors generate-litellm-config.sh's get_model_for_purpose() alias
+    walk. Returns None if the purpose isn't present at all.
+    """
+    if purpose not in purposes:
+        return None
+    visited: set[str] = set()
+    target = purpose
+    while target in purposes and target not in visited:
+        visited.add(target)
+        value = purposes[target]
+        if value in available or value not in purposes:
+            return value
+        target = value
+    return purposes.get(purpose)
 
 
 def resolve_model_name(registry: dict, model_key: str) -> tuple[str, dict]:
@@ -264,18 +293,20 @@ def generate_litellm_config_from_registry(
     
     purposes = get_model_purposes(registry, environment)
     available = registry.get('available_models', {})
-    
-    # Define which purposes map to LiteLLM model names
-    # These are the model names that services request from LiteLLM
-    litellm_purposes = [
-        'test', 'fast', 'classify', 'cleanup', 'parsing', 'agent', 'chat', 'frontier', 'default',
-        'tool_calling', 'video', 'image', 'transcribe', 'voice'
-    ]
-    
+
+    # Purposes that map to LiteLLM model names, derived from the merged
+    # purposes dict itself rather than a hand-maintained list (this was
+    # previously a hardcoded subset that silently dropped any new purpose
+    # added to the registry, e.g. the code-* purposes). 'embedding' is
+    # excluded because it's served by a dedicated FastEmbed service, not
+    # LiteLLM (matches provision/ansible/roles/litellm/files/generate_model_config.py).
+    excluded_purposes = {'embedding'}
+    litellm_purposes = [p for p in purposes.keys() if p not in excluded_purposes]
+
     model_list = []
-    
+
     for purpose in litellm_purposes:
-        model_key = purposes.get(purpose)
+        model_key = resolve_purpose_to_model_key(purposes, available, purpose)
         if not model_key:
             continue
         
@@ -318,7 +349,7 @@ def generate_litellm_config_from_registry(
     # target explicit model entries, not only purpose aliases.
     unique_model_keys = []
     for purpose in litellm_purposes:
-        model_key = purposes.get(purpose)
+        model_key = resolve_purpose_to_model_key(purposes, available, purpose)
         if model_key and model_key not in unique_model_keys:
             unique_model_keys.append(model_key)
 
@@ -328,7 +359,7 @@ def generate_litellm_config_from_registry(
 
         # Pick API base from the first purpose that points to this model key.
         representative_purpose = next(
-            (p for p in litellm_purposes if purposes.get(p) == model_key),
+            (p for p in litellm_purposes if resolve_purpose_to_model_key(purposes, available, p) == model_key),
             'default',
         )
 
@@ -401,15 +432,169 @@ COMPOSE_FILES = COMPOSE_FILES_STR.split()
 
 def get_docker_compose_base_cmd(busibox_host_path: str) -> list:
     """Build the base docker compose command with compose files.
-    
-    Environment variables are passed through from the deploy-api container environment.
+
+    Passes --env-file so docker-compose picks up HOST_PORT overrides written
+    by the TUI installer (e.g. LITELLM_HOST_PORT=4001 when port 4000 was busy).
     """
-    return [
-        'docker', 'compose',
-        '-p', COMPOSE_PROJECT_NAME,
+    prefix = os.getenv('CONTAINER_PREFIX', 'dev')
+    env_file = os.path.join(busibox_host_path, f'.env.{prefix}')
+    cmd = ['docker', 'compose', '-p', COMPOSE_PROJECT_NAME]
+    if os.path.exists(env_file):
+        cmd += ['--env-file', env_file]
+    cmd += [
         '-f', f'{busibox_host_path}/docker-compose.yml',
-        '-f', f'{busibox_host_path}/docker-compose.local-dev.yml'
+        '-f', f'{busibox_host_path}/docker-compose.local-dev.yml',
     ]
+    return cmd
+
+
+def _get_active_profile() -> dict:
+    """Read the active busibox profile from .busibox/profiles.json in the repo."""
+    busibox_path = os.getenv('BUSIBOX_HOST_PATH', '/busibox')
+    profiles_file = os.path.join(busibox_path, '.busibox', 'profiles.json')
+    try:
+        with open(profiles_file) as f:
+            data = json.load(f)
+        active = data.get('active', '')
+        return data.get('profiles', {}).get(active, {})
+    except Exception:
+        return {}
+
+
+# Maps docker service name → (default_host_port, compose_env_var_name)
+_SERVICE_PORT_MAP: dict[str, tuple[int, str]] = {
+    'litellm':       (4000,  'LITELLM_HOST_PORT'),
+    'redis':         (6379,  'REDIS_HOST_PORT'),
+    'minio':         (9000,  'MINIO_HOST_PORT'),
+    'milvus':        (19530, 'MILVUS_HOST_PORT'),
+    'neo4j':         (7474,  'NEO4J_HOST_PORT'),
+    'embedding-api': (8005,  'EMBEDDING_HOST_PORT'),
+    'data-api':      (8002,  'DATA_HOST_PORT'),
+    'search-api':    (8003,  'SEARCH_HOST_PORT'),
+    'agent-api':     (8000,  'AGENT_HOST_PORT'),
+    'docs-api':      (8004,  'DOCS_HOST_PORT'),
+    'bridge-api':    (8081,  'BRIDGE_HOST_PORT'),
+    'postgres':      (5432,  'POSTGRES_HOST_PORT'),
+    'authz-api':     (8010,  'AUTHZ_HOST_PORT'),
+    'vllm':          (8080,  'VLLM_HOST_PORT'),
+}
+
+
+def _is_host_port_in_use(port: int) -> bool:
+    """Check if a port is in use on the Docker host (from inside the container).
+
+    Uses host.docker.internal so the check is against the HOST network namespace,
+    not the container's. Returns True if something is listening on that port.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            return s.connect_ex(('host.docker.internal', port)) == 0
+    except Exception:
+        return False
+
+
+def _find_free_host_port(start: int, count: int = 50) -> int:
+    """Return the first free host port at or after start."""
+    for port in range(start, start + count):
+        if not _is_host_port_in_use(port):
+            return port
+    return start  # unlikely fallback
+
+
+def _is_container_running(service: str) -> bool:
+    """Return True if the docker container for this service is currently running."""
+    prefix = os.getenv('CONTAINER_PREFIX', 'dev')
+    container = f"{prefix}-{service}"
+    try:
+        result = subprocess.run(
+            ['docker', 'inspect', '--format', '{{.State.Status}}', container],
+            capture_output=True, text=True, timeout=3,
+        )
+        return result.returncode == 0 and result.stdout.strip() == 'running'
+    except Exception:
+        return False
+
+
+def _write_env_var_to_file(env_var: str, value: str, busibox_path: str, prefix: str) -> None:
+    """Upsert a KEY=VALUE line in .env.{prefix}."""
+    env_file = os.path.join(busibox_path, f'.env.{prefix}')
+    try:
+        lines: list[str] = []
+        found = False
+        if os.path.exists(env_file):
+            with open(env_file) as f:
+                for line in f:
+                    if line.startswith(f'{env_var}='):
+                        lines.append(f'{env_var}={value}\n')
+                        found = True
+                    else:
+                        lines.append(line)
+        if not found:
+            lines.append(f'{env_var}={value}\n')
+        with open(env_file, 'w') as f:
+            f.writelines(lines)
+    except Exception as e:
+        logger.warning(f"Could not update env file {env_file}: {e}")
+
+
+def _save_port_override_to_profile(service: str, port: int, busibox_path: str) -> None:
+    """Persist a port override to the active profile in .busibox/profiles.json."""
+    profiles_file = os.path.join(busibox_path, '.busibox', 'profiles.json')
+    try:
+        with open(profiles_file) as f:
+            data = json.load(f)
+        active = data.get('active', '')
+        if active and active in data.get('profiles', {}):
+            profile = data['profiles'][active]
+            profile.setdefault('port_overrides', {})[service] = port
+            with open(profiles_file, 'w') as f:
+                json.dump(data, f, indent=4)
+    except Exception as e:
+        logger.warning(f"Could not save port override to profile: {e}")
+
+
+def _apply_port_overrides(service: str, env: dict) -> dict:
+    """Check for port conflicts on the host and add HOST_PORT override env vars.
+
+    Checks the active profile for a previously saved override first, then falls
+    back to live detection via host.docker.internal. Saves any newly discovered
+    override to the profile and .env file for future restarts.
+    """
+    entry = _SERVICE_PORT_MAP.get(service)
+    if not entry:
+        return env
+
+    default_port, env_var = entry
+    busibox_path = os.getenv('BUSIBOX_HOST_PATH', '/busibox')
+    prefix = os.getenv('CONTAINER_PREFIX', 'dev')
+
+    # 1. If already set in env (e.g. from --env-file), honour it as-is.
+    if env.get(env_var):
+        return env
+
+    # 2. Check the active profile for a previously saved override.
+    profile = _get_active_profile()
+    saved_override = profile.get('port_overrides', {}).get(service)
+    if saved_override:
+        logger.info(f"[port] Using saved override {service}:{saved_override} from profile")
+        env[env_var] = str(saved_override)
+        return env
+
+    # 3. Live detection: port is free if the container is currently running
+    #    (Docker already holds it and will release/re-acquire during recreate).
+    if _is_container_running(service):
+        return env
+
+    # 4. Check if the default port is in use on the host by a non-Docker process.
+    if _is_host_port_in_use(default_port):
+        alt_port = _find_free_host_port(default_port + 1)
+        logger.info(f"[port] Conflict on {default_port} for {service}, using {alt_port}")
+        env[env_var] = str(alt_port)
+        _write_env_var_to_file(env_var, str(alt_port), busibox_path, prefix)
+        _save_port_override_to_profile(service, alt_port, busibox_path)
+
+    return env
 
 
 def _required_env_for_service(service: str) -> list[str]:
@@ -639,8 +824,9 @@ async def start_service(
             up_args.extend(services_to_start)
             cmd.extend(up_args)
             logger.info(f"Running command: {' '.join(cmd)}")
-            
+
             env = os.environ.copy()
+            env = _apply_port_overrides(service, env)
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -1098,12 +1284,16 @@ async def get_platform_info_endpoint(
     token_payload: dict = Depends(verify_admin_token)
 ):
     """
-    Get platform information (backend, tier, memory).
-    
-    Used by Busibox Portal to determine which LLM runtime to use (MLX vs vLLM).
+    Get platform information (backend, tier, memory, service_preset, port_overrides).
+
+    Used by Busibox Portal to determine which LLM runtime to use and which
+    services to install based on the active profile's preset.
     """
     try:
         platform_info = get_platform_info()
+        profile = _get_active_profile()
+        platform_info['service_preset'] = profile.get('service_preset', 'standard')
+        platform_info['port_overrides'] = profile.get('port_overrides', {})
         return platform_info
     except Exception as e:
         logger.error(f"Error getting platform info: {e}")
@@ -1426,6 +1616,7 @@ async def start_service_sse(
                 # Start docker compose with real-time output
                 # Pass environment variables so docker compose can validate all services
                 env = os.environ.copy()
+                env = _apply_port_overrides(service, env)
                 
                 # Build docker compose command
                 # Get host path - busibox is mounted at this same path inside the container
@@ -3921,9 +4112,134 @@ class ModelLoadRequest(BaseModel):
     port: int
 
 
+async def _get_registry() -> dict:
+    """Get model registry, falling back to SSH from Proxmox host if needed.
+
+    Use this in all async endpoints instead of calling load_registry_with_overrides()
+    directly, so that Proxmox deployments (where BUSIBOX_HOST_PATH refers to a
+    path on the host, not inside the LXC) can still access the registry.
+    """
+    registry = load_registry_with_overrides()
+    if not registry.get("available_models"):
+        registry = await _load_registry_via_proxmox_ssh()
+    return registry
+
+
+async def _load_registry_via_proxmox_ssh() -> dict:
+    """Read model_registry.yml (and overrides) from the Proxmox host via SSH.
+
+    On Proxmox deployments, deploy-api runs inside an LXC container, so
+    BUSIBOX_HOST_PATH points to a path that exists on the Proxmox *host* —
+    not inside the LXC filesystem. This helper fetches the files remotely
+    using the same SSH key that deploy-api uses for make-install commands.
+    """
+    proxmox_host = os.getenv("PROXMOX_HOST", "").strip()
+    if not proxmox_host:
+        return {}
+
+    async def _cat_remote(remote_path: str) -> dict:
+        code, out, _err = await ssh_exec_raw(proxmox_host, f"cat {remote_path}", timeout=10)
+        if code != 0 or not out.strip():
+            return {}
+        try:
+            data = yaml.safe_load(out) or {}
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    registry_path = str(model_registry_path())
+    overrides_path = str(model_overrides_path())
+
+    base, overrides = await asyncio.gather(
+        _cat_remote(registry_path),
+        _cat_remote(overrides_path),
+    )
+
+    if not base:
+        return {}
+    if not overrides:
+        return base
+
+    merged = dict(base)
+    base_models = dict(base.get("available_models", {}) or {})
+    override_models = dict(overrides.get("available_models", {}) or {})
+    base_models.update(override_models)
+    merged["available_models"] = base_models
+
+    base_purposes = dict(base.get("model_purposes", {}) or {})
+    override_purposes = dict(overrides.get("model_purposes", {}) or {})
+    base_purposes.update(override_purposes)
+    merged["model_purposes"] = base_purposes
+    return merged
+
+
+# ---------------------------------------------------------------------------
+# model_config.yml — SSH-aware read/write for Proxmox deployments
+# ---------------------------------------------------------------------------
+# On Proxmox, model_config.yml lives on the HOST at BUSIBOX_HOST_PATH.
+# deploy-api runs inside an LXC container, so local reads return empty.
+# We read/write the file via SSH to PROXMOX_HOST (already authorised).
+
+async def _load_config_via_proxmox_ssh() -> dict:
+    """Read model_config.yml from the Proxmox host via SSH."""
+    proxmox_host = os.getenv("PROXMOX_HOST", "").strip()
+    if not proxmox_host:
+        return {"models": {}}
+    remote_path = str(model_config_path())
+    code, out, _err = await ssh_exec_raw(proxmox_host, f"cat {remote_path}", timeout=10)
+    if code != 0 or not out.strip():
+        return {"models": {}}
+    try:
+        data = yaml.safe_load(out) or {}
+        if not isinstance(data, dict):
+            data = {}
+        if "models" not in data:
+            data["models"] = {}
+        return data
+    except Exception:
+        return {"models": {}}
+
+
+async def _save_config_via_proxmox_ssh(data: dict) -> bool:
+    """Write model_config.yml to the Proxmox host via SSH (base64-encoded to avoid shell quoting issues)."""
+    import base64 as _b64
+    proxmox_host = os.getenv("PROXMOX_HOST", "").strip()
+    if not proxmox_host:
+        return False
+    yaml_str = yaml.safe_dump(data, sort_keys=False)
+    b64 = _b64.b64encode(yaml_str.encode()).decode()
+    remote_path = str(model_config_path())
+    remote_dir = str(pathlib.Path(remote_path).parent)
+    cmd = f"mkdir -p {remote_dir} && printf '%s' '{b64}' | base64 -d > {remote_path}"
+    code, _out, _err = await ssh_exec_raw(proxmox_host, cmd, timeout=15)
+    return code == 0
+
+
+async def _get_model_config_async() -> dict:
+    """Get model config, falling back to SSH from Proxmox host if needed."""
+    config_data = load_model_config()
+    if not config_data.get("models"):
+        config_data = await _load_config_via_proxmox_ssh()
+    return config_data
+
+
+async def _save_model_config_async(data: dict) -> None:
+    """Save model config locally and/or to Proxmox host via SSH."""
+    saved_local = False
+    try:
+        save_model_config(data)
+        saved_local = True
+    except Exception:
+        pass
+    saved_remote = await _save_config_via_proxmox_ssh(data)
+    if not saved_local and not saved_remote:
+        raise HTTPException(status_code=500, detail="Failed to save model_config.yml — local write failed and PROXMOX_HOST SSH write failed")
+
+
 @router.get("/models/browse")
 async def models_browse(_: dict = Depends(verify_admin_token)):
-    registry = load_registry_with_overrides()
+    registry = await _get_registry()
+
     available = registry.get("available_models", {}) or {}
     cached = set(await list_cached_models())
     rows = []
@@ -3940,6 +4256,30 @@ async def models_browse(_: dict = Depends(verify_admin_token)):
             }
         )
     rows.sort(key=lambda x: (0 if x["cached"] else 1, x["model_key"]))
+
+    # Last-resort fallback: synthesise entries from currently-running vLLM
+    # processes so the Model Library is never completely blank.
+    if not rows and vllm_host():
+        active = await list_active_models(vllm_host())
+        seen: set = set()
+        for m in active:
+            model_name = m.get("model") or ""
+            if not (m.get("running") and model_name):
+                continue
+            if model_name in seen:
+                continue
+            seen.add(model_name)
+            slug = model_name.split("/")[-1].lower()
+            rows.append(
+                {
+                    "model_key": slug,
+                    "model_name": model_name,
+                    "provider": "vllm",
+                    "description": f"Detected running on port {m.get('port')} (not in registry)",
+                    "cached": True,
+                }
+            )
+
     return {"models": rows}
 
 
@@ -3950,7 +4290,7 @@ async def models_active(_: dict = Depends(verify_admin_token)):
 
 @router.post("/models/analyze")
 async def models_analyze(_: dict = Depends(verify_admin_token)):
-    registry = load_registry_with_overrides()
+    registry = await _get_registry()
     gpus = await detect_vllm_gpus()
     cached = await list_cached_models()
     current = load_model_config()
@@ -3971,15 +4311,15 @@ async def vllm_gpus(_: dict = Depends(verify_admin_token)):
 
 @router.get("/vllm/assignments")
 async def vllm_assignments(_: dict = Depends(verify_admin_token)):
-    config_data = load_model_config()
-    return {"assignments": get_assignments(config_data), "model_config_path": str(config.busibox_host_path) + "/provision/ansible/group_vars/all/model_config.yml"}
+    config_data = await _get_model_config_async()
+    return {"assignments": get_assignments(config_data), "model_config_path": str(model_config_path())}
 
 
 @router.post("/vllm/assignments")
 async def vllm_assign_model(req: VllmAssignmentRequest, _: dict = Depends(verify_admin_token)):
     try:
-        registry = load_registry_with_overrides()
-        config_data = load_model_config()
+        registry = await _get_registry()
+        config_data = await _get_model_config_async()
         updated = update_assignment(
             config_data,
             registry,
@@ -3988,7 +4328,7 @@ async def vllm_assign_model(req: VllmAssignmentRequest, _: dict = Depends(verify
             req.port,
             req.tensor_parallel,
         )
-        save_model_config(updated)
+        await _save_model_config_async(updated)
         return {"success": True, "assignments": get_assignments(updated)}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -3997,10 +4337,10 @@ async def vllm_assign_model(req: VllmAssignmentRequest, _: dict = Depends(verify
 @router.delete("/vllm/assignments/{model_key}")
 async def vllm_unassign_model(model_key: str, _: dict = Depends(verify_admin_token)):
     try:
-        registry = load_registry_with_overrides()
-        config_data = load_model_config()
+        registry = await _get_registry()
+        config_data = await _get_model_config_async()
         updated = unassign_model(config_data, registry, model_key)
-        save_model_config(updated)
+        await _save_model_config_async(updated)
         return {"success": True, "assignments": get_assignments(updated)}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -4008,11 +4348,11 @@ async def vllm_unassign_model(model_key: str, _: dict = Depends(verify_admin_tok
 
 @router.post("/vllm/assignments/auto")
 async def vllm_auto_assign(_: dict = Depends(verify_admin_token)):
-    registry = load_registry_with_overrides()
+    registry = await _get_registry()
     gpus = await detect_vllm_gpus()
-    config_data = load_model_config()
+    config_data = await _get_model_config_async()
     updated = auto_assign_models(registry, len(gpus), existing=config_data)
-    save_model_config(updated)
+    await _save_model_config_async(updated)
     return {"success": True, "gpu_count": len(gpus), "assignments": get_assignments(updated)}
 
 

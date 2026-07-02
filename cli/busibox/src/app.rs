@@ -11,6 +11,7 @@ use std::sync::mpsc;
 #[allow(dead_code)]
 pub enum Screen {
     Welcome,
+    InstallWizard,
     SetupMode,
     SshSetup,
     TailscaleSetup,
@@ -27,12 +28,63 @@ pub enum Screen {
     K8sSetup,
     K8sManage,
     ValidateSecrets,
+    RunTests,
+    ModelBrowse,
+    Utilities,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SetupTarget {
     Local,
     Remote,
+}
+
+/// Steps within the install wizard (first-run flow).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum WizardStep {
+    #[default]
+    Target,        // Step 1: local / remote / import
+    DockerRuntime, // Step 1b: pick Docker Desktop vs Colima (only when both detected)
+    Preset,        // Step 2: lite / lite+local-llm / full
+    #[allow(dead_code)]
+    LlmBackend,    // Step 2b: pick local LLM backend (conditional, unused in flow)
+    ModelSelect,   // Step 3: browse HuggingFace for an initial model (optional)
+    Confirm,       // Step 4: review + create profile
+}
+
+/// Steps within the HuggingFace model browser.
+/// Order: Token → Family → Models (all engines shown per row) → Engine (filtered) → Confirm
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum BrowseStep {
+    #[default]
+    Token,    // Step 1: enter/confirm HF token
+    Family,   // Step 2: pick model family (qwen, deepseek, gemma, etc.)
+    Models,   // Step 3: pick base model (grouped by param size, no quant detail)
+    Quant,    // Step 4: pick quantization for the selected base model
+    Engine,   // Step 5: pick engine (filtered to those the selected model supports)
+    Confirm,  // Step 6: confirm and trigger download
+}
+
+/// A model entry shown in the browse screen. Can come from the curated catalog
+/// or from a live HF API query.
+#[derive(Debug, Clone)]
+pub struct BrowsableModel {
+    pub hf_repo: String,
+    pub display_name: String,
+    pub param_billions: f32,
+    pub quantization: String,
+    pub size_gb: f32,
+    pub description: String,
+    pub gated: bool,
+    /// True if this entry came from the curated catalog (verified working).
+    pub curated: bool,
+    /// Approximate HF download count (0 when unknown).
+    #[allow(dead_code)]
+    pub downloads: u64,
+    /// Inference engines this variant is compatible with (e.g. ["mlx"], ["gguf"], ["mlx","gguf"]).
+    pub engines: Vec<String>,
+    /// Unix timestamp of last HF modification (0 for curated entries).
+    pub last_modified: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -260,11 +312,16 @@ pub struct App {
     // Validate secrets screen state
     pub validate_secrets_results: Vec<crate::modules::remote::SecretKeyStatus>,
     pub validate_secrets_scroll: usize,
+    pub validate_secrets_selected: usize,
     pub validate_secrets_loading: bool,
     pub validate_secrets_rx: Option<mpsc::Receiver<ValidateSecretsUpdate>>,
     pub validate_secrets_vault_file: String,
     pub validate_secrets_is_remote: bool,
     pub validate_secrets_error: Option<String>,
+    /// Decrypted plaintext values keyed by key_path (e.g. "postgresql.password").
+    pub validate_secrets_values: std::collections::HashMap<String, String>,
+    /// Key path whose value is currently shown in the "View Secret" popup.
+    pub validate_secrets_show_secret: Option<String>,
 
     // Profile state
     pub profiles: Option<ProfilesFile>,
@@ -275,6 +332,38 @@ pub struct App {
 
     // Profile delete confirmation
     pub profile_delete_confirming: bool,
+
+    // Install wizard state (first-run)
+    pub wizard_step: WizardStep,
+    pub wizard_target_selected: usize,    // 0=Local, 1=Remote, 2=Import
+    pub wizard_preset_selected: usize,    // 0=Lite, 1=Lite+LocalLLM, 2=Full
+    pub wizard_backend_selected: usize,   // index into available local LLM backends
+    pub wizard_available_backends: Vec<String>, // backend ids available for this hardware
+    pub wizard_label_input: String,       // profile label
+    pub wizard_docker_selected: usize,    // index into wizard_available_runtimes
+    pub wizard_available_runtimes: Vec<String>, // detected docker runtimes ("docker-desktop","colima")
+
+    // HF model browser state
+    pub browse_step: BrowseStep,
+    pub browse_family_selected: usize,
+    pub browse_engine_selected: usize,
+    pub browse_model_scroll: usize,
+    pub browse_model_selected: usize,
+    pub browse_models: Vec<BrowsableModel>,
+    /// The base model name selected in the Models step (e.g. "Qwen3.5 4B").
+    pub browse_base_model_name: String,
+    /// Scroll offset for the Quant step list.
+    pub browse_quant_scroll: usize,
+    /// Selected index within the filtered quant list.
+    pub browse_quant_selected: usize,
+    pub browse_hf_token_input: String,
+    pub browse_loading: bool,
+    /// When true, completing/escaping the browse screen returns to InstallWizard::Confirm.
+    pub browse_return_to_wizard: bool,
+    /// When true, the engine was pre-selected externally (wizard); skip the Engine step.
+    pub browse_engine_locked: bool,
+    /// Receiver for background HF API results.
+    pub browse_rx: Option<std::sync::mpsc::Receiver<crate::screens::model_browse::BrowseUpdate>>,
 
     // Profile edit state
     pub profile_edit_field: usize,
@@ -347,6 +436,37 @@ pub struct App {
     // Install submenu / contextual action state
     pub deployment_state: DeploymentState,
     pub action_menu_selected: usize,
+
+    // Run Tests screen state
+    pub test_service_selected: usize,
+    pub test_suite_selected: usize,
+    pub test_focus_suite: bool,
+    pub test_custom_args: String,
+    pub test_custom_input_active: bool,
+    pub test_log: Vec<String>,
+    pub test_log_visible: bool,
+    pub test_log_scroll: usize,
+    pub test_log_autoscroll: bool,
+    pub test_action_running: bool,
+    pub test_action_complete: bool,
+    pub test_tick: usize,
+    pub test_rx: Option<mpsc::Receiver<TestUpdate>>,
+    /// Last run config (for resume / restart from log viewer).
+    pub test_last_service_selected: usize,
+    pub test_last_suite_selected: usize,
+    pub test_last_custom_args: String,
+    /// True after a failed run; enables `r` to continue with pytest --stepwise.
+    pub test_can_resume: bool,
+
+    // Utilities screen state
+    pub utilities_selected: usize,
+    pub utilities_log: Vec<String>,
+    pub utilities_log_visible: bool,
+    pub utilities_action_running: bool,
+    pub utilities_action_success: bool,
+    pub utilities_tick: usize,
+    pub utilities_rx: Option<mpsc::Receiver<UtilitiesUpdate>>,
+    pub agents_mode_is_local: bool,
 
     // Admin login screen state
     pub admin_login_magic_link: Option<String>,
@@ -532,6 +652,18 @@ pub enum ManageUpdate {
     },
 }
 
+#[derive(Debug)]
+pub enum TestUpdate {
+    Log(String),
+    Complete { success: bool },
+}
+
+#[derive(Debug)]
+pub enum UtilitiesUpdate {
+    Log(String),
+    Complete { success: bool },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModelsFocus {
     Tiers,
@@ -617,6 +749,7 @@ pub enum K8sManageUpdate {
 pub enum ValidateSecretsUpdate {
     Results {
         keys: Vec<crate::modules::remote::SecretKeyStatus>,
+        values: std::collections::HashMap<String, String>,
         local_error: Option<String>,
         remote_error: Option<String>,
     },
@@ -693,6 +826,9 @@ pub struct ServiceStatus {
     pub source_repo: String,
     /// Secrets sync status: "checking...", "synced", "mismatch: VAR1, VAR2", "down", "error", or "—" (no secrets).
     pub secrets_status: String,
+    /// Accessible endpoint for this service, e.g. "localhost:4000" or "10.0.0.1:8010".
+    /// None for services without a host-side port (docker exec checks, etc.).
+    pub endpoint: Option<String>,
 }
 
 impl App {
@@ -856,15 +992,40 @@ impl App {
             k8s_cluster_rx: None,
             validate_secrets_results: Vec::new(),
             validate_secrets_scroll: 0,
+            validate_secrets_selected: 0,
             validate_secrets_loading: false,
             validate_secrets_rx: None,
             validate_secrets_vault_file: String::new(),
             validate_secrets_is_remote: false,
             validate_secrets_error: None,
+            validate_secrets_values: std::collections::HashMap::new(),
+            validate_secrets_show_secret: None,
             profiles: None,
             profile_selected: 0,
             profile_lock: None,
             profile_delete_confirming: false,
+            wizard_step: WizardStep::Target,
+            wizard_target_selected: 0,
+            wizard_preset_selected: 0,
+            wizard_backend_selected: 0,
+            wizard_available_backends: Vec::new(),
+            wizard_label_input: String::new(),
+            wizard_docker_selected: 0,
+            wizard_available_runtimes: Vec::new(),
+            browse_step: BrowseStep::Token,
+            browse_family_selected: 0,
+            browse_engine_selected: 0,
+            browse_model_scroll: 0,
+            browse_model_selected: 0,
+            browse_models: Vec::new(),
+            browse_base_model_name: String::new(),
+            browse_quant_scroll: 0,
+            browse_quant_selected: 0,
+            browse_hf_token_input: String::new(),
+            browse_loading: false,
+            browse_return_to_wizard: false,
+            browse_engine_locked: false,
+            browse_rx: None,
             profile_edit_field: 0,
             profile_edit_buffer: String::new(),
             profile_editing: false,
@@ -913,6 +1074,31 @@ impl App {
             ssh_tunnel_process: None,
             ssh_tunnel_active: false,
             ssh_tunnel_child: None,
+            test_service_selected: 0,
+            test_suite_selected: 0,
+            test_focus_suite: false,
+            test_custom_args: String::new(),
+            test_custom_input_active: false,
+            test_log: Vec::new(),
+            test_log_visible: false,
+            test_log_scroll: 0,
+            test_log_autoscroll: true,
+            test_action_running: false,
+            test_action_complete: false,
+            test_tick: 0,
+            test_rx: None,
+            test_last_service_selected: 0,
+            test_last_suite_selected: 0,
+            test_last_custom_args: String::new(),
+            test_can_resume: false,
+            utilities_selected: 0,
+            utilities_log: Vec::new(),
+            utilities_log_visible: false,
+            utilities_action_running: false,
+            utilities_action_success: false,
+            utilities_tick: 0,
+            utilities_rx: None,
+            agents_mode_is_local: false,
         }
     }
 
@@ -1053,7 +1239,7 @@ impl App {
             };
         }
 
-        let mut actions = match &self.deployment_state {
+        let actions = match &self.deployment_state {
             DeploymentState::Unknown | DeploymentState::Checking => {
                 vec![]
             }
@@ -1061,27 +1247,15 @@ impl App {
                 vec!["Install"]
             }
             DeploymentState::Partial(_) => {
-                vec!["Continue Install", "Manage Services", "Clean Install"]
+                vec!["Continue Install", "Manage Services", "Utilities"]
             }
             DeploymentState::BootstrapComplete => {
-                vec!["Continue Install (Web)", "Admin Login", "Manage Services", "Clean Install"]
+                vec!["Continue Install (Web)", "Admin Login", "Manage Services", "Utilities"]
             }
             DeploymentState::Complete => {
-                vec!["Admin Login", "Manage Services", "Benchmark Models", "Clean Install"]
+                vec!["Admin Login", "Manage Services", "Utilities"]
             }
         };
-
-        if self.vault_password.is_some() && !actions.is_empty() {
-            actions.push("Validate Secrets");
-        }
-
-        if !actions.is_empty() && crate::modules::mkcert::is_installed() {
-            if let Some((_, p)) = self.active_profile() {
-                if p.remote {
-                    actions.push("Generate TLS Certs");
-                }
-            }
-        }
 
         actions
     }

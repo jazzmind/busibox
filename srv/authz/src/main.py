@@ -1,10 +1,17 @@
+import logging
 import uvicorn
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 
-from routes import admin, oauth, keystore, users, auth, audit, bindings, roles, analytics
+from routes import admin, oauth, keystore, users, auth, audit, bindings, roles, analytics, integrations
 from services.postgres import PostgresService
 from config import Config
+
+# Ensure app-level INFO logs reach the configured handlers. Without this the
+# root logger stays at WARNING and DEV_MODE diagnostic output (magic-link URLs,
+# TOTP codes) is silently dropped, even though uvicorn's access log appears
+# because uvicorn configures its own loggers separately.
+logging.getLogger().setLevel(logging.INFO)
 
 # Import shared test mode utilities
 try:
@@ -65,6 +72,7 @@ async def lifespan(app: FastAPI):
     bindings.set_pg_service(pg, pg_test)
     roles.set_pg_service(pg, pg_test)
     analytics.set_pg_service(pg, pg_test)
+    integrations.set_pg_service(pg, pg_test)
     
     # Run bootstrap for production (creates signing keys and core RBAC bootstrap)
     from routes.oauth import _ensure_bootstrap
@@ -103,6 +111,7 @@ app.include_router(audit.router)
 app.include_router(bindings.router)
 app.include_router(roles.router)
 app.include_router(analytics.router)
+app.include_router(integrations.router)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ published: true
 
 # Config API Reference
 
-> **Updated**: 2026-03-10
+> **Updated**: 2026-05-11
 > **Status**: Active
 > **Category**: Reference
 
@@ -30,6 +30,26 @@ Every config entry has a `tier` that controls who can read it:
 | `authenticated` | Any valid JWT | App registry, non-secret app settings |
 | `app` | JWT + app role binding | App-specific secrets (API keys, etc.) |
 | `admin` | Admin JWT | Platform secrets, full CRUD |
+
+## Sensitive Categories and Source Gating
+
+Certain config categories are classified as **sensitive** and require an additional OAuth2 scope beyond the Admin role:
+
+| Category | Contains | Required scope |
+|---|---|---|
+| `llm-keys` | Cloud provider credentials (Bedrock, OpenAI, Anthropic) | `config.secrets.read` |
+
+The `config.secrets.read` scope is **never** issued to a user directly. It is injected automatically by authz **only** when all of the following are true:
+
+1. The caller is performing an OAuth2 token exchange targeting `config-api`
+2. The subject token presented was issued to `agent-api` (i.e., `aud == "agent-api"`)
+3. The user has the `Admin` role
+
+This means:
+- A logged-in admin user **cannot** directly call `/admin/config/{key}/raw` for LLM keys — their token will be rejected with `403`
+- The agent-api **can** read LLM keys by exchanging its user token chain for a config-api token — because the subject token it presents has `aud=agent-api`
+
+This pattern ensures that raw LLM credentials are never accessible outside the agent-api execution path.
 
 ## Database Schema
 
@@ -99,10 +119,10 @@ GET /config/app/{app_id}/{key}/raw  Raw (decrypted) value — use at runtime for
 ```
 GET    /admin/config                 List all config entries (filterable by category, scope, app_id)
 GET    /admin/config/categories      List categories with key counts
-GET    /admin/config/export          Export all config (including decrypted secrets)
+GET    /admin/config/export          Export all config; sensitive categories redacted unless config.secrets.read scope present
 POST   /admin/config/bulk            Bulk create/update entries
 GET    /admin/config/{key}           Get single config (masked)
-GET    /admin/config/{key}/raw       Get raw (decrypted) value
+GET    /admin/config/{key}/raw       Get raw (decrypted) value — requires config.secrets.read for sensitive categories
 PUT    /admin/config/{key}           Create or update a config entry
 DELETE /admin/config/{key}           Delete a config entry
 
@@ -115,6 +135,8 @@ GET    /admin/apps/{app_id}          Get app details
 PUT    /admin/apps/{app_id}          Update an app
 DELETE /admin/apps/{app_id}          Delete an app
 ```
+
+> **Sensitive category access**: Endpoints that return raw values for `llm-keys` entries enforce the `config.secrets.read` scope. Admin tokens obtained directly via session token exchange do **not** carry this scope. Only agent-api's token exchange chain injects it. This prevents direct admin API access to raw LLM credentials.
 
 ## Token Exchange
 

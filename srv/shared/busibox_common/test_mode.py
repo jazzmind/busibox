@@ -118,6 +118,26 @@ class HasHeaders(Protocol):
     def headers(self) -> Any: ...
 
 
+def authz_test_mode_enabled() -> bool:
+    """True when authz test mode is enabled (integration/PVT runs)."""
+    return os.getenv("AUTHZ_TEST_MODE_ENABLED", "").lower() == "true"
+
+
+def authz_request_headers(extra: Optional[dict] = None) -> dict:
+    """
+    Headers for outbound calls to authz during integration tests.
+
+    When AUTHZ_TEST_MODE_ENABLED=true, include X-Test-Mode so token exchange
+    and user lookups use the isolated test_authz database (same as AuthTestClient).
+    """
+    headers: dict = {}
+    if authz_test_mode_enabled():
+        headers[TEST_MODE_HEADER] = "true"
+    if extra:
+        headers.update(extra)
+    return headers
+
+
 def is_test_mode_request(request: HasHeaders, config: TestModeConfig) -> bool:
     """
     Check if a request should use test mode.

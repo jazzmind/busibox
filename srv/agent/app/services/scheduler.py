@@ -521,17 +521,24 @@ class TaskSchedulerService:
                     )
                     
                     try:
-                        # Create a principal for the task owner using the delegation token
+                        # Create a principal for the task owner using the delegation token.
+                        # Restore app_id so exchange_token passes resource_id to authz,
+                        # which auto-grants the app:<name> role in the downstream token.
+                        task_app_id = (task.input_config or {}).get("__app_id__")
                         principal = Principal(
                             sub=task.user_id,
                             scopes=task.delegation_scopes or [],
                             token=task.delegation_token,  # Use stored delegation token
+                            app_id=task_app_id,
                         )
                         
                         # Build the payload from task configuration
                         payload = {
                             "prompt": task.prompt,
                             **(task.input_config or {}),
+                            "_task_id": str(task.id),
+                            "_execution_id": str(execution.id),
+                            "_continuation_depth": 0,  # initial cron run; incremented by trigger_task_run
                         }
                         
                         # For workflows, also include 'query' mapped from 'prompt' for compatibility

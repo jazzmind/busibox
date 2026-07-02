@@ -301,9 +301,23 @@ generate_config_from_registry() {
 model_list:
 EOF
 
-    # Define purposes to include (order matters for readability)
-    # Must stay in sync with CONFIGURABLE_PURPOSES in srv/agent/app/api/llm.py
-    local purposes=("default" "test" "fast" "classify" "cleanup" "parsing" "vision" "agent" "chat" "research" "frontier" "fallback" "tool_calling" "video" "image" "transcribe" "voice")
+    # Purposes to include, derived from the registry itself (default_purposes'
+    # keys, in file order) rather than a hand-maintained list — this is the
+    # single source of truth also used by CONFIGURABLE_PURPOSES in
+    # srv/agent/app/api/llm.py, so new purposes added to the registry (e.g.
+    # code-*) show up here automatically. 'embedding' is excluded because it's
+    # served by a dedicated FastEmbed service, not LiteLLM (matches
+    # provision/ansible/roles/litellm/files/generate_model_config.py).
+    local purposes
+    purposes=($(python3 -c "
+import yaml
+with open('$MODEL_REGISTRY') as f:
+    data = yaml.safe_load(f)
+excluded = {'embedding'}
+for p in (data.get('default_purposes', {}) or {}).keys():
+    if p not in excluded:
+        print(p)
+"))
     local unique_model_keys=""
     
     for purpose in "${purposes[@]}"; do

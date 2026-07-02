@@ -110,7 +110,28 @@ Busibox is single-tenant and multi-user — each installation serves one organiz
 
 ## Quick Start — Docker + a cloud API key (recommended for first run)
 
-The fastest way to evaluate Busibox is to run the whole stack locally on Docker and bring your own LLM API key. **No GPU and no local model downloads are required for a first run.** Local inference (vLLM / Ollama / MLX) is an optional add-on — see ["Optional: local inference"](#optional-local-inference) below.
+The fastest way to evaluate Busibox is to run **Busibox Lite** — the public
+default profile. Lite is a Docker-local install that uses a cloud LLM key
+(OpenAI / Anthropic / Bedrock) and excludes heavyweight services (no vLLM /
+MLX / Milvus / Neo4j by default). Local inference, local RAG, graph, and
+fleet support are opt-in via add-on packs.
+
+```bash
+busibox profile list           # see lite / standard / full + add-on packs
+busibox profile show lite      # resolved service list for Lite
+busibox up --profile lite      # print the deploy plan (does not deploy yet)
+busibox doctor                 # quick environment check
+```
+
+The Rust `busibox` binary is **one executable that behaves as either a CLI
+or a TUI**: a subcommand (e.g. `busibox up --profile lite`) stays in CLI
+mode and is safe to script; running plain `busibox` inside an interactive
+terminal launches the full text UI; running it under a pipe / CI prints
+help instead of hanging.
+
+**No GPU and no local model downloads are required for a first run.** Local
+inference (vLLM / Ollama / MLX) is an optional add-on — see ["Optional:
+local inference"](#optional-local-inference) below.
 
 **Prerequisites:** Docker + Docker Compose, ~16 GB free disk for images, and one of: an OpenAI key, an Anthropic key, or AWS Bedrock credentials.
 

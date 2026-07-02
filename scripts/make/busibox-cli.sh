@@ -7,8 +7,9 @@
 #          and automatic Rust installation if needed.
 #
 # USAGE:
-#   bash scripts/make/busibox-cli.sh          # Build (if needed) and run
-#   bash scripts/make/busibox-cli.sh build    # Build only
+#   bash scripts/make/busibox-cli.sh               # Build (if needed) and run
+#   bash scripts/make/busibox-cli.sh build         # Build only
+#   bash scripts/make/busibox-cli.sh install       # Build and install to system PATH
 #
 set -euo pipefail
 
@@ -108,9 +109,48 @@ build_cli() {
     return 0
 }
 
+# Install the CLI binary to the system PATH
+install_cli() {
+    build_cli || return 1
+    if [[ ! -f "$BINARY" ]]; then
+        error "No binary found at ${BINARY} after build."
+        return 1
+    fi
+
+    local dest="/usr/local/bin/busibox"
+    if [[ -w "/usr/local/bin" ]]; then
+        cp "$BINARY" "$dest"
+        success "Installed busibox → $dest"
+    elif command -v sudo &>/dev/null; then
+        sudo cp "$BINARY" "$dest"
+        success "Installed busibox → $dest (via sudo)"
+    else
+        local alt="$HOME/.local/bin/busibox"
+        mkdir -p "$(dirname "$alt")"
+        cp "$BINARY" "$alt"
+        warn "Installed busibox → $alt"
+        warn "Ensure ~/.local/bin is in your PATH (add to ~/.zshrc or ~/.bashrc):"
+        warn '  export PATH="$HOME/.local/bin:$PATH"'
+        dest="$alt"
+    fi
+
+    # Verify the installed binary works
+    if command -v busibox &>/dev/null && busibox version &>/dev/null; then
+        success "Verified: $(busibox version)"
+    elif [[ -x "$dest" ]] && "$dest" version &>/dev/null; then
+        success "Verified: $("$dest" version)"
+    else
+        warn "Binary installed but 'busibox' not found on PATH yet."
+        warn "Open a new terminal or source your shell profile and run: busibox"
+    fi
+}
+
 case "$ACTION" in
     build)
         build_cli
+        ;;
+    install)
+        install_cli
         ;;
     run)
         build_cli || exit 1
@@ -120,10 +160,10 @@ case "$ACTION" in
             error "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
             exit 1
         fi
-        exec "$BINARY"
+        exec "$BINARY" "${@:2}"
         ;;
     *)
-        error "Unknown action: $ACTION (use 'build' or 'run')"
+        error "Unknown action: $ACTION (use 'build', 'install', or 'run')"
         exit 1
         ;;
 esac

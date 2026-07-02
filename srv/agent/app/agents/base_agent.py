@@ -54,6 +54,7 @@ from app.agents.streaming_agent import StreamingAgent, StreamCallback
 from app.clients.busibox import BusiboxClient
 from app.config.settings import get_settings
 from app.schemas.auth import Principal
+from app.schemas.run import ALLOWED_IMAGE_MEDIA_TYPES
 from app.schemas.streaming import StreamEvent, thought, tool_start, tool_result, content, error, complete, clarify_parallel, progress
 from app.services.attachment_resolver import attachment_resolver
 from app.services.token_service import get_or_exchange_token
@@ -195,7 +196,7 @@ def _ensure_openai_env():
 # Maximum characters for a single tool result before truncation.
 # ~2000 tokens at ~4 chars/token. Prevents context window overflow
 # when tools return large datasets (e.g. query_data with many records).
-MAX_TOOL_RESULT_CHARS = 8000
+MAX_TOOL_RESULT_CHARS = 12000
 
 
 def _truncate_tool_result(result: Any) -> Any:
@@ -330,6 +331,7 @@ TOOL_SCOPES: Dict[str, List[str]] = {
     "get_weather": [],  # No auth needed
     "rag_query": ["rag.read"],
     "create_task": ["task.write"],  # Create tasks
+    "trigger_task_run": ["task.execute"],  # Self-continuation: trigger own task run
     "send_notification": [],  # No special auth needed (uses configured providers)
     "generate_image": ["data.write"],
     "transcribe_audio": ["data.read"],
@@ -376,6 +378,7 @@ TOOL_CLASSES: Dict[str, Dict[str, Any]] = {
     "text_to_speech": {"class": "slow", "timeout": 180},
     "send_notification": {"class": "slow", "timeout": 30},
     "create_task": {"class": "slow", "timeout": 30},
+    "trigger_task_run": {"class": "fast", "timeout": 15},
 }
 
 TOOL_CLASS_DEFAULT: Dict[str, Any] = {"class": "slow", "timeout": 60}
@@ -457,6 +460,58 @@ class ToolRegistry:
     def has(cls, name: str) -> bool:
         """Check if a tool is registered."""
         return name in cls._tools
+
+
+async def _apply_scraper_tool_config(session, agent_id) -> None:
+    """Load web_scraper ToolConfig from DB and inject into the current context.
+
+    Checks agent-scope config first (highest priority), then system-scope.
+    Falls back gracefully — if no config is stored the scraper uses env vars.
+    """
+    try:
+        from sqlalchemy import select, or_, and_
+        from app.models.domain import ToolConfig
+
+        clauses = [
+            and_(ToolConfig.tool_name == "web_scraper", ToolConfig.scope == "system"),
+        ]
+        if agent_id:
+            try:
+                import uuid as _uuid
+                agent_uuid = _uuid.UUID(str(agent_id)) if not isinstance(agent_id, _uuid.UUID) else agent_id
+                clauses.append(
+                    and_(
+                        ToolConfig.tool_name == "web_scraper",
+                        ToolConfig.scope == "agent",
+                        ToolConfig.agent_id == agent_uuid,
+                    )
+                )
+            except (ValueError, AttributeError):
+                pass
+
+        result = await session.execute(
+            select(ToolConfig).where(or_(*clauses))
+        )
+        rows = result.scalars().all()
+
+        # Merge system config first, then agent config (agent wins).
+        # ToolConfig stores {"providers": {...}, "settings": {...}};
+        # scraper settings live under the "settings" key.
+        merged: dict = {}
+        for row in sorted(rows, key=lambda r: 0 if r.scope == "system" else 1):
+            if row.config:
+                settings = row.config.get("settings") or {}
+                merged.update(settings)
+
+        if merged:
+            from app.tools.scraper_config import set_scraper_tool_config
+            set_scraper_tool_config(merged)
+            logger.debug(
+                "scraper_tool_config_loaded",
+                extra={"keys": list(merged.keys()), "agent_id": str(agent_id)},
+            )
+    except Exception as exc:
+        logger.warning("Failed to load scraper tool config: %s", exc)
 
 
 # Register built-in tools
@@ -553,6 +608,13 @@ def _register_builtin_tools():
     except ImportError as e:
         logger.warning(f"Could not register graph tools: {e}")
 
+    # Register trigger_task_run tool (self-continuation for long-running tasks)
+    try:
+        from app.tools.trigger_task_tool import trigger_task_run, TriggerTaskOutput
+        ToolRegistry.register("trigger_task_run", trigger_task_run, TriggerTaskOutput)
+    except ImportError as e:
+        logger.warning(f"Could not register trigger_task_run tool: {e}")
+
 
 # Initialize tool registry on module load
 try:
@@ -599,6 +661,11 @@ class AgentContext:
     current_query: Optional[str] = None
     # Optional per-run token budget override.
     max_tokens: Optional[int] = None
+    # Base64 images for multimodal structured-output calls (from /runs/invoke).
+    # Shape is enforced by RunInvoke._validate_images for /runs/invoke;
+    # _build_user_content skips malformed entries from unvalidated paths.
+    # Each item: {"media_type": "image/jpeg", "data": "<base64>"}
+    images: List[Dict[str, str]] = field(default_factory=list)
     # Deduplication cache for tool calls: maps (tool_name, args_json) -> result
     _tool_call_dedup: Dict[str, Any] = field(default_factory=dict)
 
@@ -700,11 +767,13 @@ class BaseStreamingAgent(StreamingAgent):
             return
 
         if self._should_disable_thinking():
-            model_settings.setdefault("extra_body", {}).setdefault(
-                "chat_template_kwargs", {}
-            )["enable_thinking"] = False
+            backend = get_settings().llm_backend.lower()
+            if backend in ("mlx", "vllm"):
+                model_settings.setdefault("extra_body", {}).setdefault(
+                    "chat_template_kwargs", {}
+                )["enable_thinking"] = False
             logger.info(
-                "Thinking settings [disabled]: model=%s", model_name,
+                "Thinking settings [disabled]: model=%s backend=%s", model_name, backend,
             )
             return
 
@@ -996,7 +1065,8 @@ class BaseStreamingAgent(StreamingAgent):
             agent_context.attachment_metadata = context.get("attachment_metadata", []) or []
             agent_context.response_schema = context.get("response_schema")
             agent_context.max_tokens = context.get("max_tokens")
-        
+            agent_context.images = context.get("images") or []
+
         # Check what scopes this agent's tools require
         scopes = self.config.get_required_scopes()
         requires_auth = len(scopes) > 0
@@ -1152,7 +1222,16 @@ class BaseStreamingAgent(StreamingAgent):
         # Discover and register tools from MCP servers (lazy, first-run only)
         if self.config.mcp_servers:
             await self._register_mcp_tools()
-        
+
+        # Load web_scraper tool config (proxy, camoufox) from the ToolConfig DB
+        # table so admins can configure these via the agent-manager UI without
+        # touching server environment variables.
+        if agent_context.session:
+            await _apply_scraper_tool_config(
+                session=agent_context.session,
+                agent_id=agent_context.agent_id,
+            )
+
         return agent_context
 
     async def _register_mcp_tools(self) -> None:
@@ -1554,97 +1633,92 @@ class BaseStreamingAgent(StreamingAgent):
         Conversation history is passed via message_history for proper multi-turn context.
         """
         
-        # For deterministic workflow/programmatic calls, disable tool usage and
-        # force structured output via response_schema.
-        force_structured_output = context.response_schema is not None
-
         # Get tool functions for this agent, wrapped with result truncation
         # to prevent large tool outputs from exceeding the LLM context window
         tools = []
-        if not force_structured_output:
-            for tool_name in self.config.tools:
-                tool_func = ToolRegistry.get(tool_name)
-                if tool_func:
-                    wrapped_tool = _wrap_tool_with_truncation(tool_func)
+        for tool_name in self.config.tools:
+            tool_func = ToolRegistry.get(tool_name)
+            if tool_func:
+                wrapped_tool = _wrap_tool_with_truncation(tool_func)
 
-                    @functools.wraps(wrapped_tool)
-                    async def monitored_tool(*args, _tool_name=tool_name, _tool=wrapped_tool, **kwargs):
-                        if cancel.is_set():
-                            return ""
-                        input_payload: Dict[str, Any]
-                        if kwargs:
-                            input_payload = dict(kwargs)
-                        elif args:
-                            input_payload = {"args": [str(a) for a in args]}
-                        else:
-                            input_payload = {}
+                @functools.wraps(wrapped_tool)
+                async def monitored_tool(*args, _tool_name=tool_name, _tool=wrapped_tool, **kwargs):
+                    if cancel.is_set():
+                        return ""
+                    input_payload: Dict[str, Any]
+                    if kwargs:
+                        input_payload = dict(kwargs)
+                    elif args:
+                        input_payload = {"args": [str(a) for a in args]}
+                    else:
+                        input_payload = {}
 
-                        # Deduplication: skip if identical call already made
-                        dedup_key = f"{_tool_name}:{json.dumps(input_payload, sort_keys=True, default=str)}"
-                        if dedup_key in context._tool_call_dedup:
-                            logger.info(f"Tool {_tool_name} dedup hit, returning cached result")
-                            return context._tool_call_dedup[dedup_key]
+                    # Deduplication: skip if identical call already made
+                    dedup_key = f"{_tool_name}:{json.dumps(input_payload, sort_keys=True, default=str)}"
+                    if dedup_key in context._tool_call_dedup:
+                        logger.info(f"Tool {_tool_name} dedup hit, returning cached result")
+                        return context._tool_call_dedup[dedup_key]
 
-                        await stream(tool_start(
+                    await stream(tool_start(
+                        source=_tool_name,
+                        message=f"Using {_tool_name}...",
+                        data={
+                            "tool_name": _tool_name,
+                            "input": input_payload,
+                        },
+                    ))
+                    tool_class = TOOL_CLASSES.get(_tool_name, TOOL_CLASS_DEFAULT)
+                    timeout_s = tool_class["timeout"]
+                    t_tool = time.monotonic()
+                    try:
+                        result = await asyncio.wait_for(
+                            _tool(*args, **kwargs), timeout=timeout_s
+                        )
+                        tool_ms = round((time.monotonic() - t_tool) * 1000)
+                        logger.info(
+                            f"Tool {_tool_name} complete",
+                            extra={"elapsed_ms": tool_ms},
+                        )
+                        context.tool_results[_tool_name] = result
+                        context._tool_call_dedup[dedup_key] = result
+                        result_data = (
+                            result.model_dump()
+                            if hasattr(result, "model_dump")
+                            else {"result": str(result)}
+                        )
+                        if not isinstance(result_data, dict):
+                            result_data = {"result": str(result_data)}
+                        await stream(tool_result(
                             source=_tool_name,
-                            message=f"Using {_tool_name}...",
-                            data={
-                                "tool_name": _tool_name,
-                                "input": input_payload,
-                            },
+                            message=self._format_tool_result_message(_tool_name, result),
+                            data=result_data,
                         ))
-                        tool_class = TOOL_CLASSES.get(_tool_name, TOOL_CLASS_DEFAULT)
-                        timeout_s = tool_class["timeout"]
-                        t_tool = time.monotonic()
-                        try:
-                            result = await asyncio.wait_for(
-                                _tool(*args, **kwargs), timeout=timeout_s
-                            )
-                            tool_ms = round((time.monotonic() - t_tool) * 1000)
-                            logger.info(
-                                f"Tool {_tool_name} complete",
-                                extra={"elapsed_ms": tool_ms},
-                            )
-                            context.tool_results[_tool_name] = result
-                            context._tool_call_dedup[dedup_key] = result
-                            result_data = (
-                                result.model_dump()
-                                if hasattr(result, "model_dump")
-                                else {"result": str(result)}
-                            )
-                            if not isinstance(result_data, dict):
-                                result_data = {"result": str(result_data)}
-                            await stream(tool_result(
-                                source=_tool_name,
-                                message=self._format_tool_result_message(_tool_name, result),
-                                data=result_data,
-                            ))
-                            return result
-                        except asyncio.TimeoutError:
-                            tool_ms = round((time.monotonic() - t_tool) * 1000)
-                            logger.error(
-                                f"Tool {_tool_name} timed out after {timeout_s}s ({tool_ms}ms elapsed)"
-                            )
-                            await stream(error(
-                                source=_tool_name,
-                                message=f"{_tool_name} timed out after {timeout_s}s",
-                            ))
-                            raise RuntimeError(f"{_tool_name} timed out after {timeout_s}s")
-                        except Exception as e:
-                            logger.error(
-                                f"Tool {_tool_name} failed after {round((time.monotonic() - t_tool) * 1000)}ms: {e}",
-                            )
-                            await stream(error(
-                                source=_tool_name,
-                                message=f"{_tool_name} failed: {str(e)}",
-                            ))
-                            raise
+                        return result
+                    except asyncio.TimeoutError:
+                        tool_ms = round((time.monotonic() - t_tool) * 1000)
+                        logger.error(
+                            f"Tool {_tool_name} timed out after {timeout_s}s ({tool_ms}ms elapsed)"
+                        )
+                        await stream(error(
+                            source=_tool_name,
+                            message=f"{_tool_name} timed out after {timeout_s}s",
+                        ))
+                        raise RuntimeError(f"{_tool_name} timed out after {timeout_s}s")
+                    except Exception as e:
+                        logger.error(
+                            f"Tool {_tool_name} failed after {round((time.monotonic() - t_tool) * 1000)}ms: {e}",
+                        )
+                        await stream(error(
+                            source=_tool_name,
+                            message=f"{_tool_name} failed: {str(e)}",
+                        ))
+                        raise
 
-                    monitored_tool.__name__ = tool_name
-                    monitored_tool.__qualname__ = tool_name
-                    monitored_tool.__signature__ = inspect.signature(wrapped_tool)
-                    monitored_tool.__annotations__ = getattr(wrapped_tool, "__annotations__", {})
-                    tools.append(monitored_tool)
+                monitored_tool.__name__ = tool_name
+                monitored_tool.__qualname__ = tool_name
+                monitored_tool.__signature__ = inspect.signature(wrapped_tool)
+                monitored_tool.__annotations__ = getattr(wrapped_tool, "__annotations__", {})
+                tools.append(monitored_tool)
         
         if not tools:
             # No tools configured - run as conversational agent without tool capabilities
@@ -1707,6 +1781,7 @@ class BaseStreamingAgent(StreamingAgent):
                             response_schema=context.response_schema,
                             max_tokens=context.max_tokens or self.config.max_tokens,
                             message_history=plain_history,
+                            images=context.images or None,
                         )
                         context.tool_results["llm_response"] = structured_output
                     except Exception as fallback_err:
@@ -1822,7 +1897,7 @@ class BaseStreamingAgent(StreamingAgent):
                 agent, query, context, stream, cancel,
                 model_settings=model_settings if model_settings else None,
                 message_history=msg_history,
-                usage_limits=UsageLimits(tool_calls_limit=30),
+                usage_limits=UsageLimits(tool_calls_limit=max(30, self.config.max_iterations * 4)),
             )
             logger.info(
                 f"{self.name} LLM streaming execution complete",
@@ -2098,6 +2173,7 @@ class BaseStreamingAgent(StreamingAgent):
             response_schema=response_schema,
             max_tokens=context.max_tokens or self.config.max_tokens,
             message_history=message_history,
+            images=context.images or None,
         )
 
     @staticmethod
@@ -2143,6 +2219,32 @@ class BaseStreamingAgent(StreamingAgent):
         return cleaned
 
     @staticmethod
+    def _build_user_content(prompt: str, images: Optional[List[Dict[str, str]]]) -> Any:
+        """Plain string when no images; OpenAI content-part list otherwise.
+
+        Entries that don't match the validated shape (see
+        RunInvoke._validate_images) are skipped: /runs/invoke enforces the
+        shape upstream, but POST /runs payloads are unvalidated.
+        """
+        if not images:
+            return prompt
+        parts: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for img in images:
+            if not isinstance(img, dict):
+                continue
+            media_type = img.get("media_type")
+            data = img.get("data")
+            if media_type not in ALLOWED_IMAGE_MEDIA_TYPES or not isinstance(data, str) or not data:
+                continue
+            parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{media_type};base64,{data}"},
+            })
+        if len(parts) == 1:
+            return prompt
+        return parts
+
+    @staticmethod
     def _fixup_arrays(data: Any, schema: Dict[str, Any]) -> Any:
         """Deduplicate and truncate arrays that exceed maxItems.
 
@@ -2186,6 +2288,7 @@ class BaseStreamingAgent(StreamingAgent):
         response_schema: Dict[str, Any],
         max_tokens: Optional[int] = None,
         message_history: Optional[List[Dict[str, str]]] = None,
+        images: Optional[List[Dict[str, str]]] = None,
     ) -> str:
         """
         Call the LLM directly via the OpenAI client with response_format enforced.
@@ -2221,13 +2324,14 @@ class BaseStreamingAgent(StreamingAgent):
             max_tokens = await _get_model_max_output_tokens(model_name)
 
         effective_prompt = "/no_think\n" + prompt
+        user_content = self._build_user_content(effective_prompt, images)
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
         ]
         if message_history:
             messages.extend(message_history)
-        messages.append({"role": "user", "content": effective_prompt})
+        messages.append({"role": "user", "content": user_content})
 
         kwargs: Dict[str, Any] = {
             "model": model_name,
@@ -2237,10 +2341,12 @@ class BaseStreamingAgent(StreamingAgent):
                 "type": "json_schema",
                 "json_schema": response_schema,
             },
-            "extra_body": {
-                "chat_template_kwargs": {"enable_thinking": False},
-            },
         }
+        _so_backend = get_settings().llm_backend.lower()
+        if _so_backend in ("mlx", "vllm"):
+            kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
 
         max_attempts = 2
         last_error: Optional[str] = None
@@ -2274,7 +2380,7 @@ class BaseStreamingAgent(StreamingAgent):
                     if message_history:
                         retry_messages.extend(message_history)
                     retry_messages.extend([
-                        {"role": "user", "content": effective_prompt},
+                        {"role": "user", "content": user_content},
                         {"role": "assistant", "content": raw_content},
                         {"role": "user", "content": (
                             "/no_think\n"
@@ -2304,7 +2410,7 @@ class BaseStreamingAgent(StreamingAgent):
                     if message_history:
                         retry_messages.extend(message_history)
                     retry_messages.extend([
-                        {"role": "user", "content": effective_prompt},
+                        {"role": "user", "content": user_content},
                         {"role": "assistant", "content": content},
                         {"role": "user", "content": (
                             "/no_think\n"
@@ -2412,12 +2518,27 @@ class BaseStreamingAgent(StreamingAgent):
 
         if any(t in self.config.tools for t in ("document_search", "web_search")):
             parts.append("")
-            parts.append("## Search Result Relevance")
+            parts.append("## Search Result Relevance and Citations")
             parts.append(
                 "When you receive results from document_search or web_search, critically evaluate "
                 "whether they are actually relevant to the user's query. If the results are about "
                 "a completely different topic, IGNORE them — do not summarize or reference irrelevant "
                 "results. Only use results that genuinely answer or inform the user's question."
+            )
+        if "document_search" in self.config.tools:
+            parts.append("")
+            parts.append("## Mandatory Document Citations")
+            parts.append(
+                "EVERY sentence or claim that uses information from document_search results MUST "
+                "include an inline citation immediately after the claim. Use EXACTLY this markdown "
+                "format and nothing else:\n"
+                "  [Source: filename, p.N](doc:file_id:page_number)\n"
+                "Example: \"The policy requires annual reviews. [Source: policy.pdf, p.3](doc:abc-123:3)\"\n"
+                "Rules:\n"
+                "- Use the citation_url provided in the tool result for each source.\n"
+                "- Do NOT omit citations. Do NOT use bare URLs or vague references.\n"
+                "- If you cite multiple sources in one sentence, add each citation inline.\n"
+                "- If no relevant documents were found, say so clearly without fabricating citations."
             )
 
         attachment_section = self._build_attachment_context_section(context)
@@ -2872,6 +2993,21 @@ def create_agent_from_definition(definition: Any) -> BaseStreamingAgent:
     raw_mcp = getattr(definition, 'mcp_servers', None) or []
     mcp_configs = parse_mcp_server_configs(raw_mcp) if raw_mcp else []
 
+    # Convert definition-level response_schema to a Pydantic output_type so that
+    # response_format is enforced on every run for this agent.
+    definition_output_type = None
+    raw_response_schema = getattr(definition, 'response_schema', None)
+    if raw_response_schema:
+        try:
+            from app.utils.json_schema_to_pydantic import json_schema_to_pydantic
+            definition_output_type = json_schema_to_pydantic(raw_response_schema)
+            logger.info(f"Agent {definition.name}: response_schema converted to output_type")
+        except Exception as exc:
+            logger.warning(
+                f"Agent {definition.name}: failed to convert response_schema to output_type "
+                f"({exc}); response_format will not be enforced at the definition level"
+            )
+
     # Create config
     config = AgentConfig(
         name=definition.name,
@@ -2885,6 +3021,7 @@ def create_agent_from_definition(definition: Any) -> BaseStreamingAgent:
         max_iterations=workflows.get("max_iterations", 5),
         allow_frontier_fallback=getattr(definition, 'allow_frontier_fallback', False),
         mcp_servers=mcp_configs,
+        output_type=definition_output_type,
     )
     
     # Check for predefined pipeline

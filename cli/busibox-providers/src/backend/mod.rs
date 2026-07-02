@@ -97,6 +97,11 @@ mod tests {
             spot_token: None,
             dev_apps_dir: None,
             huggingface_token: None,
+            direct_access: None,
+            port_overrides: std::collections::HashMap::new(),
+            service_preset: None,
+            addon_packs: Vec::new(),
+            local_llm_backend: None,
         };
         DeployContext::from_profile("test-id", &profile, PathBuf::from("/repo"), None)
     }

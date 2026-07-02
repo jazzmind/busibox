@@ -351,8 +351,11 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::Char('n') => {
-            app.screen = Screen::SetupMode;
-            app.menu_selected = 0;
+            app.wizard_step = crate::app::WizardStep::Target;
+            app.wizard_target_selected = 0;
+            app.wizard_preset_selected = 0;
+            app.wizard_backend_selected = 0;
+            app.screen = Screen::InstallWizard;
         }
         KeyCode::Char('d') => {
             // Edit default settings

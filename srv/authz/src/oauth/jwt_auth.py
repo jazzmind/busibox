@@ -356,28 +356,24 @@ async def authenticate_request(
     if auth_header.lower().startswith("bearer "):
         token = auth_header[7:]
         
-        # Try to verify as JWT
-        try:
-            user_id, email, scopes = await verify_access_token(token, db, "authz-api")
-            ctx = AuthContext(
-                auth_type="jwt",
-                actor_id=user_id,
-                scopes=scopes,
-                email=email,
-            )
-            
-            # Check required scopes
-            if required_scopes:
-                if not ctx.has_any_scope(required_scopes):
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail=f"Insufficient scopes. Required one of: {required_scopes}",
-                    )
-            
-            return ctx
-            
-        except HTTPException:
-            pass
+        # Verify the JWT access token
+        user_id, email, scopes = await verify_access_token(token, db, "authz-api")
+        ctx = AuthContext(
+            auth_type="jwt",
+            actor_id=user_id,
+            scopes=scopes,
+            email=email,
+        )
+        
+        # Check required scopes
+        if required_scopes:
+            if not ctx.has_any_scope(required_scopes):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Insufficient scopes. Required one of: {required_scopes}",
+                )
+        
+        return ctx
     
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -484,29 +480,20 @@ async def require_auth_or_self_service(
         pass
     
     # Try as access token (with scopes check)
-    try:
-        user_id, email, scopes = await verify_access_token(token, db, "authz-api")
-        ctx = AuthContext(
-            auth_type="jwt",
-            actor_id=user_id,
-            scopes=scopes,
-            email=email,
-        )
-        
-        # Check required scopes for admin access
-        if admin_scopes:
-            if not ctx.has_any_scope(admin_scopes):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Insufficient scopes. Required one of: {admin_scopes}",
-                )
-        
-        return ctx
-        
-    except HTTPException:
-        pass
-    
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Unauthorized: valid access token or session token required",
+    user_id, email, scopes = await verify_access_token(token, db, "authz-api")
+    ctx = AuthContext(
+        auth_type="jwt",
+        actor_id=user_id,
+        scopes=scopes,
+        email=email,
     )
+    
+    # Check required scopes for admin access
+    if admin_scopes:
+        if not ctx.has_any_scope(admin_scopes):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Insufficient scopes. Required one of: {admin_scopes}",
+            )
+    
+    return ctx

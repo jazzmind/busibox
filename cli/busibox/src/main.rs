@@ -1,4 +1,5 @@
 mod app;
+mod cli_commands;
 mod modules;
 mod screens;
 mod theme;
@@ -6,21 +7,36 @@ mod tui;
 
 use app::{App, Screen};
 use crate::modules::remote;
+use busibox_core::profiles::{AddonPack, BusiboxProfile};
 use clap::Parser;
 use color_eyre::Result;
 use crossterm::event::{self, Event, KeyEventKind};
-use std::io;
+use std::io::{self, IsTerminal};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 static QUIT_SIGNAL: AtomicBool = AtomicBool::new(false);
 
+/// Busibox is one binary that runs as either a CLI or a TUI:
+///
+/// - `busibox <subcommand> ...` → CLI mode (scriptable, no terminal needed)
+/// - `busibox` in an interactive terminal → TUI mode (full ratatui UI)
+/// - `busibox` piped / non-TTY → prints help and exits, instead of hanging
+///   on a terminal that doesn't exist
 #[derive(Parser)]
-#[command(name = "busibox", about = "Busibox Infrastructure CLI")]
+#[command(
+    name = "busibox",
+    about = "Busibox Infrastructure CLI / UI",
+    version = cli_commands::VERSION,
+    long_about = "Busibox manages a local-LLM infrastructure platform. \
+Running `busibox` in an interactive terminal launches the full text UI; \
+running with a subcommand (e.g. `busibox up --profile lite`) stays in CLI mode."
+)]
 struct Cli {
     /// Path to the busibox repository root
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     root: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -29,11 +45,136 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum Command {
-    /// Import a profile from a .busibox-export file
+    /// Print the deployment plan for a profile (does not deploy yet).
+    Up {
+        /// Profile preset: lite (default), standard, full
+        #[arg(long, default_value = "lite")]
+        profile: String,
+        /// Add-on packs (repeatable): local-models, graph, media, fleet,
+        /// rag-milvus, rag-qdrant
+        #[arg(long = "pack")]
+        packs: Vec<String>,
+    },
+    /// Read-only environment check (Docker, hardware, profile sanity).
+    Doctor {
+        #[arg(long, default_value = "lite")]
+        profile: String,
+        #[arg(long = "pack")]
+        packs: Vec<String>,
+    },
+    /// Deterministic verification suitable for CI / agents.
+    Verify {
+        #[arg(long, default_value = "lite")]
+        profile: String,
+        #[arg(long = "pack")]
+        packs: Vec<String>,
+    },
+    /// Print the version and exit.
+    Version,
+    /// Inspect Busibox profile presets.
+    #[command(subcommand)]
+    Profile(ProfileCmd),
+    /// Import a profile from a .busibox-export file.
     Import {
         /// Path to the .busibox-export file
         file: PathBuf,
     },
+}
+
+#[derive(clap::Subcommand)]
+enum ProfileCmd {
+    /// List available profile presets and add-on packs.
+    List,
+    /// Show the resolved service list for a profile.
+    Show {
+        /// Profile name (lite, standard, full)
+        name: String,
+        /// Add-on packs (repeatable)
+        #[arg(long = "pack")]
+        packs: Vec<String>,
+    },
+}
+
+/// Parse strings into `AddonPack` values, exiting 2 on the first failure.
+fn parse_packs(raw: &[String]) -> std::result::Result<Vec<AddonPack>, i32> {
+    raw.iter()
+        .map(|s| {
+            AddonPack::from_str(s).map_err(|e| {
+                eprintln!("error: {e}");
+            })
+        })
+        .collect::<std::result::Result<Vec<_>, ()>>()
+        .map_err(|_| 2)
+}
+
+fn parse_profile(raw: &str) -> std::result::Result<BusiboxProfile, i32> {
+    BusiboxProfile::from_str(raw).map_err(|e| {
+        eprintln!("error: {e}");
+        2
+    })
+}
+
+/// Dispatch a CLI subcommand and return the process exit code.  Returns
+/// `None` when the user did not give a subcommand and we should fall
+/// through to the TUI launcher.
+fn dispatch_cli(cli: &Cli, repo_root: &std::path::Path) -> Option<i32> {
+    let cmd = cli.command.as_ref()?;
+    let code = match cmd {
+        Command::Version => cli_commands::version(),
+        Command::Up { profile, packs } => {
+            let p = match parse_profile(profile) {
+                Ok(p) => p,
+                Err(c) => return Some(c),
+            };
+            let packs = match parse_packs(packs) {
+                Ok(p) => p,
+                Err(c) => return Some(c),
+            };
+            cli_commands::up_plan(p, &packs, false)
+        }
+        Command::Doctor { profile, packs } => {
+            let p = match parse_profile(profile) {
+                Ok(p) => p,
+                Err(c) => return Some(c),
+            };
+            let packs = match parse_packs(packs) {
+                Ok(p) => p,
+                Err(c) => return Some(c),
+            };
+            cli_commands::doctor(repo_root, p, &packs)
+        }
+        Command::Verify { profile, packs } => {
+            let p = match parse_profile(profile) {
+                Ok(p) => p,
+                Err(c) => return Some(c),
+            };
+            let packs = match parse_packs(packs) {
+                Ok(p) => p,
+                Err(c) => return Some(c),
+            };
+            cli_commands::verify(repo_root, p, &packs)
+        }
+        Command::Profile(ProfileCmd::List) => cli_commands::profile_list(),
+        Command::Profile(ProfileCmd::Show { name, packs }) => {
+            cli_commands::profile_show(name, packs)
+        }
+        Command::Import { file } => {
+            return Some(match handle_import_profile(repo_root, file) {
+                Ok(()) => 0,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    1
+                }
+            });
+        }
+    };
+    Some(match code {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    })
 }
 
 fn main() -> Result<()> {
@@ -49,12 +190,27 @@ fn main() -> Result<()> {
 
     let repo_root = cli
         .root
+        .clone()
         .or_else(|| modules::profile::find_repo_root().ok())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    // Handle subcommands that run without the TUI
-    if let Some(Command::Import { file }) = cli.command {
-        return handle_import_profile(&repo_root, &file);
+    // CLI mode — any subcommand short-circuits the TUI.
+    if let Some(code) = dispatch_cli(&cli, &repo_root) {
+        std::process::exit(code);
+    }
+
+    // No subcommand.  Only enter the TUI if we actually have a terminal;
+    // otherwise print help so we don't hang in CI / pipes.
+    if !io::stdout().is_terminal() || !io::stdin().is_terminal() {
+        use clap::CommandFactory;
+        let mut cmd = Cli::command();
+        eprintln!(
+            "busibox: no subcommand given and stdin/stdout is not a terminal.\n\
+             Use one of the subcommands below, or run from an interactive shell to\n\
+             enter the TUI.\n"
+        );
+        let _ = cmd.print_long_help();
+        std::process::exit(2);
     }
 
     let mut app = App::new(repo_root.clone());
@@ -63,6 +219,32 @@ fn main() -> Result<()> {
     match modules::profile::load_profiles(&repo_root) {
         Ok(profiles) => app.profiles = Some(profiles),
         Err(_) => {}
+    }
+
+    // First-run detection: if there are no profiles, go straight to the install wizard.
+    // If profiles exist, start on ProfileSelect so the user can pick or manage them.
+    let has_profiles = app
+        .profiles
+        .as_ref()
+        .map(|p| !p.profiles.is_empty())
+        .unwrap_or(false);
+    if !has_profiles {
+        app.screen = Screen::InstallWizard;
+    } else {
+        app.screen = Screen::ProfileSelect;
+    }
+
+    // When profiles exist, pre-select the active profile in the profile selector.
+    if has_profiles {
+        if let Some(profiles) = &app.profiles {
+            let active = &profiles.active;
+            let idx = profiles
+                .profiles
+                .keys()
+                .position(|k| k == active)
+                .unwrap_or(0);
+            app.profile_selected = idx;
+        }
     }
 
     // Try to lock the active profile. If another instance holds it,
@@ -129,10 +311,22 @@ fn main() -> Result<()> {
                     if let Ok(pw) = std::fs::read_to_string(&legacy_path) {
                         let pw = pw.trim().to_string();
                         if !pw.is_empty() {
-                            if let Some((msg, kind)) = run_vault_upgrade(&app.repo_root, &vault_prefix, &pw, false) {
-                                app.set_message(&msg, kind);
+                            match run_vault_upgrade(&app.repo_root, &vault_prefix, &pw, false) {
+                                Some((msg, app::MessageKind::Warning)) | Some((msg, app::MessageKind::Error)) => {
+                                    // Decrypt failed — the stored password is wrong. Prompt interactively
+                                    // so the user can supply the correct password. Don't set a bad password.
+                                    if msg.contains("vault_decrypt_failed") {
+                                        app.pending_vault_setup = true;
+                                    } else {
+                                        app.set_message(&msg, app::MessageKind::Warning);
+                                        app.vault_password = Some(pw);
+                                    }
+                                }
+                                _ => {
+                                    // Success (or vault didn't exist yet and was created) — use silently
+                                    app.vault_password = Some(pw);
+                                }
                             }
-                            app.vault_password = Some(pw);
                         }
                     }
                 }
@@ -170,6 +364,9 @@ fn main() -> Result<()> {
         if app.screen == Screen::ModelBenchmark && app.benchmark_running {
             app.benchmark_tick = app.benchmark_tick.wrapping_add(1);
         }
+        if app.screen == Screen::RunTests && app.test_action_running {
+            app.test_tick = app.test_tick.wrapping_add(1);
+        }
         if app.screen == Screen::Welcome && app.health_check_running {
             app.health_tick = app.health_tick.wrapping_add(1);
         }
@@ -178,6 +375,9 @@ fn main() -> Result<()> {
         }
         if app.screen == Screen::ValidateSecrets && app.validate_secrets_loading {
             app.manage_tick = app.manage_tick.wrapping_add(1);
+        }
+        if app.screen == Screen::Utilities && app.utilities_action_running {
+            app.utilities_tick = app.utilities_tick.wrapping_add(1);
         }
 
         // Drain health check updates
@@ -390,6 +590,91 @@ fn main() -> Result<()> {
             }
         }
 
+        // Drain test updates
+        {
+            let mut test_completed = false;
+            let mut test_success = false;
+            if let Some(rx) = app.test_rx.take() {
+                use std::sync::mpsc::TryRecvError;
+                let mut put_back = true;
+                loop {
+                    match rx.try_recv() {
+                        Ok(app::TestUpdate::Log(msg)) => {
+                            app.test_log.push(msg);
+                            const MAX_LOG: usize = 10000;
+                            if app.test_log.len() > MAX_LOG {
+                                let excess = app.test_log.len() - MAX_LOG;
+                                app.test_log.drain(..excess);
+                            }
+                            if app.test_log_autoscroll {
+                                app.test_log_scroll =
+                                    app.test_log.len().saturating_sub(1);
+                            }
+                        }
+                        Ok(app::TestUpdate::Complete { success }) => {
+                            app.test_action_running = false;
+                            app.test_action_complete = true;
+                            app.test_log_scroll =
+                                app.test_log.len().saturating_sub(1);
+                            test_completed = true;
+                            test_success = success;
+                            put_back = false;
+                            break;
+                        }
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            app.test_action_running = false;
+                            put_back = false;
+                            break;
+                        }
+                    }
+                }
+                if put_back {
+                    app.test_rx = Some(rx);
+                }
+            }
+            if test_completed {
+                if test_success {
+                    app.set_message("Tests passed", app::MessageKind::Success);
+                } else {
+                    app.test_can_resume = true;
+                    app.set_message(
+                        "Tests failed — press r in log view to resume from failure",
+                        app::MessageKind::Error,
+                    );
+                }
+            }
+        }
+
+        // Drain utilities updates
+        if let Some(rx) = app.utilities_rx.take() {
+            use std::sync::mpsc::TryRecvError;
+            let mut put_back = true;
+            loop {
+                match rx.try_recv() {
+                    Ok(app::UtilitiesUpdate::Log(msg)) => {
+                        app.utilities_log.push(msg);
+                    }
+                    Ok(app::UtilitiesUpdate::Complete { success }) => {
+                        app.utilities_action_running = false;
+                        app.utilities_action_success = success;
+                        app.agents_mode_is_local = crate::screens::utilities::detect_agents_mode();
+                        put_back = false;
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        app.utilities_action_running = false;
+                        put_back = false;
+                        break;
+                    }
+                }
+            }
+            if put_back {
+                app.utilities_rx = Some(rx);
+            }
+        }
+
         // Drain models manage updates
         {
             if let Some(rx) = app.models_manage_rx.take() {
@@ -528,10 +813,12 @@ fn main() -> Result<()> {
             match rx.try_recv() {
                 Ok(app::ValidateSecretsUpdate::Results {
                     keys,
+                    values,
                     local_error,
                     remote_error,
                 }) => {
                     app.validate_secrets_results = keys;
+                    app.validate_secrets_values = values;
                     app.validate_secrets_loading = false;
                     if let Some(err) = local_error {
                         app.validate_secrets_error = Some(err);
@@ -761,6 +1048,7 @@ fn render(app: &App, f: &mut ratatui::Frame) {
 
     match &app.screen {
         Screen::Welcome => screens::welcome::render(f, app),
+        Screen::InstallWizard => screens::install_wizard::render(f, app),
         Screen::SetupMode => screens::setup_mode::render(f, app),
         Screen::SshSetup => screens::ssh_setup::render(f, app),
         Screen::TailscaleSetup => screens::tailscale_setup::render(f, app),
@@ -771,16 +1059,19 @@ fn render(app: &App, f: &mut ratatui::Frame) {
         Screen::Manage => screens::manage::render(f, app),
         Screen::ModelsManage => screens::models_manage::render(f, app),
         Screen::ModelBenchmark => screens::model_benchmark::render(f, app),
+        Screen::ModelBrowse => screens::model_browse::render(f, app),
         Screen::ProfileSelect => screens::profile_select::render(f, app),
         Screen::ProfileEdit => screens::profile_edit::render(f, app),
         Screen::AdminLogin => screens::admin_login::render(f, app),
         Screen::K8sSetup => screens::k8s_setup::render(f, app),
         Screen::K8sManage => screens::k8s_manage::render(f, app),
         Screen::ValidateSecrets => screens::validate_secrets::render(f, app),
+        Screen::RunTests => screens::run_tests::render(f, app),
+        Screen::Utilities => screens::utilities::render(f, app),
     }
 
     // Profile header bar overlay (except Welcome and ProfileSelect)
-    if !matches!(&app.screen, Screen::Welcome | Screen::ProfileSelect) {
+    if !matches!(&app.screen, Screen::Welcome | Screen::InstallWizard | Screen::ProfileSelect) {
         render_profile_header(f, app, area);
     }
 }
@@ -857,6 +1148,7 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
         && app.screen != Screen::AdminLogin
         && app.screen != Screen::ModelBenchmark
         && app.screen != Screen::ValidateSecrets
+        && app.screen != Screen::ModelBrowse
     {
         app.should_quit = true;
         return;
@@ -866,6 +1158,7 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
 
     match &app.screen {
         Screen::Welcome => screens::welcome::handle_key(app, key),
+        Screen::InstallWizard => screens::install_wizard::handle_key(app, key),
         Screen::SetupMode => screens::setup_mode::handle_key(app, key),
         Screen::SshSetup => screens::ssh_setup::handle_key(app, key),
         Screen::TailscaleSetup => screens::tailscale_setup::handle_key(app, key),
@@ -876,12 +1169,15 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
         Screen::Manage => screens::manage::handle_key(app, key),
         Screen::ModelsManage => screens::models_manage::handle_key(app, key),
         Screen::ModelBenchmark => screens::model_benchmark::handle_key(app, key),
+        Screen::ModelBrowse => screens::model_browse::handle_key(app, key),
         Screen::ProfileSelect => screens::profile_select::handle_key(app, key),
         Screen::ProfileEdit => screens::profile_edit::handle_key(app, key),
         Screen::AdminLogin => screens::admin_login::handle_key(app, key),
         Screen::K8sSetup => screens::k8s_setup::handle_key(app, key),
         Screen::K8sManage => screens::k8s_manage::handle_key(app, key),
         Screen::ValidateSecrets => screens::validate_secrets::handle_key(app, key),
+        Screen::RunTests => screens::run_tests::handle_key(app, key),
+        Screen::Utilities => screens::utilities::handle_key(app, key),
     }
 }
 
@@ -973,16 +1269,13 @@ fn perform_resume_install(app: &mut App) {
             .unwrap_or(0);
         app.remote_env_choice = env_idx;
     }
-    // Clear any previous install state and go to Install screen
-    app.install_services.clear();
-    app.install_log.clear();
-    app.install_complete = false;
-    app.install_model_status.clear();
-    app.install_models_complete = false;
-    app.install_portal_url = None;
     app.clear_message();
     app.screen = Screen::Install;
     app.menu_selected = 0;
+    // init_install (called inside auto_start_resume) resets bookkeeping, then
+    // pre-marks already-healthy services from the welcome screen's health results
+    // so the install worker skips stages that are already complete.
+    screens::install::auto_start_resume(app);
 }
 
 fn perform_sync_then_admin_login(app: &mut App) {
@@ -1096,7 +1389,7 @@ fn perform_sync_then_admin_login(app: &mut App) {
                 let repo_root = app.repo_root.clone();
                 let result = if let Some(ref vp) = vault_pw {
                     remote::run_local_make_quiet_with_vault_streaming(
-                        &repo_root, make_args, vp, |_| {},
+                        &repo_root, make_args, vp, None, |_| {},
                     )
                 } else {
                     remote::run_local_make_quiet_streaming(&repo_root, make_args, |_| {})
@@ -1292,7 +1585,10 @@ fn perform_validate_secrets(app: &mut App) {
 
     // Reset screen state
     app.validate_secrets_results.clear();
+    app.validate_secrets_values.clear();
     app.validate_secrets_scroll = 0;
+    app.validate_secrets_selected = 0;
+    app.validate_secrets_show_secret = None;
     app.validate_secrets_loading = true;
     app.validate_secrets_error = None;
     app.validate_secrets_vault_file = vault_file;
@@ -1324,6 +1620,7 @@ fn perform_validate_secrets(app: &mut App) {
             Ok(None) => {
                 let _ = tx.send(app::ValidateSecretsUpdate::Results {
                     keys: vec![],
+                    values: std::collections::HashMap::new(),
                     local_error: Some(format!("vault.{vault_prefix}.yml not found")),
                     remote_error: None,
                 });
@@ -1332,6 +1629,7 @@ fn perform_validate_secrets(app: &mut App) {
             Err(e) => {
                 let _ = tx.send(app::ValidateSecretsUpdate::Results {
                     keys: vec![],
+                    values: std::collections::HashMap::new(),
                     local_error: Some(format!("{e}")),
                     remote_error: None,
                 });
@@ -1420,6 +1718,7 @@ fn perform_validate_secrets(app: &mut App) {
 
         let _ = tx.send(app::ValidateSecretsUpdate::Results {
             keys: results,
+            values: vault_values,
             local_error: None,
             remote_error,
         });
@@ -1461,6 +1760,11 @@ fn handle_admin_login(app: &mut App) {
     let busibox_backend: Option<String> = app
         .active_profile()
         .map(|(_, p)| p.backend.clone());
+
+    let docker_runtime: String = app
+        .active_profile()
+        .map(|(_, p)| p.effective_docker_runtime().to_string())
+        .unwrap_or_else(|| "auto".to_string());
 
     debug_info.push_str(&format!("email={:?}", admin_email));
 
@@ -1589,6 +1893,26 @@ fn handle_admin_login(app: &mut App) {
         if let Some(ref backend_val) = busibox_backend {
             cmd.env("BUSIBOX_BACKEND", backend_val);
         }
+
+        // Set DOCKER_CONTEXT so docker exec in login.sh reaches the right containers
+        let env_prefix = match busibox_env.as_deref().unwrap_or("development") {
+            "development" => "dev",
+            "staging" => "staging",
+            "production" => "prod",
+            other => other,
+        };
+        if let Some(ctx) = crate::modules::health::resolve_docker_context_pub(&docker_runtime, env_prefix) {
+            cmd.env("DOCKER_CONTEXT", ctx);
+        }
+
+        // Pass SITE_DOMAIN so login.sh generates the correct portal URL.
+        // Without this, JSON_OUTPUT mode falls back to "localhost" (no port), producing
+        // https://localhost/portal/verify which may not be routable in local dev.
+        let site_domain = app
+            .active_profile()
+            .and_then(|(_, p)| p.site_domain.clone())
+            .unwrap_or_else(|| "localhost".to_string());
+        cmd.env("SITE_DOMAIN", &site_domain);
 
         debug_info.push_str(" | local_cmd=bash scripts/make/login.sh");
 
@@ -1770,6 +2094,26 @@ fn handle_vault_setup(app: &mut App) -> Option<(String, app::MessageKind)> {
                             Ok(vault_pw) => {
                                 eprintln!("✓ Vault unlocked\n");
                                 let result = run_vault_upgrade(&app.repo_root, &vault_prefix, &vault_pw, true);
+                                let is_decrypt_failure = result.as_ref()
+                                    .map(|(msg, _)| msg.contains("vault_decrypt_failed"))
+                                    .unwrap_or(false);
+                                if is_decrypt_failure {
+                                    eprintln!("⚠ The vault file exists but can't be decrypted with this vault key.");
+                                    eprintln!("  Recreating vault from template with the current password...");
+                                    let vault_rel = format!(
+                                        "provision/ansible/roles/secrets/vars/vault.{vault_prefix}.yml"
+                                    );
+                                    let vault_path = app.repo_root.join(&vault_rel);
+                                    if vault_path.exists() {
+                                        let backup = vault_path.with_extension("yml.bak");
+                                        if std::fs::rename(&vault_path, &backup).is_ok() {
+                                            eprintln!("  ✓ Backed up old vault to {}", backup.display());
+                                        }
+                                    }
+                                    let result2 = run_vault_upgrade(&app.repo_root, &vault_prefix, &vault_pw, true);
+                                    app.vault_password = Some(vault_pw);
+                                    return result2;
+                                }
                                 app.vault_password = Some(vault_pw);
                                 return result;
                             }
@@ -1797,20 +2141,57 @@ fn handle_vault_setup(app: &mut App) -> Option<(String, app::MessageKind)> {
         return None;
     }
 
-    // Check for legacy plaintext password file — offer migration
+    // Check for legacy plaintext password file — verify it works, then offer migration
     if let Some(legacy_path) = vault::find_legacy_vault_pass(&vault_prefix) {
-        eprintln!(
-            "Found existing plaintext vault password: {}",
-            legacy_path.display()
-        );
-        eprintln!("Migrating to encrypted vault key...\n");
-
         match std::fs::read_to_string(&legacy_path) {
-            Ok(vault_pw) => {
-                let vault_pw = vault_pw.trim().to_string();
+            Ok(vault_pw_raw) => {
+                let mut vault_pw = vault_pw_raw.trim().to_string();
                 if vault_pw.is_empty() {
                     eprintln!("Warning: plaintext password file is empty. Skipping migration.");
                 } else {
+                    // Test whether the legacy password actually decrypts the vault file.
+                    // If it doesn't, prompt the user for the correct one before migrating.
+                    let vault_file = app.repo_root.join(format!(
+                        "provision/ansible/roles/secrets/vars/vault.{vault_prefix}.yml"
+                    ));
+                    let decrypt_ok = if vault_file.exists() {
+                        busibox_core::vault::verify_vault_decryption(&vault_file, &vault_pw)
+                            .unwrap_or(false)
+                    } else {
+                        true // No vault file yet — will be created; password is fine
+                    };
+
+                    if !decrypt_ok {
+                        eprintln!("⚠ The password in {} cannot decrypt the vault file.", legacy_path.display());
+                        eprintln!("Enter the correct Ansible vault password.\n");
+                        let mut corrected = false;
+                        for attempt in 1..=3 {
+                            match vault::prompt_password(&format!("Vault password (attempt {attempt}/3): ")) {
+                                Ok(pw) if pw.is_empty() => eprintln!("Password cannot be empty."),
+                                Ok(pw) => {
+                                    let ok = busibox_core::vault::verify_vault_decryption(&vault_file, &pw)
+                                        .unwrap_or(false);
+                                    if ok {
+                                        vault_pw = pw;
+                                        corrected = true;
+                                        break;
+                                    }
+                                    eprintln!("Incorrect password (attempt {attempt}/3).");
+                                }
+                                Err(e) => { eprintln!("Error: {e}"); break; }
+                            }
+                        }
+                        if !corrected {
+                            eprintln!("Could not verify vault password. Install will proceed without vault secrets.");
+                            eprintln!("Press Enter to continue...");
+                            let _ = std::io::stdin().read_line(&mut String::new());
+                            return None;
+                        }
+                    }
+
+                    eprintln!("Found existing vault password: {}", legacy_path.display());
+                    eprintln!("Migrating to encrypted vault key...\n");
+
                     // Encrypt with admin master password
                     eprintln!("Set a master password to protect this vault key.");
                     eprintln!("You'll need this password each time you deploy.\n");
@@ -1922,10 +2303,37 @@ fn handle_vault_setup(app: &mut App) -> Option<(String, app::MessageKind)> {
     create_ansible_vault(app, &vault_pw, &vault_prefix);
 
     let result = run_vault_upgrade(&app.repo_root, &vault_prefix, &vault_pw, true);
+    let is_decrypt_failure = result.as_ref()
+        .map(|(msg, _)| msg.contains("vault_decrypt_failed"))
+        .unwrap_or(false);
+    if is_decrypt_failure {
+        eprintln!("  ⚠ Vault file from a previous install detected — recreating with current password...");
+        let vault_rel = format!("provision/ansible/roles/secrets/vars/vault.{vault_prefix}.yml");
+        let vault_path = app.repo_root.join(&vault_rel);
+        if vault_path.exists() {
+            let backup = vault_path.with_extension("yml.bak");
+            if std::fs::rename(&vault_path, &backup).is_ok() {
+                eprintln!("  ✓ Backed up old vault to {}", backup.display());
+            }
+        }
+        create_ansible_vault(app, &vault_pw, &vault_prefix);
+        let result2 = run_vault_upgrade(&app.repo_root, &vault_prefix, &vault_pw, true);
+        app.vault_password = Some(vault_pw);
+        eprintln!("\n✓ Vault setup complete. Starting installation...\n");
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        return result2;
+    }
     app.vault_password = Some(vault_pw);
     eprintln!("\n✓ Vault setup complete. Starting installation...\n");
     std::thread::sleep(std::time::Duration::from_secs(1));
     result
+}
+
+fn ansible_vault_path() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let venv_bin = format!("{home}/.busibox/venv/bin");
+    let current = std::env::var("PATH").unwrap_or_default();
+    if current.is_empty() { venv_bin } else { format!("{venv_bin}:{current}") }
 }
 
 /// Run vault auto-upgrade after vault password becomes available.
@@ -2131,6 +2539,7 @@ fn create_ansible_vault(app: &App, vault_pw: &str, vault_prefix: &str) {
 
         let result = std::process::Command::new("ansible-vault")
             .args(["encrypt", &target_path.to_string_lossy(), "--vault-password-file", &env_script.to_string_lossy()])
+            .env("PATH", ansible_vault_path())
             .env("ANSIBLE_VAULT_PASSWORD", vault_pw)
             .output();
 
