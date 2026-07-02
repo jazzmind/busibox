@@ -237,11 +237,22 @@ BEDROCK_CURATED_MODELS = [
     ("ai21.jamba-1-5-mini-v1:0", "Jamba 1.5 Mini", "AI21 Jamba 1.5 Mini"),
 ]
 
-# Purposes that can be overridden via the UI
+# Purposes that can be overridden via the UI.
+#
+# Note: agent-api doesn't have filesystem access to
+# provision/ansible/group_vars/all/model_registry.yml at runtime (that lives
+# in the deploy/ansible checkout, not this container), so unlike the litellm
+# config generators (scripts/llm/generate-litellm-config.sh,
+# srv/deploy/src/service_routes.py::generate_litellm_config_from_registry),
+# which derive their purpose list from the registry generically, this list is
+# a hardcoded mirror of the registry's default_purposes keys and must be kept
+# in sync by hand when a new purpose is added there.
 CONFIGURABLE_PURPOSES = [
     "fast", "agent", "chat", "frontier", "fallback", "tool_calling", "test", "default",
     "cleanup", "parsing", "classify", "vision",
     "video", "image", "transcribe", "voice",
+    "code-writing", "code-reading", "code-testing",
+    "code-securing", "code-planning", "code-documenting",
 ]
 
 

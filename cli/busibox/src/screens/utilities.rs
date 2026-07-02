@@ -527,6 +527,18 @@ fn write_agent_files(tx: &mpsc::Sender<UtilitiesUpdate>, _master_key: &str) {
             "Use this agent to create unit tests, integration tests, mock data, or to automatically run the test suite and fix failing assertions.",
             "Read, Write, Patch, Bash",
         ),
+        (
+            "local-planner.md",
+            "code-planning",
+            "Use this agent to plan architecture, design multi-step implementation approaches, and evaluate tradeoffs before writing code. Do NOT use it to write or edit code directly.",
+            "Read, Grep, Glob, ViewDirectory, ListFiles",
+        ),
+        (
+            "local-security-reviewer.md",
+            "code-securing",
+            "Use this agent to review code for security vulnerabilities, unsafe patterns, and secrets/credential leaks before it ships.",
+            "Read, Grep, Glob, Bash",
+        ),
     ];
 
     for (filename, model, description, tools) in agents {

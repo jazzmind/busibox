@@ -98,21 +98,45 @@ def load_model_registry(busibox_path: str = None) -> dict:
 
 
 def get_model_purposes(registry: dict, environment: str = None) -> dict:
-    """Get the appropriate model_purposes based on environment.
-    
-    - development/demo: uses model_purposes_dev (MLX models)
-    - staging/production: uses model_purposes (vLLM + Bedrock)
+    """Get the merged model_purposes for an environment.
+
+    default_purposes provides the base assignment for every purpose;
+    environment-specific maps (model_purposes / model_purposes_dev) only need
+    to list the entries that differ. Mirrors the merge semantics used by
+    scripts/llm/generate-litellm-config.sh's get_model_for_purpose() and
+    provision/ansible/roles/litellm/files/generate_model_config.py.
+
+    - development/demo: default_purposes + model_purposes_dev overrides
+    - staging/production: default_purposes + model_purposes overrides
     """
     if environment is None:
         environment = os.getenv('ENVIRONMENT', os.getenv('NODE_ENV', 'development'))
-    
+
+    purposes = dict(registry.get('default_purposes', {}) or {})
     if environment in ('development', 'demo', 'dev'):
-        purposes = registry.get('model_purposes_dev', {})
-        if purposes:
-            return purposes
-    
-    # Fallback to standard model_purposes
-    return registry.get('model_purposes', {})
+        purposes.update(registry.get('model_purposes_dev', {}) or {})
+    else:
+        purposes.update(registry.get('model_purposes', {}) or {})
+    return purposes
+
+
+def resolve_purpose_to_model_key(purposes: dict, available: dict, purpose: str) -> str | None:
+    """Follow a purpose's alias chain (e.g. chat -> agent -> qwen3.5-4b-mlx)
+    within a merged purposes dict until landing on a concrete available_models
+    key. Mirrors generate-litellm-config.sh's get_model_for_purpose() alias
+    walk. Returns None if the purpose isn't present at all.
+    """
+    if purpose not in purposes:
+        return None
+    visited: set[str] = set()
+    target = purpose
+    while target in purposes and target not in visited:
+        visited.add(target)
+        value = purposes[target]
+        if value in available or value not in purposes:
+            return value
+        target = value
+    return purposes.get(purpose)
 
 
 def resolve_model_name(registry: dict, model_key: str) -> tuple[str, dict]:
@@ -269,18 +293,20 @@ def generate_litellm_config_from_registry(
     
     purposes = get_model_purposes(registry, environment)
     available = registry.get('available_models', {})
-    
-    # Define which purposes map to LiteLLM model names
-    # These are the model names that services request from LiteLLM
-    litellm_purposes = [
-        'test', 'fast', 'classify', 'cleanup', 'parsing', 'agent', 'chat', 'frontier', 'default',
-        'tool_calling', 'video', 'image', 'transcribe', 'voice'
-    ]
-    
+
+    # Purposes that map to LiteLLM model names, derived from the merged
+    # purposes dict itself rather than a hand-maintained list (this was
+    # previously a hardcoded subset that silently dropped any new purpose
+    # added to the registry, e.g. the code-* purposes). 'embedding' is
+    # excluded because it's served by a dedicated FastEmbed service, not
+    # LiteLLM (matches provision/ansible/roles/litellm/files/generate_model_config.py).
+    excluded_purposes = {'embedding'}
+    litellm_purposes = [p for p in purposes.keys() if p not in excluded_purposes]
+
     model_list = []
-    
+
     for purpose in litellm_purposes:
-        model_key = purposes.get(purpose)
+        model_key = resolve_purpose_to_model_key(purposes, available, purpose)
         if not model_key:
             continue
         
@@ -323,7 +349,7 @@ def generate_litellm_config_from_registry(
     # target explicit model entries, not only purpose aliases.
     unique_model_keys = []
     for purpose in litellm_purposes:
-        model_key = purposes.get(purpose)
+        model_key = resolve_purpose_to_model_key(purposes, available, purpose)
         if model_key and model_key not in unique_model_keys:
             unique_model_keys.append(model_key)
 
@@ -333,7 +359,7 @@ def generate_litellm_config_from_registry(
 
         # Pick API base from the first purpose that points to this model key.
         representative_purpose = next(
-            (p for p in litellm_purposes if purposes.get(p) == model_key),
+            (p for p in litellm_purposes if resolve_purpose_to_model_key(purposes, available, p) == model_key),
             'default',
         )
 
