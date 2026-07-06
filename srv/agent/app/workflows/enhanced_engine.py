@@ -571,8 +571,13 @@ async def _execute_agent_step(
             # PydanticAI result with Pydantic model
             output = agent_result.data.model_dump()
         elif isinstance(agent_result.data, str):
-            # BaseStreamingAgent result - data is a string
-            output = {"result": agent_result.data, "content": agent_result.data}
+            # BaseStreamingAgent result - try to parse as JSON for structured results
+            import json as _json
+            try:
+                parsed = _json.loads(agent_result.data)
+                output = parsed if isinstance(parsed, dict) else {"result": agent_result.data, "content": agent_result.data}
+            except Exception:
+                output = {"result": agent_result.data, "content": agent_result.data}
         elif isinstance(agent_result.data, dict):
             # Already a dict
             output = agent_result.data
@@ -1194,3 +1199,398 @@ async def execute_enhanced_workflow(
     await session.refresh(execution)
     
     return execution
+
+
+# =============================================================================
+# Inline Pipeline Execution (no WorkflowExecution tracking)
+# Used by EnhancedDatabasePipelineAgent in create_agent_from_definition()
+# =============================================================================
+
+def _deep_resolve(value: Any, context: Dict[str, Any]) -> Any:
+    """
+    Recursively resolve $.references in any nested structure (dict, list, string).
+    Unlike _resolve_args which only recurses one level into dicts-in-dicts,
+    this handles dicts nested inside lists (e.g. where clause conditions).
+    """
+    if isinstance(value, dict):
+        return {k: _deep_resolve(v, context) for k, v in value.items()}
+    elif isinstance(value, list):
+        return [_deep_resolve(v, context) for v in value]
+    elif isinstance(value, str):
+        return _resolve_value(value, context)
+    else:
+        return value
+
+
+async def _get_inline_data_client(
+    session: AsyncSession,
+    principal: Principal,
+    fallback_client: BusiboxClient,
+) -> BusiboxClient:
+    """Get a BusiboxClient with data-api audience token for inline tool steps."""
+    if session and principal:
+        try:
+            token_response = await get_or_exchange_token(
+                session=session,
+                principal=principal,
+                scopes=["data.read", "data.write"],
+                purpose="data",
+            )
+            return BusiboxClient(access_token=token_response.access_token)
+        except Exception as e:
+            logger.warning(f"[inline_pipeline] Failed to exchange token for data-api: {e}")
+    return fallback_client
+
+
+def _execute_compute_step(step: Dict[str, Any], context: Dict[str, Any]) -> Any:
+    """
+    Execute a compute step for deterministic value generation.
+
+    Supported expressions:
+      - date_offset: returns an ISO date string offset by offset_days from today
+      - uuid: generates a new UUID v4
+      - coalesce_uuid: returns the resolved value if non-null, else a new UUID
+      - now: returns current UTC timestamp
+      - count: counts items in a list
+    """
+    import uuid as _uuid
+    from datetime import date, datetime, timedelta, timezone
+
+    expression = step.get("expression")
+    args = step.get("args", {})
+    resolved_args = _deep_resolve(args, context)
+
+    if expression == "date_offset":
+        offset_days = int(resolved_args.get("offset_days", 0))
+        result_date = date.today() + timedelta(days=offset_days)
+        return {
+            "iso_date": result_date.isoformat(),
+            "iso_datetime": result_date.isoformat() + "T00:00:00",
+        }
+
+    elif expression == "uuid":
+        return {"value": str(_uuid.uuid4())}
+
+    elif expression == "coalesce_uuid":
+        val = resolved_args.get("value")
+        if val and isinstance(val, str) and val.strip():
+            return {"value": val.strip()}
+        return {"value": str(_uuid.uuid4())}
+
+    elif expression == "now":
+        now = datetime.now(timezone.utc)
+        return {
+            "iso": now.isoformat(),
+            "timestamp": now.timestamp(),
+        }
+
+    elif expression == "count":
+        items = resolved_args.get("items")
+        if not isinstance(items, list):
+            items = _resolve_value(str(resolved_args.get("items_path", "")), context) or []
+        return {"count": len(items) if isinstance(items, list) else 0}
+
+    else:
+        logger.warning(f"[inline_pipeline] Unknown compute expression: {expression}")
+        return None
+
+
+async def _execute_inline_tool_step(
+    tool_name: str,
+    resolved_args: Dict[str, Any],
+    busibox_client: BusiboxClient,
+    principal: Principal,
+    session: AsyncSession,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """
+    Execute a tool step in an inline pipeline (without WorkflowExecution tracking).
+
+    Extends the enhanced engine's tool support with data-api tools:
+      query_data, insert_records, update_records, trigger_task_run
+
+    Also supports web tools: web_scraper, web_search
+    """
+    from app.tools.data_tool import _sanitize_where
+
+    if tool_name == "query_data":
+        data_client = await _get_inline_data_client(session, principal, busibox_client)
+        doc_id = resolved_args.get("document_id") or resolved_args.get("doc_id")
+        if not doc_id:
+            raise WorkflowExecutionError("query_data: document_id is required")
+        body: Dict[str, Any] = {
+            k: v for k, v in resolved_args.items()
+            if k not in ("document_id", "doc_id")
+        }
+        if body.get("where"):
+            body["where"] = _sanitize_where(body["where"])
+        # Map order_by key (camelCase for data-api)
+        if "order_by" in body:
+            body["orderBy"] = body.pop("order_by")
+        response = await data_client.request("POST", f"/data/{doc_id}/query", json=body)
+        return response  # {"records": [...], "total": N, ...}
+
+    elif tool_name == "insert_records":
+        data_client = await _get_inline_data_client(session, principal, busibox_client)
+        doc_id = resolved_args.get("document_id")
+        records = resolved_args.get("records", [])
+        if not isinstance(records, list):
+            records = [records] if records else []
+        response = await data_client.request(
+            "POST", f"/data/{doc_id}/records",
+            json={"records": records, "validate": True},
+        )
+        return response
+
+    elif tool_name == "update_records":
+        data_client = await _get_inline_data_client(session, principal, busibox_client)
+        doc_id = resolved_args.get("document_id")
+        updates = resolved_args.get("updates", {})
+        where = resolved_args.get("where")
+        if where:
+            where = _sanitize_where(where)
+        response = await data_client.request(
+            "PUT", f"/data/{doc_id}/records",
+            json={"updates": updates, "where": where, "validate": True},
+        )
+        return response
+
+    elif tool_name == "trigger_task_run":
+        from app.tools.trigger_task_tool import trigger_task_run as _trigger
+
+        class _FakeDeps:
+            def __init__(self, client: BusiboxClient, meta: Dict[str, Any]) -> None:
+                self.busibox_client = client
+                self.metadata = meta
+
+        class _FakeCtx:
+            def __init__(self, deps: _FakeDeps) -> None:
+                self.deps = deps
+
+        ctx = _FakeCtx(_FakeDeps(busibox_client, metadata or {}))
+        result = await _trigger(
+            ctx,  # type: ignore[arg-type]
+            task_id=resolved_args.get("task_id", ""),
+            reason=resolved_args.get("reason", ""),
+            input_override=resolved_args.get("input_override"),
+        )
+        if hasattr(result, "model_dump"):
+            return result.model_dump()
+        return result
+
+    elif tool_name == "web_scraper":
+        from app.tools.web_scraper_tool import scrape_webpage
+        result = await scrape_webpage(**resolved_args)
+        if hasattr(result, "model_dump"):
+            return result.model_dump()
+        return result
+
+    elif tool_name == "web_search":
+        from app.tools.web_search_tool import search_web
+        result = await search_web(**resolved_args)
+        if hasattr(result, "model_dump"):
+            return result.model_dump()
+        return result
+
+    elif tool_name in ("search", "rag"):
+        if session and principal:
+            token_response = await get_or_exchange_token(
+                session=session, principal=principal,
+                scopes=["search.read"], purpose="search",
+            )
+            search_client = BusiboxClient(access_token=token_response.access_token)
+            if tool_name == "search":
+                result = await search_client.search(**resolved_args)
+            else:
+                result = await search_client.rag_query(**resolved_args)
+            if hasattr(result, "model_dump"):
+                return result.model_dump()
+            return result
+
+    else:
+        raise WorkflowExecutionError(f"Unsupported tool in inline pipeline: '{tool_name}'")
+
+
+async def _execute_inline_step(
+    step: Dict[str, Any],
+    context: Dict[str, Any],
+    busibox_client: BusiboxClient,
+    principal: Principal,
+    session: AsyncSession,
+    metadata: Optional[Dict[str, Any]],
+    usage_limits: UsageLimits,
+) -> Any:
+    """Dispatch a single step in an inline pipeline (no WorkflowExecution tracking)."""
+    step_type = step.get("type", "tool")
+
+    # Optional conditional skip: run_if_step references a prior condition step
+    run_if_step = step.get("run_if_step")
+    if run_if_step and run_if_step in context:
+        cond_result = context[run_if_step]
+        if isinstance(cond_result, dict) and not cond_result.get("condition_result", True):
+            logger.info(
+                f"[inline_pipeline] Skipping step '{step.get('id')}' "
+                f"because run_if_step '{run_if_step}' condition was False"
+            )
+            return None
+
+    if step_type == "tool":
+        tool_name = step.get("tool", "")
+        tool_args = step.get("tool_args", step.get("args", {}))
+        resolved_args = _deep_resolve(tool_args, context)
+        return await _execute_inline_tool_step(
+            tool_name, resolved_args, busibox_client, principal, session, metadata
+        )
+
+    elif step_type == "agent":
+        return await _execute_agent_step(
+            session, step, context, busibox_client, principal, usage_limits
+        )
+
+    elif step_type == "condition":
+        return await _execute_condition_step(step, context)
+
+    elif step_type == "loop":
+        return await _execute_inline_loop_step(
+            step, context, busibox_client, principal, session, metadata, usage_limits
+        )
+
+    elif step_type == "compute":
+        return _execute_compute_step(step, context)
+
+    else:
+        logger.warning(f"[inline_pipeline] Unknown step type: '{step_type}' — skipping")
+        return None
+
+
+async def _execute_inline_loop_step(
+    step: Dict[str, Any],
+    context: Dict[str, Any],
+    busibox_client: BusiboxClient,
+    principal: Principal,
+    session: AsyncSession,
+    metadata: Optional[Dict[str, Any]],
+    usage_limits: UsageLimits,
+) -> Dict[str, Any]:
+    """Execute a loop step in an inline pipeline (no WorkflowExecution tracking)."""
+    loop_config = step.get("loop_config", {})
+    items_path = loop_config.get("items_path")
+    item_variable = loop_config.get("item_variable", "item")
+    loop_steps = loop_config.get("steps", [])
+    max_items = loop_config.get("max_items")
+
+    items = _resolve_value(items_path, context)
+    if items is None:
+        logger.info(f"[inline_loop] items_path '{items_path}' resolved to None, treating as []")
+        items = []
+    if not isinstance(items, list):
+        raise WorkflowExecutionError(
+            f"Loop items_path must resolve to a list, got {type(items)}"
+        )
+
+    if max_items is not None:
+        items = items[: int(max_items)]
+
+    logger.info(f"[inline_loop] Executing over {len(items)} items")
+
+    results = []
+    for i, item in enumerate(items):
+        loop_context = {
+            **context,
+            item_variable: item,
+            "loop_index": i,
+            "loop_count": len(items),
+        }
+
+        for loop_step in loop_steps:
+            loop_step_id = loop_step.get("id")
+            try:
+                step_result = await _execute_inline_step(
+                    loop_step, loop_context, busibox_client, principal, session, metadata, usage_limits
+                )
+            except Exception as e:
+                logger.error(
+                    f"[inline_loop] Loop step '{loop_step_id}' failed for item {i}: {e}",
+                    exc_info=True,
+                )
+                if loop_step.get("on_error") == "continue":
+                    step_result = {"error": str(e)}
+                else:
+                    raise
+            if loop_step_id:
+                loop_context[loop_step_id] = step_result
+
+        # Collect per-item result (only the step outputs, not the full context)
+        item_result: Dict[str, Any] = {item_variable: item}
+        for ls in loop_steps:
+            ls_id = ls.get("id")
+            if ls_id:
+                item_result[ls_id] = loop_context.get(ls_id)
+        results.append(item_result)
+
+    return {"results": results, "count": len(results), "total_items": len(items)}
+
+
+async def execute_inline_pipeline(
+    steps: List[Dict[str, Any]],
+    initial_context: Dict[str, Any],
+    busibox_client: BusiboxClient,
+    principal: Principal,
+    session: AsyncSession,
+    metadata: Optional[Dict[str, Any]] = None,
+    usage_limits: Optional[UsageLimits] = None,
+) -> Dict[str, Any]:
+    """
+    Execute an enhanced pipeline inline (without WorkflowExecution tracking).
+
+    Supports all enhanced engine step types (tool, agent, condition, loop) plus:
+      - compute: Deterministic value generation (date_offset, uuid, coalesce_uuid, now, count)
+      - Extended tools: query_data, insert_records, update_records, trigger_task_run
+
+    Step outputs are stored in context as ``context[step_id]`` and can be
+    referenced by later steps using ``$.step_id.field`` syntax.
+
+    Args:
+        steps: List of step definitions
+        initial_context: Initial context (e.g. ``{"input": {document IDs...}}`` )
+        busibox_client: Authenticated Busibox client (used as fallback / non-data calls)
+        principal: User principal for on-demand token exchange
+        session: Database session
+        metadata: Task/execution metadata (task_id, continuation_depth, etc.)
+        usage_limits: Optional guardrail tracker
+
+    Returns:
+        Final execution context with all step outputs keyed by step id.
+    """
+    if usage_limits is None:
+        usage_limits = UsageLimits()
+
+    context = dict(initial_context)
+
+    for step in steps:
+        step_id = step.get("id", "unknown")
+        step_type = step.get("type", "tool")
+        on_error = step.get("on_error", "raise")
+
+        logger.info(f"[inline_pipeline] Step '{step_id}' ({step_type})")
+
+        try:
+            result = await _execute_inline_step(
+                step, context, busibox_client, principal, session, metadata, usage_limits
+            )
+            if step_id:
+                context[step_id] = result
+        except Exception as e:
+            logger.error(
+                f"[inline_pipeline] Step '{step_id}' failed: {e}", exc_info=True
+            )
+            if step_id:
+                context[f"{step_id}_error"] = str(e)
+            if on_error == "continue":
+                logger.info(
+                    f"[inline_pipeline] Continuing pipeline after error in step '{step_id}'"
+                )
+                continue
+            raise
+
+    return context

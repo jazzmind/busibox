@@ -3017,7 +3017,87 @@ def create_agent_from_definition(definition: Any) -> BaseStreamingAgent:
     pipeline_config = workflows.get("pipeline", [])
     
     if pipeline_config:
-        # Create agent with predefined pipeline
+        # Detect enhanced pipeline: any step that carries a "type" field uses the
+        # enhanced inline executor rather than the flat PipelineStep mechanism.
+        is_enhanced = any("type" in step for step in pipeline_config)
+        
+        if is_enhanced:
+            # Enhanced DB-synced pipeline agent.
+            # Executes structured steps (tool, agent, condition, loop, compute)
+            # via execute_inline_pipeline() — no WorkflowExecution tracking.
+            class EnhancedDatabasePipelineAgent(BaseStreamingAgent):
+                def __init__(self, cfg: AgentConfig, pipeline: List[Dict]) -> None:
+                    super().__init__(cfg)
+                    self._enhanced_pipeline = pipeline
+
+                async def run(
+                    self,
+                    query: str,
+                    deps: Any = None,
+                    context: Optional[dict] = None,
+                ) -> Any:
+                    from app.workflows.enhanced_engine import execute_inline_pipeline
+                    from app.workflows.engine import UsageLimits
+                    import json as _json
+
+                    ctx = context or {}
+                    principal = ctx.get("principal")
+                    session = ctx.get("session")
+                    metadata: Dict[str, Any] = ctx.get("metadata") or {}
+
+                    # Build busibox_client from the principal's token
+                    from app.clients.busibox import BusiboxClient as _BC
+                    if deps and hasattr(deps, "busibox_client"):
+                        busibox_client = deps.busibox_client
+                    elif principal and principal.token:
+                        busibox_client = _BC(access_token=principal.token)
+                    else:
+                        busibox_client = _BC()
+
+                    # Build initial pipeline context.
+                    # The "input" key merges all metadata fields (document IDs,
+                    # task_id, continuation_depth, etc.) so that steps can access
+                    # them via $.input.documentIdSites, $.input.task_id, etc.
+                    initial_context: Dict[str, Any] = {"input": dict(metadata)}
+                    # Also try to parse the query as JSON (may carry extra fields).
+                    try:
+                        query_data = _json.loads(query)
+                        if isinstance(query_data, dict):
+                            initial_context["input"].update(query_data)
+                    except Exception:
+                        initial_context["input"]["query"] = query
+
+                    logger.info(
+                        f"{self.name} enhanced pipeline starting: "
+                        f"{len(self._enhanced_pipeline)} steps, "
+                        f"input_keys={list(initial_context['input'].keys())}"
+                    )
+
+                    try:
+                        result_context = await execute_inline_pipeline(
+                            steps=self._enhanced_pipeline,
+                            initial_context=initial_context,
+                            busibox_client=busibox_client,
+                            principal=principal,
+                            session=session,
+                            metadata=metadata,
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"{self.name} enhanced pipeline failed: {e}", exc_info=True
+                        )
+                        result_context = {"error": str(e)}
+
+                    class _AgentResult:
+                        def __init__(self, data: Any) -> None:
+                            self.data = data
+                            self.output = data
+
+                    return _AgentResult(result_context)
+
+            return EnhancedDatabasePipelineAgent(config, pipeline_config)
+        
+        # Legacy flat pipeline (backward compatible)
         class DatabasePipelineAgent(BaseStreamingAgent):
             def __init__(self, config: AgentConfig, pipeline: List[Dict]):
                 super().__init__(config)
