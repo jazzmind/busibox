@@ -155,7 +155,9 @@ location ^~ {path} {{
 
             if svc.stripPath:
                 strip = (svc.stripPrefix or path).rstrip("/")
-                block = f"""location ^~ {path}/ {{
+                # Use ^~ without trailing slash so /path (bare) also matches,
+                # not just /path/. The rewrite handles both forms correctly.
+                block = f"""location ^~ {path} {{
     set $backend_{var_name} http://{backend};
     rewrite ^{strip}(/.*)?$ $1 break;
     proxy_pass $backend_{var_name};
@@ -182,8 +184,10 @@ location ^~ {path} {{
     proxy_request_buffering off;
 }}"""
             else:
-                # Pass through the full path as-is
-                block = f"""location ^~ {path}/ {{
+                # Pass through the full path as-is.
+                # Use ^~ without trailing slash so /path (bare) also matches.
+                # Next.js with basePath=/path serves the home page at /path.
+                block = f"""location ^~ {path} {{
     set $backend_{var_name} http://{backend};
     proxy_pass $backend_{var_name};
     proxy_http_version 1.1;
