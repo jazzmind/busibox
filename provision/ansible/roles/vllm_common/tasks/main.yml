@@ -232,10 +232,14 @@
 # --index-strategy unsafe-best-match lets uv consider vllm from both the
 # nightly index AND PyPI, picking the highest version with a matching
 # platform wheel.
+# --reinstall-package vllm forces uv to re-resolve and download the latest
+# nightly even if a dev version is already installed (uv's cache otherwise
+# considers the installed version as satisfying the bare "vllm" requirement).
 # See: https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3.5.html
 - name: Install vLLM (nightly) with uv
   shell: |
     {{ vllm_venv_dir }}/bin/uv pip install -U vllm \
+      --reinstall-package vllm \
       --torch-backend=auto \
       --prerelease=allow \
       --index-strategy unsafe-best-match \
@@ -244,6 +248,17 @@
     executable: /bin/bash
   environment:
     VIRTUAL_ENV: "{{ vllm_venv_dir }}"
+  tags: [vllm_install]
+
+- name: Check vLLM version after install
+  shell: "{{ vllm_venv_dir }}/bin/python -c 'import vllm; print(vllm.__version__)'"
+  register: new_vllm_version
+  changed_when: false
+  tags: [vllm_install]
+
+- name: Display vLLM upgrade result
+  debug:
+    msg: "vLLM {{ existing_vllm_version.stdout }} → {{ new_vllm_version.stdout }}"
   tags: [vllm_install]
 
 # vllm._C is linked against libcudart.so.12 even in cu130 builds.
@@ -266,6 +281,61 @@
     executable: /bin/bash
   environment:
     VIRTUAL_ENV: "{{ vllm_venv_dir }}"
+  tags: [vllm_install]
+
+# torchaudio is dragged in by transformers (audio_utils import chain) and will
+# crash vLLM on import if its CUDA build doesn't match torch. It is NOT needed
+# for vision-language (Qwen VL) or text models — transformers handles the
+# missing import gracefully. Always remove it; unconditional and idempotent.
+- name: Remove torchaudio to prevent CUDA version mismatch with torch
+  shell: |
+    {{ vllm_venv_dir }}/bin/uv pip uninstall torchaudio 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  environment:
+    VIRTUAL_ENV: "{{ vllm_venv_dir }}"
+  changed_when: false
+  tags: [vllm_install]
+
+- name: Sync flashinfer-cubin to match flashinfer version
+  shell: |
+    FI_VER=$({{ vllm_venv_dir }}/bin/python -c "import importlib.metadata; print(importlib.metadata.version('flashinfer'))" 2>/dev/null || echo "")
+    if [ -n "$FI_VER" ]; then
+      CUBIN_VER=$({{ vllm_venv_dir }}/bin/python -c "import importlib.metadata; print(importlib.metadata.version('flashinfer-cubin'))" 2>/dev/null || echo "")
+      if [ "$FI_VER" != "$CUBIN_VER" ]; then
+        echo "flashinfer=$FI_VER vs flashinfer-cubin=$CUBIN_VER — upgrading cubin..."
+        {{ vllm_venv_dir }}/bin/uv pip install "flashinfer-cubin==$FI_VER" --prerelease=allow 2>/dev/null || \
+          echo "No matching flashinfer-cubin wheel for $FI_VER; FLASHINFER_DISABLE_VERSION_CHECK=1 will handle it at runtime"
+      else
+        echo "flashinfer and flashinfer-cubin both at $FI_VER — OK"
+      fi
+    else
+      echo "flashinfer not installed, skipping cubin sync"
+    fi
+  args:
+    executable: /bin/bash
+  environment:
+    VIRTUAL_ENV: "{{ vllm_venv_dir }}"
+  register: flashinfer_sync
+  changed_when: "'upgrading cubin' in flashinfer_sync.stdout"
+  tags: [vllm_install]
+
+- name: Display flashinfer sync result
+  debug:
+    msg: "{{ flashinfer_sync.stdout | trim }}"
+  tags: [vllm_install]
+
+- name: Verify vllm imports cleanly after torchaudio removal
+  shell: |
+    {{ vllm_venv_dir }}/bin/python -c "import vllm; print('vllm', vllm.__version__, 'OK')"
+  register: vllm_import_check
+  changed_when: false
+  failed_when: vllm_import_check.rc != 0
+  tags: [vllm_install]
+
+- name: Display vllm import verification
+  debug:
+    msg: "{{ vllm_import_check.stdout | trim }}"
   tags: [vllm_install]
 
 - name: Discover nvidia library paths in venv
