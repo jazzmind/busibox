@@ -1494,6 +1494,27 @@ fn spawn_install_worker(app: &mut App) {
             }
         }
 
+        // Push ssl/ directory to remote (cert files are gitignored and excluded
+        // from the main rsync). Must happen after prepare_ssl_inputs / mkcert
+        // so the files exist locally before we push them.
+        if is_remote {
+            if let Some((ref host, ref user, ref key)) = ssh_details {
+                let display_host = profile_host.as_deref().unwrap_or(host);
+                let remote_path_val = profile_remote_path
+                    .as_deref()
+                    .unwrap_or(&remote_path_input);
+                if let Err(e) = remote::sync_ssl_dir(
+                    &repo_root, display_host, user, key, remote_path_val,
+                ) {
+                    let _ = tx.send(InstallUpdate::Log(format!(
+                        "WARNING: SSL cert sync failed: {e}"
+                    )));
+                } else {
+                    let _ = tx.send(InstallUpdate::Log("✓ SSL certificates synced".into()));
+                }
+            }
+        }
+
         // Propagate DEV_APPS_DIR to state/env files so Docker Compose picks it up.
         // For remote installs these files are rsync'd to the remote host.
         if profile_backend == "docker" {

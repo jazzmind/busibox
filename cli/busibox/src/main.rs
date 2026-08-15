@@ -1126,6 +1126,11 @@ fn perform_sync_then_admin_login(app: &mut App) {
                 }
             }
 
+            // Push ssl/ directory (gitignored, excluded from main rsync)
+            if let Err(e) = remote::sync_ssl_dir(&app.repo_root, host, user, key, remote_path) {
+                app.set_message(&format!("WARNING: SSL cert sync failed: {e}"), MessageKind::Warning);
+            }
+
             // Clean up stale local state from remote (.busibox/, state files, pass files)
             let cleanup_ssh = crate::modules::ssh::SshConnection::new(host, user, key);
             let _ = remote::cleanup_remote_state(&cleanup_ssh, remote_path);
@@ -1251,6 +1256,11 @@ fn perform_code_sync(app: &mut App) {
             app.set_message(&format!("WARNING: vault push failed: {e}"), MessageKind::Warning);
             return;
         }
+    }
+
+    // Push ssl/ directory (gitignored, excluded from main rsync)
+    if let Err(e) = remote::sync_ssl_dir(&app.repo_root, host, user, key, remote_path) {
+        app.set_message(&format!("WARNING: SSL cert sync failed: {e}"), MessageKind::Warning);
     }
 
     // Clean up stale local state on remote (.busibox/, state files, vault pass files)

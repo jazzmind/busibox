@@ -38,6 +38,13 @@
   set_fact:
     parent_domain: "{{ full_domain.split('.', 1)[1] if full_domain.split('.')|length > 2 else full_domain }}"
 
+- name: List SSL source directory contents
+  shell: "ls -la {{ ssl_source_dir }}/ 2>&1 || echo 'DIRECTORY_EMPTY_OR_MISSING'"
+  register: ssl_dir_listing
+  delegate_to: localhost
+  become: false
+  changed_when: false
+
 - name: Debug SSL lookup
   debug:
     msg: |
@@ -45,6 +52,8 @@
       - Full domain: {{ full_domain }}
       - Parent domain: {{ parent_domain }}
       - Source directory: {{ ssl_source_dir }}
+      - Directory contents:
+      {{ ssl_dir_listing.stdout }}
 
 # Check file existence
 - name: Check for exact domain certificate (with fullchain)
@@ -344,16 +353,39 @@
     group: root
   when: ssl_mode_used != 'selfsigned'
 
-# Generate self-signed if needed
-- name: Generate self-signed certificate
+# Self-signed fallback: NEVER overwrite existing certs on the target.
+# Only generate self-signed if no cert files exist on the target at all.
+- name: Check if cert already exists on target
+  stat:
+    path: "/etc/ssl/busibox/{{ full_domain }}.crt"
+  register: target_cert_stat
+  when: ssl_mode_used == 'selfsigned'
+
+- name: Check if key already exists on target
+  stat:
+    path: "/etc/ssl/busibox/{{ full_domain }}.key"
+  register: target_key_stat
+  when: ssl_mode_used == 'selfsigned'
+
+- name: Warn - keeping existing target certs (no source certs found)
+  debug:
+    msg: |
+      ⚠️  No SSL source certificates found in {{ ssl_source_dir }}, but valid cert/key
+      already exists on target at /etc/ssl/busibox/. Keeping existing certificates.
+      To update certificates, place new cert files in the ssl/ directory.
+  when:
+    - ssl_mode_used == 'selfsigned'
+    - (target_cert_stat.stat.exists | default(false)) and (target_key_stat.stat.exists | default(false))
+
+- name: Generate self-signed certificate (no certs exist anywhere)
   command: >
     openssl req -x509 -nodes -days 365 -newkey rsa:2048
     -keyout /etc/ssl/busibox/{{ full_domain }}.key
     -out /etc/ssl/busibox/{{ full_domain }}.crt
     -subj "/C=US/ST=State/L=City/O=Organization/CN={{ full_domain }}"
-  args:
-    creates: /etc/ssl/busibox/{{ full_domain }}.crt
-  when: ssl_mode_used == 'selfsigned'
+  when:
+    - ssl_mode_used == 'selfsigned'
+    - not (target_cert_stat.stat.exists | default(false)) or not (target_key_stat.stat.exists | default(false))
 
 # Set final paths for nginx templates
 - name: Set SSL certificate paths for NGINX
