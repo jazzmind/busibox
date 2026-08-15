@@ -122,3 +122,6 @@ k8s/terraform/.terraform/
 k8s/terraform/*.tfstate*
 provision/.cache/*
 mcp.json
+
+# HubSpot config file
+hubspot.config.yml

@@ -1,0 +1,11 @@
+Cashman is rolling out a new internal platform called Busibox. It's a secure, company-hosted system that gives you access to AI-powered tools built specifically for Cashman's work. You log in with your regular Microsoft account—the same one you use for Outlook and Teams—so there's no new password to remember. Let me show you what's inside.
+
+The first thing you'll see is the Chat assistant. Think of it as a knowledgeable colleague who's available around the clock. Right now, it can answer questions about HR policies, company procedures, and general Cashman information. For example, I can ask about our PTO policy and get a clear answer in seconds, with the source referenced so you can verify it. You can also ask it follow-up questions, just like a normal conversation. We're gradually expanding the knowledge base, so it will cover more departments and topics over time.
+
+Busibox also includes purpose-built applications. The AI Calculator, for instance, handles the kinds of calculations you encounter on the job—unit conversions, material estimates, cost projections. You type what you need in plain language, and it does the math for you.
+
+For our dredging and marine operations teams, there are apps designed around your daily workflows. You can log production data, track equipment status, and pull up project information without switching between spreadsheets and emails. Everything stays in one place, and the data is available to your team in real time.
+
+Finance and HR have their own set of tools as well. Whether it's submitting expenses, tracking invoices, managing employee certifications, or running onboarding checklists—these apps are tailored to how Cashman actually works, not generic software you have to adapt to.
+
+A few important things to know: Busibox runs on Cashman's own infrastructure, so your data never leaves the company's network. Access is controlled through your Microsoft account, and each application has its own permission settings so you only see what's relevant to your role. If you have questions, reach out to IT or your department lead. We're excited to put these tools in your hands.

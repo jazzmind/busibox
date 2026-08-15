@@ -2845,6 +2845,16 @@ class BaseStreamingAgent(StreamingAgent):
         """
         parts = []
 
+        # Always ground the model in the current date/time so it can answer
+        # relative-time questions ("is tomorrow a holiday?") correctly instead
+        # of falling back to its training cutoff.
+        from datetime import datetime as _dt, timezone as _tz
+        _now = _dt.now(_tz.utc)
+        parts.append("## Current Date and Time")
+        parts.append(f"Today is {_now.strftime('%A, %B %d, %Y, %H:%M UTC')}.")
+        parts.append("When the user refers to a month, day, or time period without specifying a year, assume the current year unless context clearly indicates otherwise.")
+        parts.append("")
+
         # Add role-gated SKILL.md skills if enabled.
         try:
             skills_prompt = get_skills_service().render_skills_prompt(context.principal)
@@ -2853,7 +2863,7 @@ class BaseStreamingAgent(StreamingAgent):
                 parts.append("")
         except Exception as e:
             logger.debug(f"Failed to render skills prompt: {e}")
-        
+
         if context.insights_enabled:
             if context.relevant_insights:
                 parts.append("## Relevant User Context (from past conversations)")

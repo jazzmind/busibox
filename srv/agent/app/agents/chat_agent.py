@@ -423,7 +423,10 @@ class ChatAgent(BaseStreamingAgent):
         default = self._heuristic_fast_ack(query)
         enabled_tools = [t for t in self.config.tools if ToolRegistry.has(t)]
         has_attachments = bool(context.attachment_metadata)
+        from datetime import datetime as _dt, timezone as _tz
+        _today = _dt.now(_tz.utc).strftime('%A, %B %d, %Y')
         prompt = (
+            f"Today is {_today}. Use this as the current date for any time-relative reasoning.\n"
             "You are deciding how to handle a user message.\n"
             "Return ONLY JSON with keys: action_type, needs_tools, response, follow_up_question, confidence, complexity.\n"
             "Rules:\n"
