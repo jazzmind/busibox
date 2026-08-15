@@ -55,61 +55,51 @@
       - Directory contents:
       {{ ssl_dir_listing.stdout }}
 
-# Check file existence
-- name: Check for exact domain certificate (with fullchain)
-  stat:
-    path: "{{ ssl_source_dir }}/{{ full_domain }}.fullchain.crt"
-  register: exact_fullchain_stat
+# Check file existence using shell (stat module has issues with delegated
+# tasks on some Proxmox setups — shell-based checks are reliable)
+- name: Check for SSL certificate files on controller
+  shell: |
+    exact_fullchain=false; exact_cert=false; exact_key=false
+    wildcard_fullchain=false; wildcard_cert=false; wildcard_key=false
+    [ -f "{{ ssl_source_dir }}/{{ full_domain }}.fullchain.crt" ] && exact_fullchain=true
+    [ -f "{{ ssl_source_dir }}/{{ full_domain }}.crt" ] && exact_cert=true
+    [ -f "{{ ssl_source_dir }}/{{ full_domain }}.key" ] && exact_key=true
+    [ -f "{{ ssl_source_dir }}/{{ parent_domain }}.fullchain.crt" ] && wildcard_fullchain=true
+    [ -f "{{ ssl_source_dir }}/{{ parent_domain }}.crt" ] && wildcard_cert=true
+    [ -f "{{ ssl_source_dir }}/{{ parent_domain }}.key" ] && wildcard_key=true
+    echo "{\"exact_fullchain\":$exact_fullchain,\"exact_cert\":$exact_cert,\"exact_key\":$exact_key,\"wildcard_fullchain\":$wildcard_fullchain,\"wildcard_cert\":$wildcard_cert,\"wildcard_key\":$wildcard_key}"
+  register: ssl_file_check
   delegate_to: localhost
   become: false
+  changed_when: false
 
-- name: Check for exact domain certificate (without fullchain)
-  stat:
-    path: "{{ ssl_source_dir }}/{{ full_domain }}.crt"
-  register: exact_cert_stat
-  delegate_to: localhost
-  become: false
+- name: Parse SSL file check results
+  set_fact:
+    ssl_check: "{{ ssl_file_check.stdout | from_json }}"
 
-- name: Check for exact domain key
-  stat:
-    path: "{{ ssl_source_dir }}/{{ full_domain }}.key"
-  register: exact_key_stat
-  delegate_to: localhost
-  become: false
+- name: Debug SSL file check results
+  debug:
+    msg: "SSL file check: {{ ssl_check }}"
 
-- name: Check for wildcard parent certificate (with fullchain)
-  stat:
-    path: "{{ ssl_source_dir }}/{{ parent_domain }}.fullchain.crt"
-  register: wildcard_fullchain_stat
-  delegate_to: localhost
-  become: false
-  when: parent_domain != full_domain
-
-- name: Check for wildcard parent certificate (without fullchain)
-  stat:
-    path: "{{ ssl_source_dir }}/{{ parent_domain }}.crt"
-  register: wildcard_cert_stat
-  delegate_to: localhost
-  become: false
-  when: parent_domain != full_domain
-
-- name: Check for wildcard parent key
-  stat:
-    path: "{{ ssl_source_dir }}/{{ parent_domain }}.key"
-  register: wildcard_key_stat
-  delegate_to: localhost
-  become: false
-  when: parent_domain != full_domain
+# Build compatibility variables from shell check results
+- name: Set exact fullchain stat compatibility
+  set_fact:
+    exact_fullchain_exists: "{{ ssl_check.exact_fullchain }}"
+    exact_cert_exists: "{{ ssl_check.exact_cert }}"
+    exact_key_exists: "{{ ssl_check.exact_key }}"
+    wildcard_fullchain_exists: "{{ ssl_check.wildcard_fullchain }}"
+    wildcard_cert_exists: "{{ ssl_check.wildcard_cert }}"
+    wildcard_key_exists: "{{ ssl_check.wildcard_key }}"
 
 # Determine if any cert files exist on disk already
 - name: Check if any certificate files were found on disk
   set_fact:
     ssl_files_found_on_disk: >-
       {{
-        (exact_fullchain_stat.stat.exists | default(false) and exact_key_stat.stat.exists | default(false)) or
-        (exact_cert_stat.stat.exists | default(false) and exact_key_stat.stat.exists | default(false)) or
-        (wildcard_fullchain_stat.stat.exists | default(false) and wildcard_key_stat.stat.exists | default(false)) or
-        (wildcard_cert_stat.stat.exists | default(false) and wildcard_key_stat.stat.exists | default(false))
+        (exact_fullchain_exists and exact_key_exists) or
+        (exact_cert_exists and exact_key_exists) or
+        (wildcard_fullchain_exists and wildcard_key_exists) or
+        (wildcard_cert_exists and wildcard_key_exists)
       }}
 
 # Vault fallback: only materialize from vault when no cert files exist on disk
@@ -158,29 +148,30 @@
     - (secrets.ssl_certificates.chain | trim | length) > 0
 
 # Re-check file existence after potential vault materialization
-- name: Re-check exact domain certificate (with fullchain)
-  stat:
-    path: "{{ ssl_source_dir }}/{{ full_domain }}.fullchain.crt"
-  register: exact_fullchain_stat
+- name: Re-check SSL files after vault materialization
+  shell: |
+    exact_fullchain=false; exact_cert=false; exact_key=false
+    [ -f "{{ ssl_source_dir }}/{{ full_domain }}.fullchain.crt" ] && exact_fullchain=true
+    [ -f "{{ ssl_source_dir }}/{{ full_domain }}.crt" ] && exact_cert=true
+    [ -f "{{ ssl_source_dir }}/{{ full_domain }}.key" ] && exact_key=true
+    echo "{\"exact_fullchain\":$exact_fullchain,\"exact_cert\":$exact_cert,\"exact_key\":$exact_key}"
+  register: ssl_recheck
   delegate_to: localhost
   become: false
+  changed_when: false
   when: not ssl_files_found_on_disk
 
-- name: Re-check exact domain certificate (without fullchain)
-  stat:
-    path: "{{ ssl_source_dir }}/{{ full_domain }}.crt"
-  register: exact_cert_stat
-  delegate_to: localhost
-  become: false
-  when: not ssl_files_found_on_disk
-
-- name: Re-check exact domain key
-  stat:
-    path: "{{ ssl_source_dir }}/{{ full_domain }}.key"
-  register: exact_key_stat
-  delegate_to: localhost
-  become: false
-  when: not ssl_files_found_on_disk
+- name: Update file existence after vault materialization
+  set_fact:
+    exact_fullchain_exists: "{{ (ssl_recheck.stdout | from_json).exact_fullchain }}"
+    exact_cert_exists: "{{ (ssl_recheck.stdout | from_json).exact_cert }}"
+    exact_key_exists: "{{ (ssl_recheck.stdout | from_json).exact_key }}"
+    ssl_files_found_on_disk: >-
+      {{
+        ((ssl_recheck.stdout | from_json).exact_fullchain and (ssl_recheck.stdout | from_json).exact_key) or
+        ((ssl_recheck.stdout | from_json).exact_cert and (ssl_recheck.stdout | from_json).exact_key)
+      }}
+  when: not ssl_files_found_on_disk and ssl_recheck is defined and ssl_recheck.stdout is defined
 
 # Verify cert/key pairs match (modulus comparison)
 - name: Verify exact fullchain cert matches key
@@ -193,8 +184,8 @@
   become: false
   changed_when: false
   when:
-    - exact_fullchain_stat.stat.exists | default(false)
-    - exact_key_stat.stat.exists | default(false)
+    - exact_fullchain_exists | default(false)
+    - exact_key_exists | default(false)
 
 - name: Verify exact cert matches key
   shell: |
@@ -206,8 +197,8 @@
   become: false
   changed_when: false
   when:
-    - exact_cert_stat.stat.exists | default(false)
-    - exact_key_stat.stat.exists | default(false)
+    - exact_cert_exists | default(false)
+    - exact_key_exists | default(false)
 
 - name: Verify wildcard fullchain cert matches key
   shell: |
@@ -220,8 +211,8 @@
   changed_when: false
   when:
     - parent_domain != full_domain
-    - wildcard_fullchain_stat.stat.exists | default(false)
-    - wildcard_key_stat.stat.exists | default(false)
+    - wildcard_fullchain_exists | default(false)
+    - wildcard_key_exists | default(false)
 
 - name: Verify wildcard cert matches key
   shell: |
@@ -234,8 +225,8 @@
   changed_when: false
   when:
     - parent_domain != full_domain
-    - wildcard_cert_stat.stat.exists | default(false)
-    - wildcard_key_stat.stat.exists | default(false)
+    - wildcard_cert_exists | default(false)
+    - wildcard_key_exists | default(false)
 
 # Determine which certificate to use (with verification)
 - name: Use exact domain certificate (fullchain) if verified
@@ -244,8 +235,8 @@
     ssl_key_source: "{{ ssl_source_dir }}/{{ full_domain }}.key"
     ssl_mode_used: "exact-fullchain"
   when:
-    - exact_fullchain_stat.stat.exists | default(false)
-    - exact_key_stat.stat.exists | default(false)
+    - exact_fullchain_exists | default(false)
+    - exact_key_exists | default(false)
     - exact_fullchain_verify.stdout | default('') == 'MATCH'
 
 - name: Use exact domain certificate (without fullchain) if verified
@@ -255,8 +246,8 @@
     ssl_mode_used: "exact"
   when:
     - ssl_mode_used is not defined
-    - exact_cert_stat.stat.exists | default(false)
-    - exact_key_stat.stat.exists | default(false)
+    - exact_cert_exists | default(false)
+    - exact_key_exists | default(false)
     - exact_cert_verify.stdout | default('') == 'MATCH'
 
 - name: Use wildcard parent certificate (fullchain) if verified
@@ -267,8 +258,8 @@
   when:
     - ssl_mode_used is not defined
     - parent_domain != full_domain
-    - wildcard_fullchain_stat.stat.exists | default(false)
-    - wildcard_key_stat.stat.exists | default(false)
+    - wildcard_fullchain_exists | default(false)
+    - wildcard_key_exists | default(false)
     - wildcard_fullchain_verify.stdout | default('') == 'MATCH'
 
 - name: Use wildcard parent certificate (without fullchain) if verified
@@ -279,8 +270,8 @@
   when:
     - ssl_mode_used is not defined
     - parent_domain != full_domain
-    - wildcard_cert_stat.stat.exists | default(false)
-    - wildcard_key_stat.stat.exists | default(false)
+    - wildcard_cert_exists | default(false)
+    - wildcard_key_exists | default(false)
     - wildcard_cert_verify.stdout | default('') == 'MATCH'
 
 - name: Generate self-signed certificate (fallback)
@@ -292,28 +283,24 @@
   debug:
     msg: |
       ⚠️  WARNING: SSL certificates found but cert/key modulus mismatch detected!
-      Falling back to self-signed certificate.
-      Please verify your SSL certificate and key files match.
+      Keeping existing certificates on target. Please verify your SSL certificate and key files match.
       
       Checked files:
-      {% if exact_fullchain_stat.stat.exists | default(false) and exact_key_stat.stat.exists | default(false) %}
+      {% if exact_fullchain_exists | default(false) and exact_key_exists | default(false) %}
       - {{ full_domain }}.fullchain.crt + .key: {{ exact_fullchain_verify.stdout | default('NOT CHECKED') }}
       {% endif %}
-      {% if exact_cert_stat.stat.exists | default(false) and exact_key_stat.stat.exists | default(false) %}
+      {% if exact_cert_exists | default(false) and exact_key_exists | default(false) %}
       - {{ full_domain }}.crt + .key: {{ exact_cert_verify.stdout | default('NOT CHECKED') }}
       {% endif %}
-      {% if parent_domain != full_domain and wildcard_fullchain_stat.stat.exists | default(false) and wildcard_key_stat.stat.exists | default(false) %}
+      {% if parent_domain != full_domain and wildcard_fullchain_exists | default(false) and wildcard_key_exists | default(false) %}
       - {{ parent_domain }}.fullchain.crt + .key: {{ wildcard_fullchain_verify.stdout | default('NOT CHECKED') }}
       {% endif %}
-      {% if parent_domain != full_domain and wildcard_cert_stat.stat.exists | default(false) and wildcard_key_stat.stat.exists | default(false) %}
+      {% if parent_domain != full_domain and wildcard_cert_exists | default(false) and wildcard_key_exists | default(false) %}
       - {{ parent_domain }}.crt + .key: {{ wildcard_cert_verify.stdout | default('NOT CHECKED') }}
       {% endif %}
   when:
     - ssl_mode_used == 'selfsigned'
-    - (exact_fullchain_stat.stat.exists | default(false) and exact_key_stat.stat.exists | default(false)) or
-      (exact_cert_stat.stat.exists | default(false) and exact_key_stat.stat.exists | default(false)) or
-      (parent_domain != full_domain and wildcard_fullchain_stat.stat.exists | default(false) and wildcard_key_stat.stat.exists | default(false)) or
-      (parent_domain != full_domain and wildcard_cert_stat.stat.exists | default(false) and wildcard_key_stat.stat.exists | default(false))
+    - ssl_files_found_on_disk | default(false)
 
 - name: Display SSL certificate decision
   debug:
