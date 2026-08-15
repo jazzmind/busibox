@@ -26,6 +26,11 @@
     state: present
   tags: [vllm_install]
 
+- name: Remove stale deadsnakes PPA if left from failed deploy
+  shell: rm -f /etc/apt/sources.list.d/*deadsnakes* 2>/dev/null; apt-get update -qq 2>/dev/null; true
+  changed_when: false
+  tags: [vllm_install]
+
 - name: Check if GPU devices are present in container
   shell: "ls -la /dev/nvidia* 2>/dev/null || echo 'No NVIDIA devices'"
   register: gpu_devices_check
@@ -141,19 +146,24 @@
       echo "no_venv"
       exit 0
     fi
-    # 2. Can't import torch? → rebuild
+    # 2. No pip? (broken venv from uv) → rebuild
+    if [ ! -f "{{ vllm_venv_dir }}/bin/pip" ] && [ ! -f "{{ vllm_venv_dir }}/bin/pip3" ]; then
+      echo "no_pip"
+      exit 0
+    fi
+    # 3. Can't import torch? → rebuild
     TORCH_CUDA=$({{ vllm_venv_dir }}/bin/python -c "import torch; print(torch.version.cuda or '')" 2>/dev/null || echo "")
     if [ -z "$TORCH_CUDA" ]; then
       echo "no_torch"
       exit 0
     fi
     TORCH_MAJOR=$(echo "$TORCH_CUDA" | cut -d. -f1)
-    # 3. Blackwell (compute 10+) needs at least cu13. cu12 won't work.
+    # 4. Blackwell (compute 10+) needs at least cu13. cu12 won't work.
     if [ "$COMPUTE" -ge 10 ] 2>/dev/null && [ "$TORCH_MAJOR" -lt 13 ] 2>/dev/null; then
       echo "mismatch_blackwell_needs_cu13"
       exit 0
     fi
-    # 4. Can't import vllm? → rebuild
+    # 5. Can't import vllm? → rebuild
     {{ vllm_venv_dir }}/bin/python -c "import vllm" 2>/dev/null
     if [ $? -ne 0 ]; then
       echo "no_vllm"
@@ -182,7 +192,7 @@
   tags: [vllm_install]
 
 - name: Create Python virtual environment
-  command: python3 -m venv {{ vllm_venv_dir }}
+  command: "python3 -m venv {{ vllm_venv_dir }}"
   args:
     creates: "{{ vllm_venv_dir }}/bin/python"
   tags: [vllm_install]
@@ -323,6 +333,30 @@
 - name: Display flashinfer sync result
   debug:
     msg: "{{ flashinfer_sync.stdout | trim }}"
+  tags: [vllm_install]
+
+- name: Fix flashinfer Python 3.11 compatibility (array.array[int] requires 3.12+)
+  shell: |
+    FD_FILE="{{ vllm_venv_dir }}/lib/python3.11/site-packages/flashinfer/comm/fd_exchange.py"
+    if [ -f "$FD_FILE" ]; then
+      if ! head -1 "$FD_FILE" | grep -q "from __future__ import annotations"; then
+        sed -i '1s/^/from __future__ import annotations\n/' "$FD_FILE"
+        echo "patched"
+      else
+        echo "already_patched"
+      fi
+    else
+      echo "file_not_found"
+    fi
+  args:
+    executable: /bin/bash
+  register: flashinfer_compat_fix
+  changed_when: "'patched' == flashinfer_compat_fix.stdout | trim"
+  tags: [vllm_install]
+
+- name: Display flashinfer compat fix result
+  debug:
+    msg: "flashinfer fd_exchange.py Python 3.11 fix: {{ flashinfer_compat_fix.stdout | trim }}"
   tags: [vllm_install]
 
 - name: Verify vllm imports cleanly after torchaudio removal
