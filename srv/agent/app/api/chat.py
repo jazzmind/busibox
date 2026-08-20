@@ -15,8 +15,9 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -28,7 +29,11 @@ from app.auth.dependencies import get_principal
 from app.db.session import get_session
 from app.models.domain import Conversation, Message, ChatAttachment, ChatSettings
 from app.schemas.auth import Principal
-from app.services.platform_config import get_platform_insights_enabled
+from app.services.platform_config import (
+    get_chat_model_routing_mode,
+    get_platform_insights_enabled,
+    refresh_platform_config,
+)
 from app.schemas.conversation import Attachment, MessageRead
 from app.schemas.dispatcher import DispatcherRequest, FileAttachment, UserSettings, RoutingDecision
 from app.api.llm import _ensure_litellm_keys
@@ -322,6 +327,16 @@ class ChatMessageRequest(BaseModel):
     enable_doc_search: bool = Field(False, description="Enable document search tool")
     selected_agents: Optional[List[str]] = Field(None, description="Specific agent IDs to use (bypasses dispatcher)")
     attachment_ids: Optional[List[uuid.UUID]] = Field(None, description="IDs of uploaded chat attachments")
+    knowledge_scope: Literal["all", "libraries", "attachments"] = Field(
+        "all",
+        description="Document search scope selected by the user",
+    )
+    selected_library_ids: Optional[List[uuid.UUID]] = Field(
+        None,
+        min_length=1,
+        max_length=1,
+        description="Accessible library IDs used when knowledge_scope is 'libraries'",
+    )
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Temperature override")
     max_tokens: Optional[int] = Field(None, ge=1, le=32000, description="Max tokens override")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Application context metadata passed to agent tools (e.g. projectId, appName)")
@@ -1022,6 +1037,48 @@ async def send_chat_message_stream_agentic(
         StreamingResponse with SSE events
     """
     from app.services.agentic_dispatcher import run_agentic_dispatcher
+
+    if payload.knowledge_scope == "libraries" and not payload.selected_library_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="selected_library_ids is required when knowledge_scope is 'libraries'",
+        )
+
+    # Refresh before each new stream so an administrator's routing change is
+    # effective immediately. A config-api outage retains the last safe value.
+    await refresh_platform_config()
+    chat_model_routing_mode = get_chat_model_routing_mode()
+
+    selected_library_file_ids: List[str] = []
+    if payload.knowledge_scope == "libraries":
+        from app.clients.busibox import BusiboxClient
+        from app.services.token_service import get_or_exchange_token
+
+        try:
+            data_token = await get_or_exchange_token(
+                session=session,
+                principal=principal,
+                scopes=["data:read"],
+                purpose="data",
+            )
+            data_client = BusiboxClient(access_token=data_token.access_token)
+            for library_id in payload.selected_library_ids or []:
+                documents = await data_client.library_documents(str(library_id))
+                for document in documents:
+                    file_id = document.get("fileId") or document.get("file_id") or document.get("id")
+                    if file_id:
+                        selected_library_file_ids.append(str(file_id))
+            selected_library_file_ids = list(dict.fromkeys(selected_library_file_ids))
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (403, 404):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Library not found or access denied",
+                ) from exc
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Unable to validate the selected library",
+            ) from exc
     
     # Create cancellation event
     cancel_event = asyncio.Event()
@@ -1160,6 +1217,15 @@ async def send_chat_message_stream_agentic(
             # Run agentic dispatcher
             dispatcher_metadata: Dict[str, Any] = dict(payload.metadata or {})
             dispatcher_metadata["conversation_id"] = str(conversation.id)
+            dispatcher_metadata["chat_model_routing_mode"] = chat_model_routing_mode
+            dispatcher_metadata["knowledge_scope"] = payload.knowledge_scope
+            dispatcher_metadata["selected_library_ids"] = [
+                str(library_id) for library_id in (payload.selected_library_ids or [])
+            ]
+            dispatcher_metadata["selected_library_file_ids"] = selected_library_file_ids
+            dispatcher_metadata["attachment_file_ids"] = [
+                item["file_id"] for item in attachment_metadata if item.get("file_id")
+            ]
             async for event in run_agentic_dispatcher(
                 query=payload.message,
                 user_id=principal.sub,
@@ -1207,6 +1273,11 @@ async def send_chat_message_stream_agentic(
                             # Preserve phase for all other thought types (e.g. model_reasoning)
                             # so the UI can re-render the thinking section after completion.
                             thought_item["data"] = {"phase": phase}
+                            if phase == "model_route":
+                                thought_item["data"].update({
+                                    "routing_mode": event.data.get("routing_mode"),
+                                    "model": event.data.get("model"),
+                                })
                     thoughts.append(thought_item)
 
                 # Accumulate document_search results for deterministic citation list.
@@ -1255,6 +1326,8 @@ async def send_chat_message_stream_agentic(
             if thoughts or available_agents:
                 routing_payload["thoughts"] = thoughts
                 routing_payload["selected_agents"] = available_agents
+            routing_payload["model_routing_mode"] = chat_model_routing_mode
+            routing_payload["knowledge_scope"] = payload.knowledge_scope
             if collected_citations:
                 routing_payload["citations"] = collected_citations
 
@@ -1777,4 +1850,3 @@ async def delete_message(
     )
     
     return {"success": True, "message_id": str(message_id)}
-

@@ -62,6 +62,8 @@ developers/
   tasks/                     # Active planning docs
 ```
 
+Chat contributors should start with `developers/guides/chat-backend-development.md` and the sibling frontend's `docs/developers/architecture/02-chat.md`.
+
 docs-api category: `developer`
 
 ### users/

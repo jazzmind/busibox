@@ -189,6 +189,12 @@ class BusiboxClient:
             resp.raise_for_status()
             return resp.json()
 
+    async def library_documents(self, library_id: str) -> List[Dict[str, Any]]:
+        """List documents in an accessible library using Data API RLS."""
+        response = await self.request("GET", f"/libraries/{library_id}/documents")
+        documents = response.get("documents", [])
+        return documents if isinstance(documents, list) else []
+
     async def data_document(self, path: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Legacy file-based ingestion (for file paths).

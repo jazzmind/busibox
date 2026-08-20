@@ -8,7 +8,7 @@ on startup and periodically.
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Literal, Optional
 
 import httpx
 
@@ -16,8 +16,12 @@ logger = logging.getLogger(__name__)
 
 _config_api_url: Optional[str] = None
 _cached_insights_enabled: bool = True
+_cached_chat_model_routing_mode: "ChatModelRoutingMode" = "local"
 _refresh_task: Optional[asyncio.Task] = None
 _REFRESH_INTERVAL_SECONDS = 60
+
+ChatModelRoutingMode = Literal["local", "auto", "frontier"]
+_VALID_CHAT_MODEL_ROUTING_MODES = {"local", "auto", "frontier"}
 
 
 def _parse_bool(value: str) -> bool:
@@ -42,11 +46,21 @@ async def _fetch_public_config() -> dict:
 
 async def refresh_platform_config() -> None:
     """Refresh cached platform config from config-api."""
-    global _cached_insights_enabled
+    global _cached_insights_enabled, _cached_chat_model_routing_mode
     config = await _fetch_public_config()
     if "insights_enabled" in config:
         _cached_insights_enabled = _parse_bool(config["insights_enabled"])
         logger.debug(f"Platform config refreshed: insights_enabled={_cached_insights_enabled}")
+    routing_mode = str(config.get("chat_model_routing_mode", "")).lower()
+    if routing_mode in _VALID_CHAT_MODEL_ROUTING_MODES:
+        _cached_chat_model_routing_mode = routing_mode  # type: ignore[assignment]
+        logger.debug("Platform config refreshed: chat_model_routing_mode=%s", routing_mode)
+    elif routing_mode:
+        logger.warning(
+            "Ignoring invalid chat_model_routing_mode=%r; keeping %s",
+            routing_mode,
+            _cached_chat_model_routing_mode,
+        )
 
 
 async def _periodic_refresh() -> None:
@@ -91,3 +105,8 @@ async def shutdown_platform_config() -> None:
 def get_platform_insights_enabled() -> bool:
     """Return the cached insights_enabled platform flag."""
     return _cached_insights_enabled
+
+
+def get_chat_model_routing_mode() -> ChatModelRoutingMode:
+    """Return the cached, administrator-controlled chat routing policy."""
+    return _cached_chat_model_routing_mode

@@ -80,6 +80,15 @@ STREAMING_AGENTS: Dict[str, StreamingAgent] = {
     "test-agent": test_agent,
 }
 
+
+def create_chat_agent_for_routing_mode(routing_mode: str) -> Tuple[ChatAgent, str]:
+    """Create an isolated ChatAgent that obeys the administrator routing policy."""
+    if routing_mode == "frontier":
+        return ChatAgent(model="frontier"), "frontier"
+    if routing_mode == "auto":
+        return ChatAgent(model="chat", allow_frontier_fallback=True), "auto"
+    return ChatAgent(model="chat"), "local"
+
 # Map agent names/types to streaming agent keys
 AGENT_TYPE_MAPPING = {
     # Web search mappings
@@ -729,7 +738,24 @@ Choose the most appropriate single agent for the query.""",
                 if agent_info:
                     agent = self._create_dynamic_agent(agent_info)
             elif selected_streaming_key and selected_streaming_key in STREAMING_AGENTS:
-                agent = STREAMING_AGENTS[selected_streaming_key]
+                if selected_streaming_key == "chat":
+                    # Chat routing is platform policy, not a browser-controlled
+                    # model override. A fresh agent keeps per-request model state
+                    # isolated across concurrent streams.
+                    agent, routing_mode = create_chat_agent_for_routing_mode(
+                        str((metadata or {}).get("chat_model_routing_mode", "local"))
+                    )
+                    yield thought(
+                        source="dispatcher",
+                        message=f"Chat routing policy: {routing_mode}.",
+                        data={
+                            "phase": "model_route",
+                            "routing_mode": routing_mode,
+                            "model": agent.config.model,
+                        },
+                    )
+                else:
+                    agent = STREAMING_AGENTS[selected_streaming_key]
             
             if agent:
                 logger.info(f"Running streaming agent: {agent.name}")

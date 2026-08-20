@@ -1,6 +1,6 @@
 """Document search tool for RAG agents."""
 import structlog
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Tool, RunContext
@@ -47,6 +47,43 @@ class DocumentSearchOutput(BaseModel):
     error: Optional[str] = Field(default=None, description="Error message if search failed")
 
 
+async def _resolve_knowledge_scope(
+    ctx: RunContext[BusiboxDeps],
+    requested_file_ids: Optional[List[str]],
+) -> Tuple[Optional[List[str]], str]:
+    """Resolve the server-provided chat knowledge scope to an RLS-safe filter."""
+    metadata = ctx.deps.metadata or {}
+    scope = metadata.get("knowledge_scope")
+
+    if scope == "attachments":
+        attachment_file_ids = metadata.get("attachment_file_ids") or []
+        return [str(file_id) for file_id in attachment_file_ids if file_id], "attachments"
+
+    if scope == "libraries":
+        resolved_file_ids = metadata.get("selected_library_file_ids")
+        if isinstance(resolved_file_ids, list):
+            return [str(file_id) for file_id in resolved_file_ids if file_id], "libraries"
+        library_ids = metadata.get("selected_library_ids") or []
+        file_ids: List[str] = []
+        for library_id in library_ids:
+            documents = await ctx.deps.busibox_client.library_documents(str(library_id))
+            for document in documents:
+                file_id = document.get("fileId") or document.get("file_id") or document.get("id")
+                if file_id:
+                    file_ids.append(str(file_id))
+        return list(dict.fromkeys(file_ids)), "libraries"
+
+    if scope == "all":
+        return None, "all_accessible"
+
+    if requested_file_ids:
+        return requested_file_ids, "tool_arg"
+    context_file_ids = metadata.get("file_ids")
+    if isinstance(context_file_ids, list) and context_file_ids:
+        return [str(file_id) for file_id in context_file_ids], "metadata_context"
+    return None, "all_accessible"
+
+
 async def search_documents(
     ctx: RunContext[BusiboxDeps],
     query: str,
@@ -76,17 +113,16 @@ async def search_documents(
         expand_graph: Whether to expand graph relationships (default: False)
     """
     try:
-        effective_file_ids = file_ids
-        file_ids_source = "tool_arg" if file_ids else None
-        if not effective_file_ids and ctx.deps.metadata:
-            ctx_file_ids = ctx.deps.metadata.get("file_ids")
-            if ctx_file_ids and isinstance(ctx_file_ids, list):
-                effective_file_ids = ctx_file_ids
-                file_ids_source = "metadata_context"
-                logger.info(
-                    "document_search: injecting file_ids from metadata context",
-                    extra={"count": len(effective_file_ids)},
-                )
+        effective_file_ids, file_ids_source = await _resolve_knowledge_scope(ctx, file_ids)
+
+        if file_ids_source in {"attachments", "libraries"} and not effective_file_ids:
+            scope_label = "attachments" if file_ids_source == "attachments" else "selected library"
+            return DocumentSearchOutput(
+                found=False,
+                result_count=0,
+                context=f"No searchable documents are available in the {scope_label} scope.",
+                results=[],
+            )
 
         # Diagnostics: log effective scoping so we can confirm shared-library
         # docs are in scope vs. only personal docs.
@@ -307,8 +343,6 @@ Use the citation_url value from each source's header line. Example:
 Never respond with document information without a citation. Never use bare URLs.
 """,
 )
-
-
 
 
 

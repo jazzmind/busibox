@@ -158,12 +158,22 @@ class ChatAgent(BaseStreamingAgent):
     All steps stream their progress to the user in real-time.
     """
     
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        model: str = "chat",
+        allow_frontier_fallback: bool = False,
+    ):
+        # The fast acknowledgement, progress summary, and planning passes are
+        # part of the response route too.  A strict frontier policy must not
+        # silently answer simple messages with the local fast model.
+        self.control_model = "frontier" if model == "frontier" else "fast"
+        self.planning_model = "frontier" if model == "frontier" else "tool_calling"
         config = AgentConfig(
             name="chat-agent",
             display_name="Chat Agent",
             instructions=CHAT_SYSTEM_PROMPT,
-            model="chat",
+            model=model,
             tools=[
                 "web_search",
                 "get_weather",
@@ -180,6 +190,7 @@ class ChatAgent(BaseStreamingAgent):
             ],
             execution_mode=ExecutionMode.RUN_ONCE,
             tool_strategy=ToolStrategy.LLM_DRIVEN,
+            allow_frontier_fallback=allow_frontier_fallback,
         )
         super().__init__(config)
     
@@ -459,10 +470,10 @@ class ChatAgent(BaseStreamingAgent):
         )
         try:
             client = get_client()
-            logger.info("fast_ack: calling LLM (model=fast)")
+            logger.info("fast_ack: calling LLM (model=%s)", self.control_model)
             t_llm = time.monotonic()
             result = await client.chat_completion(
-                model="fast",
+                model=self.control_model,
                 messages=[
                     {
                         "role": "system",
@@ -535,10 +546,10 @@ class ChatAgent(BaseStreamingAgent):
         )
         try:
             client = get_client()
-            logger.info("quick_findings: calling LLM (model=fast)")
+            logger.info("quick_findings: calling LLM (model=%s)", self.control_model)
             t_qf = time.monotonic()
             result = await client.chat_completion(
-                model="fast",
+                model=self.control_model,
                 messages=[
                     {"role": "system", "content": "You write concise interim progress updates. Never refuse a request. If results aren't relevant, say you're still searching."},
                     {"role": "user", "content": f"/no_think\n{prompt}"},
@@ -722,10 +733,10 @@ class ChatAgent(BaseStreamingAgent):
         )
         try:
             client = get_client()
-            logger.info("plan: calling LLM (model=tool_calling)")
+            logger.info("plan: calling LLM (model=%s)", self.planning_model)
             t_plan = time.monotonic()
             result = await client.chat_completion(
-                model="tool_calling",
+                model=self.planning_model,
                 messages=[
                     {"role": "system", "content": "You are a strict JSON planner. Return valid JSON only."},
                     {"role": "user", "content": f"/no_think\n{prompt}"},

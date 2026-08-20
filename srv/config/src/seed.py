@@ -77,6 +77,14 @@ DEFAULT_PLATFORM_CONFIG = [
         "category": "chat",
         "description": "Enable AI insights and onboarding system",
     },
+    {
+        "key": "chat_model_routing_mode",
+        "value": "local",
+        "scope": "platform",
+        "tier": "public",
+        "category": "chat",
+        "description": "Chat model routing policy: local, auto, or frontier",
+    },
 ]
 
 DEFAULT_BRANDING = {
