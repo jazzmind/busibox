@@ -2180,11 +2180,10 @@ model_list:
       model: openai/{agent_mlx_model}
       api_base: {api_base}
       api_key: local
-  - model_name: frontier
-    litellm_params:
-      model: openai/{agent_mlx_model}
-      api_base: {api_base}
-      api_key: local
+
+# Do not register a local deployment in the frontier model group. A cloud
+# model assigned through Admin may use that group; mixing a local deployment
+# into it lets LiteLLM silently retry cloud failures on a mislabeled model.
 
 general_settings:
   debug: true
