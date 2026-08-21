@@ -277,15 +277,10 @@ async def search_documents(
                 f"--- Source {idx} [{source_ref}] (score:{score:.2f}, file_id:{fid}, citation_url:{citation_url}) ---\n{result.get('text', '')}"
             )
         
-        # Citation rule is placed at the TOP so it is the first thing the LLM reads.
         citation_rule = (
-            "CITATION RULE — MANDATORY: Every sentence or claim that uses information "
-            "from these search results MUST end with an inline citation. "
-            "Use EXACTLY this markdown format: [Source: filename, p.N](doc:file_id:page_number) — "
-            "for example: [Source: report.pdf, p.5](doc:abc-123-def:5). "
-            "Use the citation_url value from each source header (e.g. citation_url:doc:abc-123:5). "
-            "Do NOT paraphrase without citing. Do NOT use bare URLs. "
-            "If you use information from multiple sources, cite each one.\n\n"
+            "SOURCE DISPLAY RULE: The chat UI will render one structured Sources section after "
+            "the answer using these results. Do NOT add inline document links, citation markers, "
+            "or another Sources section to the prose.\n\n"
         )
         relevancy_rule = (
             "RELEVANCY CHECK: Before using ANY result, verify it is actually relevant to the "
@@ -294,9 +289,7 @@ async def search_documents(
         )
         full_context = citation_rule + relevancy_rule
         full_context += "\n\n".join(context_parts)
-        full_context += (
-            "\n\nREMINDER: Cite every factual claim with [Source: filename, p.N](citation_url)."
-        )
+        full_context += "\n\nREMINDER: Keep document source labels out of the prose; the UI adds them."
 
         graph_context_str: Optional[str] = None
         graph_data = response.get("graph")
@@ -336,14 +329,10 @@ Use this tool when:
 The tool performs hybrid search (combining semantic and keyword matching) for best results.
 Results are automatically filtered based on user permissions (RLS).
 
-MANDATORY CITATION RULE: Every sentence that uses information from search results MUST end
-with an inline citation in EXACTLY this format: [Source: filename, p.N](doc:file_id:page_number)
-Use the citation_url value from each source's header line. Example:
-  "The policy requires annual reviews. [Source: policy.pdf, p.3](doc:abc-123:3)"
-Never respond with document information without a citation. Never use bare URLs.
+The UI renders structured source chips after the answer. Do not emit inline document links,
+numbered document citation markers, or a second Sources section in the prose.
 """,
 )
-
 
 
 

@@ -1,12 +1,16 @@
 """Focused tests for admin model routing and user knowledge scope controls."""
 
+import uuid
 from types import SimpleNamespace
 
 import pytest
 
 from app.agents import chat_agent as chat_agent_module
+from app.agents.chat_agent import ChatAgent, FastAckDecision
+from app.api.chat import ChatMessageRequest, _resolve_conversation_knowledge_authority
 from app.services import platform_config
 from app.services.agentic_dispatcher import create_chat_agent_for_routing_mode
+from app.tools.document_list_tool import list_documents
 from app.tools.document_search_tool import _resolve_knowledge_scope, search_documents
 
 
@@ -19,12 +23,18 @@ class FakeBusiboxClient:
         self.requested_libraries.append(library_id)
         return {
             "library-a": [
-                {"fileId": "file-1"},
-                {"file_id": "file-2"},
-                {"fileId": "file-1"},
+                {"fileId": "file-1", "name": "Company Overview.pdf", "status": "completed"},
+                {"file_id": "file-2", "name": "Holiday Schedule.pdf", "status": "queued"},
+                {"fileId": "file-1", "name": "Company Overview.pdf", "status": "completed"},
             ],
-            "library-b": [{"id": "file-3"}],
+            "library-b": [{"id": "file-3", "name": "Unrelated.pdf", "status": "completed"}],
         }.get(library_id, [])
+
+    async def list_libraries(self):
+        return [
+            {"id": "library-a", "name": "cashman-docs"},
+            {"id": "library-b", "name": "other-docs"},
+        ]
 
     async def search(self, **kwargs):
         self.search_file_ids = kwargs.get("file_ids")
@@ -238,3 +248,86 @@ async def test_library_scope_passes_only_server_resolved_files_to_search() -> No
     assert result.found is True
     assert result.results[0].file_id == "file-1"
     assert client.search_file_ids == ["file-1"]
+
+
+@pytest.mark.asyncio
+async def test_document_inventory_lists_every_matching_file_not_only_search_hits() -> None:
+    context, client = make_context({"knowledge_scope": "all"})
+
+    result = await list_documents(context, "list available cashman related documents")
+
+    assert result.success is True
+    assert result.total == 2
+    assert [item.filename for item in result.documents] == [
+        "Company Overview.pdf",
+        "Holiday Schedule.pdf",
+    ]
+    assert [item.status for item in result.documents] == ["completed", "queued"]
+    assert client.requested_libraries == ["library-a", "library-b"]
+
+
+@pytest.mark.asyncio
+async def test_document_inventory_intent_skips_llm_planner_and_relevance_search() -> None:
+    context = SimpleNamespace(attachment_metadata=[])
+    dispatch = FastAckDecision(
+        action_type="multi_step",
+        needs_tools=True,
+        response="I'll check.",
+    )
+
+    plan = await ChatAgent()._generate_plan(
+        "What documents can you see?",
+        context,
+        dispatch,
+    )
+
+    assert [step.tool for step in plan.steps] == ["list_documents"]
+    assert plan.steps[0].args["limit"] == 100
+
+
+@pytest.mark.asyncio
+async def test_attachment_inventory_uses_conversation_attachment_metadata() -> None:
+    context, client = make_context({
+        "knowledge_scope": "attachments",
+        "attachment_documents": [
+            {"file_id": "attachment-1", "filename": "Uploaded Contract.pdf"},
+            {"file_id": "attachment-2", "filename": "Uploaded Addendum.pdf"},
+        ],
+    })
+
+    result = await list_documents(context, "list my attachments")
+
+    assert result.scope == "attachments"
+    assert result.total == 2
+    assert {item.file_id for item in result.documents} == {"attachment-1", "attachment-2"}
+    assert client.requested_libraries == []
+
+
+@pytest.mark.asyncio
+async def test_backend_restores_saved_library_authority_when_client_omits_scope() -> None:
+    library_id = uuid.uuid4()
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return {
+                "knowledge_scope": "libraries",
+                "selected_library_ids": [str(library_id)],
+            }
+
+    class FakeSession:
+        async def execute(self, _query):
+            return FakeResult()
+
+    payload = ChatMessageRequest(
+        message="Continue",
+        conversation_id=uuid.uuid4(),
+    )
+
+    scope, library_ids = await _resolve_conversation_knowledge_authority(
+        payload,
+        SimpleNamespace(sub="user-1"),
+        FakeSession(),
+    )
+
+    assert scope == "libraries"
+    assert library_ids == [library_id]

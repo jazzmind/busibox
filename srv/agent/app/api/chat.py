@@ -327,9 +327,9 @@ class ChatMessageRequest(BaseModel):
     enable_doc_search: bool = Field(False, description="Enable document search tool")
     selected_agents: Optional[List[str]] = Field(None, description="Specific agent IDs to use (bypasses dispatcher)")
     attachment_ids: Optional[List[uuid.UUID]] = Field(None, description="IDs of uploaded chat attachments")
-    knowledge_scope: Literal["all", "libraries", "attachments"] = Field(
-        "all",
-        description="Document search scope selected by the user",
+    knowledge_scope: Optional[Literal["all", "libraries", "attachments"]] = Field(
+        None,
+        description="Document search scope selected by the user; reuses the conversation scope when omitted",
     )
     selected_library_ids: Optional[List[uuid.UUID]] = Field(
         None,
@@ -351,6 +351,42 @@ class ChatMessageResponse(BaseModel):
     routing_decision: Optional[Dict[str, Any]] = Field(None, description="Dispatcher routing decision")
     tool_calls: Optional[List[Dict[str, Any]]] = Field(None, description="Tool calls made")
     run_id: Optional[uuid.UUID] = Field(None, description="Associated run ID if agent was used")
+
+
+async def _resolve_conversation_knowledge_authority(
+    payload: ChatMessageRequest,
+    principal: Principal,
+    session: AsyncSession,
+) -> tuple[Literal["all", "libraries", "attachments"], List[uuid.UUID]]:
+    """Resolve explicit scope or restore the last authority saved on a conversation."""
+    scope = payload.knowledge_scope
+    selected_library_ids = list(payload.selected_library_ids or [])
+
+    if scope is None and payload.conversation_id:
+        result = await session.execute(
+            select(Message.routing_decision)
+            .join(Conversation, Conversation.id == Message.conversation_id)
+            .where(
+                Message.conversation_id == payload.conversation_id,
+                Message.role == "assistant",
+                Conversation.user_id == principal.sub,
+            )
+            .order_by(desc(Message.created_at))
+            .limit(1)
+        )
+        routing = result.scalar_one_or_none()
+        if isinstance(routing, dict):
+            stored_scope = routing.get("knowledge_scope")
+            if stored_scope in {"all", "libraries", "attachments"}:
+                scope = stored_scope
+            if scope == "libraries" and not selected_library_ids:
+                for raw_id in routing.get("selected_library_ids") or []:
+                    try:
+                        selected_library_ids.append(uuid.UUID(str(raw_id)))
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+
+    return scope or "all", selected_library_ids
 
 
 class ChatHistoryResponse(BaseModel):
@@ -1038,7 +1074,13 @@ async def send_chat_message_stream_agentic(
     """
     from app.services.agentic_dispatcher import run_agentic_dispatcher
 
-    if payload.knowledge_scope == "libraries" and not payload.selected_library_ids:
+    knowledge_scope, selected_library_ids = await _resolve_conversation_knowledge_authority(
+        payload,
+        principal,
+        session,
+    )
+
+    if knowledge_scope == "libraries" and not selected_library_ids:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="selected_library_ids is required when knowledge_scope is 'libraries'",
@@ -1050,7 +1092,7 @@ async def send_chat_message_stream_agentic(
     chat_model_routing_mode = get_chat_model_routing_mode()
 
     selected_library_file_ids: List[str] = []
-    if payload.knowledge_scope == "libraries":
+    if knowledge_scope == "libraries":
         from app.clients.busibox import BusiboxClient
         from app.services.token_service import get_or_exchange_token
 
@@ -1062,7 +1104,7 @@ async def send_chat_message_stream_agentic(
                 purpose="data",
             )
             data_client = BusiboxClient(access_token=data_token.access_token)
-            for library_id in payload.selected_library_ids or []:
+            for library_id in selected_library_ids:
                 documents = await data_client.library_documents(str(library_id))
                 for document in documents:
                     file_id = document.get("fileId") or document.get("file_id") or document.get("id")
@@ -1174,6 +1216,29 @@ async def send_chat_message_stream_agentic(
                         "file_url": attachment.file_url,
                         "parsed_content": attachment.parsed_content,
                     })
+
+            # Attachment authority belongs to the conversation, not only the
+            # current message. Reuse every earlier attachment when this scope
+            # is selected, while keeping only current attachments in the
+            # synthesis prompt to avoid repeatedly injecting large content.
+            attachment_documents: List[Dict[str, Any]] = list(attachment_metadata)
+            if knowledge_scope == "attachments":
+                scoped_attachment_result = await session.execute(
+                    select(ChatAttachment)
+                    .join(Message, ChatAttachment.message_id == Message.id)
+                    .where(Message.conversation_id == conversation.id)
+                    .order_by(ChatAttachment.created_at.asc())
+                )
+                attachment_documents = [
+                    {
+                        "id": str(attachment.id),
+                        "file_id": _extract_file_id_from_url(attachment.file_url),
+                        "filename": attachment.filename,
+                        "mime_type": attachment.mime_type,
+                        "file_url": attachment.file_url,
+                    }
+                    for attachment in scoped_attachment_result.scalars().all()
+                ]
             
             # Get the most recent 20 messages for context (in chronological order).
             # Exclude the just-inserted user message to avoid duplicating it in
@@ -1218,14 +1283,15 @@ async def send_chat_message_stream_agentic(
             dispatcher_metadata: Dict[str, Any] = dict(payload.metadata or {})
             dispatcher_metadata["conversation_id"] = str(conversation.id)
             dispatcher_metadata["chat_model_routing_mode"] = chat_model_routing_mode
-            dispatcher_metadata["knowledge_scope"] = payload.knowledge_scope
+            dispatcher_metadata["knowledge_scope"] = knowledge_scope
             dispatcher_metadata["selected_library_ids"] = [
-                str(library_id) for library_id in (payload.selected_library_ids or [])
+                str(library_id) for library_id in selected_library_ids
             ]
             dispatcher_metadata["selected_library_file_ids"] = selected_library_file_ids
             dispatcher_metadata["attachment_file_ids"] = [
-                item["file_id"] for item in attachment_metadata if item.get("file_id")
+                item["file_id"] for item in attachment_documents if item.get("file_id")
             ]
+            dispatcher_metadata["attachment_documents"] = attachment_documents
             async for event in run_agentic_dispatcher(
                 query=payload.message,
                 user_id=principal.sub,
@@ -1327,7 +1393,13 @@ async def send_chat_message_stream_agentic(
                 routing_payload["thoughts"] = thoughts
                 routing_payload["selected_agents"] = available_agents
             routing_payload["model_routing_mode"] = chat_model_routing_mode
-            routing_payload["knowledge_scope"] = payload.knowledge_scope
+            routing_payload["knowledge_scope"] = knowledge_scope
+            if knowledge_scope == "libraries":
+                routing_payload["selected_library_ids"] = [
+                    str(library_id) for library_id in selected_library_ids
+                ]
+            if knowledge_scope == "attachments":
+                routing_payload["attachment_file_ids"] = dispatcher_metadata["attachment_file_ids"]
             if collected_citations:
                 routing_payload["citations"] = collected_citations
 

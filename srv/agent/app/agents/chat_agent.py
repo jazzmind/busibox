@@ -95,7 +95,9 @@ CHAT_SYSTEM_PROMPT = """You are a versatile chat assistant that helps users by u
 
 3. **Handle Ambiguous References**: When the user says "it", "that", "this topic", etc., look at the conversation history to understand what they're referring to.
 
-4. **Cite Sources**: When using tools, include relevant sources (URLs for web, filenames for documents).
+4. **Cite Sources**: Cite web URLs when relevant. For document results, ground the answer in the
+   returned files but do not repeat filenames or inline markers; the chat UI renders one structured
+   Sources section after the answer.
 
 5. **Be Conversational**: Respond naturally and reference previous context when relevant.
 
@@ -178,6 +180,7 @@ class ChatAgent(BaseStreamingAgent):
                 "web_search",
                 "get_weather",
                 "document_search",
+                "list_documents",
                 "list_data_documents",
                 "get_data_document",
                 "query_data",
@@ -285,6 +288,9 @@ class ChatAgent(BaseStreamingAgent):
             "doc_search": "document_search",
             "document_search": "document_search",
             "search_documents": "document_search",
+            "list_documents": "list_documents",
+            "documents_list": "list_documents",
+            "list_files": "list_documents",
             "web_search": "web_search",
             "search_web": "web_search",
             "weather": "get_weather",
@@ -299,9 +305,7 @@ class ChatAgent(BaseStreamingAgent):
             "transcribe_audio": "transcribe_audio",
             "tts": "text_to_speech",
             "text_to_speech": "text_to_speech",
-            "list_documents": "list_data_documents",
             "list_data_documents": "list_data_documents",
-            "documents_list": "list_data_documents",
             "get_document": "get_data_document",
             "get_data_document": "get_data_document",
             "query_data": "query_data",
@@ -617,6 +621,26 @@ class ChatAgent(BaseStreamingAgent):
                 "show my data tables",
             )
         )
+        document_inventory_intent = (
+            any(word in ql for word in ("list", "show", "which", "what", "available"))
+            and any(word in ql for word in ("document", "documents", "docs", "file", "files"))
+            and not data_document_list_intent
+        )
+        if document_inventory_intent and "list_documents" in enabled_tools:
+            return ExecutionPlan(
+                summary="I'll list the accessible documents in the selected knowledge scope.",
+                steps=[
+                    PlanStep(
+                        id="step_1",
+                        tool="list_documents",
+                        objective="List accessible uploaded documents",
+                        args={"query": query, "limit": 100},
+                    )
+                ],
+                parallel_groups=[],
+                feedback_points=[],
+                estimated_duration="quick",
+            )
         parallel_step_ids: List[str] = []
         attachment_only_query = has_attachments and not any(
             kw in ql for kw in (
@@ -724,6 +748,8 @@ class ChatAgent(BaseStreamingAgent):
             "- Do NOT include `create_task` unless the user explicitly asked to create a scheduled task.\n"
             "- Do NOT include `send_notification` unless the user explicitly asked to send a notification.\n"
             "- Do NOT include `memory_search` or `memory_save` unless the user asks about previous conversations or preferences.\n"
+            "- Use `list_documents` for uploaded-document inventories, filenames, or 'what files can you see' questions.\n"
+            "- Use `document_search` only to find relevant content inside documents.\n"
             + doc_search_rule +
             "- When `web_search` is also needed, run it IN PARALLEL with `document_search` by putting both step IDs in the same parallel_groups entry.\n"
             "- Use `list_data_documents`, `get_data_document`, or `query_data` ONLY when the user explicitly asks about structured data tables/records.\n\n"

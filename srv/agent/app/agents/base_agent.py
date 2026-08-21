@@ -317,6 +317,7 @@ class ToolStrategy(str, Enum):
 # Mapping of tool names to their required OAuth scopes
 TOOL_SCOPES: Dict[str, List[str]] = {
     "document_search": ["search.read"],
+    "list_documents": ["data.read"],
     "web_search": [],  # No auth needed
     "web_scraper": [],  # No auth needed
     "playwright_browser": [],  # No auth needed
@@ -350,6 +351,7 @@ TOOL_SCOPES: Dict[str, List[str]] = {
 
 TOOL_CLASSES: Dict[str, Dict[str, Any]] = {
     "document_search": {"class": "fast", "timeout": 15},
+    "list_documents": {"class": "fast", "timeout": 15},
     "query_data": {"class": "fast", "timeout": 15},
     "aggregate_data": {"class": "fast", "timeout": 15},
     "get_data_document": {"class": "fast", "timeout": 10},
@@ -518,6 +520,7 @@ async def _apply_scraper_tool_config(session, agent_id) -> None:
 def _register_builtin_tools():
     """Register all built-in tools with the registry."""
     from app.tools.document_search_tool import search_documents, DocumentSearchOutput
+    from app.tools.document_list_tool import list_documents, DocumentListOutput
     from app.tools.web_search_tool import search_web, WebSearchOutput
     from app.tools.web_scraper_tool import scrape_webpage, WebScraperOutput
     from app.tools.weather_tool import get_weather, WeatherOutput
@@ -533,6 +536,7 @@ def _register_builtin_tools():
     )
     
     ToolRegistry.register("document_search", search_documents, DocumentSearchOutput)
+    ToolRegistry.register("list_documents", list_documents, DocumentListOutput)
     ToolRegistry.register("web_search", search_web, WebSearchOutput)
     ToolRegistry.register("web_scraper", scrape_webpage, WebScraperOutput)
     
@@ -2532,18 +2536,15 @@ class BaseStreamingAgent(StreamingAgent):
             )
         if "document_search" in self.config.tools:
             parts.append("")
-            parts.append("## Mandatory Document Citations")
+            parts.append("## Document Sources")
             parts.append(
-                "EVERY sentence or claim that uses information from document_search results MUST "
-                "include an inline citation immediately after the claim. Use EXACTLY this markdown "
-                "format and nothing else:\n"
-                "  [Source: filename, p.N](doc:file_id:page_number)\n"
-                "Example: \"The policy requires annual reviews. [Source: policy.pdf, p.3](doc:abc-123:3)\"\n"
+                "The chat UI renders structured document sources in one Sources section after the answer. "
+                "Write clean prose and do NOT emit inline document citation links, numbered citation markers, "
+                "or a second Sources section.\n"
                 "Rules:\n"
-                "- Use the citation_url provided in the tool result for each source.\n"
-                "- Do NOT omit citations. Do NOT use bare URLs or vague references.\n"
-                "- If you cite multiple sources in one sentence, add each citation inline.\n"
-                "- If no relevant documents were found, say so clearly without fabricating citations."
+                "- Use only relevant document-search results to ground the answer.\n"
+                "- Let the UI present filenames and pages from structured tool results.\n"
+                "- If no relevant documents were found, say so clearly without fabricating sources."
             )
 
         attachment_section = self._build_attachment_context_section(context)
