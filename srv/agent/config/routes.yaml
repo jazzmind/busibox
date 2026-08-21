@@ -1,0 +1,85 @@
+# Semantic router route definitions.
+#
+# Each route maps example utterances to a fast-ack decision. Queries whose
+# embedding similarity to any utterance meets the threshold take this
+# decision directly (live mode) instead of calling the fast-ack LLM.
+#
+# Editing this file does NOT require a code deploy: edit + restart the
+# agent service (or POST /admin/semantic-router/reload if exposed).
+#
+# Tuning guidance:
+# - 5-10 utterances per route, phrased the way users actually type them.
+#   Mine dispatcher_decision_log for high-confidence real queries.
+# - Routes should be semantically well-separated. If two routes keep
+#   confusing each other, merge them or sharpen the utterances.
+# - threshold can be overridden per-route; default comes from
+#   SEMANTIC_ROUTER_THRESHOLD (settings, default 0.82).
+# - action_type must be one of: direct, research, search, analysis,
+#   clarify, multi_step (must match FastAckDecision).
+
+routes:
+  hr_policy:
+    decision:
+      action_type: search
+      needs_tools: true
+      response: "Let me check the company policies for you."
+      complexity: moderate
+    utterances:
+      - "what is the PTO policy"
+      - "how much vacation time do I get"
+      - "how do I submit for reimbursement"
+      - "who do I contact about my benefits"
+      - "what is the holiday schedule this year"
+      - "is tomorrow a company holiday"
+      - "how many sick days do employees get"
+      - "what does the employee handbook say about overtime"
+      - "how do I enroll in health insurance"
+      - "what is the employee referral process"
+
+  document_lookup:
+    decision:
+      action_type: search
+      needs_tools: true
+      response: "On it — searching your documents now."
+      complexity: moderate
+    utterances:
+      - "find the dredging report from last month"
+      - "show me the bid abstract for the harbor project"
+      - "pull up the equipment list document"
+      - "search my documents for the safety plan"
+      - "do we have a file about the bridge tunnel equipment"
+      - "find the new job checklist form"
+      - "where is the company overview document"
+      - "look up the quality control report"
+
+  company_info:
+    decision:
+      action_type: search
+      needs_tools: true
+      response: "Let me look that up for you."
+      complexity: moderate
+    utterances:
+      - "what does Cashman do"
+      - "tell me about the company's dredging projects"
+      - "who is the CEO of the company"
+      - "what equipment does the company own"
+      - "what are the company's notable projects"
+      - "how big is the company fleet"
+
+  greeting:
+    # Pure greetings are answered directly without tools. The response
+    # here is final only until "Phi never answers alone" lands; greetings
+    # are exempt from main-model escalation by design.
+    decision:
+      action_type: direct
+      needs_tools: false
+      response: "Hi! How can I help you today?"
+      complexity: simple
+    threshold: 0.88
+    utterances:
+      - "hi"
+      - "hello"
+      - "hey there"
+      - "good morning"
+      - "thanks"
+      - "thank you"

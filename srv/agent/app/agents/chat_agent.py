@@ -416,6 +416,82 @@ class ChatAgent(BaseStreamingAgent):
             chunks.append(current)
         return chunks
 
+    async def _route_intent(self, query: str, context: AgentContext) -> FastAckDecision:
+        """
+        Hybrid intent routing: semantic router fast path + fast-ack LLM fallback.
+
+        Modes (settings.semantic_router_mode):
+        - disabled (semantic_router_enabled=False): behave exactly as before —
+          straight to the fast-ack LLM classifier.
+        - shadow: run the router AND the LLM classifier; log both decisions
+          for agreement analysis; always use the LLM decision. Zero behavior
+          change — used to tune the threshold before going live.
+        - live: a router match at/above threshold short-circuits the LLM call
+          (~100ms instead of ~300-500ms, deterministic). Below-threshold
+          queries fall through to the LLM classifier unchanged.
+
+        The router never sees follow-up rewriting; conversational fragments
+        ("what about managers?") naturally score below threshold and fall
+        through to the LLM, which has conversation context.
+        """
+        from app.config.settings import get_settings
+
+        router_settings = get_settings()
+        if not router_settings.semantic_router_enabled:
+            return await self._generate_fast_ack(query, context)
+
+        from app.services.semantic_router import get_semantic_router
+
+        match = None
+        try:
+            match = await get_semantic_router().route(query)
+        except Exception as e:  # noqa: BLE001 — router failure must never break chat
+            logger.warning("semantic_router: routing failed, falling back: %s", e)
+
+        if router_settings.semantic_router_mode == "live" and match is not None:
+            logger.info(
+                "semantic_router: live hit",
+                extra={
+                    "route": match.route,
+                    "score": round(match.score, 4),
+                    "elapsed_ms": match.elapsed_ms,
+                    "matched_utterance": match.matched_utterance[:80],
+                },
+            )
+            return FastAckDecision(
+                action_type=match.action_type,
+                needs_tools=match.needs_tools,
+                response=match.response,
+                confidence=match.score,
+                routing_source=f"semantic_router:{match.route}",
+                complexity=match.complexity,
+            )
+
+        # Shadow mode (or live-mode miss): use the LLM classifier.
+        decision = await self._generate_fast_ack(query, context)
+
+        if router_settings.semantic_router_mode == "shadow":
+            agrees = (
+                match is not None
+                and match.action_type == decision.action_type
+                and match.needs_tools == decision.needs_tools
+            )
+            logger.info(
+                "semantic_router: shadow comparison",
+                extra={
+                    "shadow_route": match.route if match else None,
+                    "shadow_score": round(match.score, 4) if match else None,
+                    "shadow_action_type": match.action_type if match else None,
+                    "shadow_needs_tools": match.needs_tools if match else None,
+                    "llm_action_type": decision.action_type,
+                    "llm_needs_tools": decision.needs_tools,
+                    "llm_confidence": decision.confidence,
+                    "agrees": agrees if match else None,
+                    "query_preview": query[:80],
+                },
+            )
+        return decision
+
     async def _generate_fast_ack(self, query: str, context: AgentContext) -> FastAckDecision:
         """
         Generate a fast first response and decide whether we need a deeper tool pass.
@@ -980,7 +1056,7 @@ class ChatAgent(BaseStreamingAgent):
             return ""
 
         t_ack = time.monotonic()
-        decision = await self._generate_fast_ack(query, agent_context)
+        decision = await self._route_intent(query, agent_context)
         logger.info(
             "Chat fast_ack decision",
             extra={
