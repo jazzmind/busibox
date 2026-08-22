@@ -125,10 +125,9 @@ mcp.json
 
 # HubSpot config file
 hubspot.config.yml
-busibox-permission-architecture-analysis.docx
-busibox-intro-video-script.docx
-busibox-chat-ai-architecture.docx
-busibox-intro-video-script.docx
-busibox-permission-architecture-analysis.docx
-busibox-permission-architecture-analysis.docx
-busibox-intro-video-script.docx
+
+# Generated reports / internal working documents and Word lock files
+busibox-*.docx
+busibox-app-builder-prompt.md
+busibox-intro-narration.txt
+~$*
