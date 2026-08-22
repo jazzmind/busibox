@@ -9,6 +9,17 @@ changes — see release notes per version.
 
 ## [Unreleased]
 
+### Added
+
+- **Semantic router fast path for chat intent routing** (off by default).
+  Embeds queries against example utterances in
+  `srv/agent/config/routes.yaml` and skips the fast-ack LLM call on
+  confident matches, falling through to the existing classifier
+  otherwise. New settings: `SEMANTIC_ROUTER_ENABLED`,
+  `SEMANTIC_ROUTER_MODE` (`shadow`/`live`), `SEMANTIC_ROUTER_THRESHOLD`,
+  `SEMANTIC_ROUTER_CONFIG_PATH`. See
+  `docs/developers/guides/semantic-router.md`.
+
 ## [0.1.0] — 2026-05-04
 
 Initial public, MIT-licensed release of Busibox. This is an **early-stage
