@@ -24,6 +24,20 @@ available_models:
     multimodal: true
     tool_calling: true
 
+  "claude-sonnet-4-6":
+    provider: "bedrock"
+    # NOTE: 4.6 dropped the date/version suffix the 4.5-era IDs carry — the ID
+    # really is "us.anthropic.claude-sonnet-4-6", with no -YYYYMMDD-v1:0.
+    # Adding one by analogy with claude-sonnet-4-5 yields a dead ID, and a bad
+    # Bedrock ID surfaces as a *successful* agent run with empty output.
+    # us-east-1 has no In-Region support for this model; the "us." geo
+    # cross-region inference prefix is required (and is what we use).
+    model: "us.anthropic.claude-sonnet-4-6"
+    model_name: "us.anthropic.claude-sonnet-4-6"
+    description: "Claude 4.6 Sonnet - frontier model, 1M ctx, 64K out, native structured outputs (Feb 2026)"
+    multimodal: true
+    tool_calling: true
+
   "claude-haiku-4-5":
     provider: "bedrock"
     model: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -365,7 +379,7 @@ default_purposes:
   cleanup: "agent"
 
   # --- Frontier (cloud) ---
-  frontier: "claude-sonnet-4-5"
+  frontier: "claude-sonnet-4-6"
   frontier-fast: "claude-haiku-4-5"
 
   # --- Fallback (cloud, used when local model is at capacity) ---
