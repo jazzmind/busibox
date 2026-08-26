@@ -492,6 +492,15 @@ class ChatAgent(BaseStreamingAgent):
             )
         return decision
 
+    # Neutral acknowledgments used whenever tools will run. Deterministic
+    # per-query (hash-picked) so repeated questions get consistent wording.
+    _ACK_RESPONSES = (
+        "Let me look into that for you.",
+        "Checking the company documents now.",
+        "On it — gathering the details.",
+        "Sure — looking that up now.",
+    )
+
     async def _generate_fast_ack(self, query: str, context: AgentContext) -> FastAckDecision:
         """
         Generate a fast first response and decide whether we need a deeper tool pass.
@@ -589,9 +598,23 @@ class ChatAgent(BaseStreamingAgent):
                 if not parsed.follow_up_question:
                     parsed.follow_up_question = "Could you clarify what you want me to focus on?"
             parsed.routing_source = "llm"
+            if parsed.needs_tools:
+                # Never let the fast model state a factual answer before tools
+                # have run. Its freeform ack sometimes contains a speculative
+                # guess ("Yes, tomorrow appears to be a holiday.") that the
+                # synthesis then contradicts. Classification stays with the
+                # model; the ack wording does not.
+                parsed.response = self._ACK_RESPONSES[
+                    hash(query) % len(self._ACK_RESPONSES)
+                ]
             return parsed
         except (json.JSONDecodeError, ValidationError, Exception) as exc:
-            logger.warning("Fast ack generation fallback after %dms: %s", round((time.monotonic() - t_llm) * 1000) if 't_llm' in dir() else -1, exc)
+            logger.warning(
+                "Fast ack generation fallback after %dms: %s | raw=%r",
+                round((time.monotonic() - t_llm) * 1000) if 't_llm' in dir() else -1,
+                exc,
+                (raw[:200] if 'raw' in dir() else None),
+            )
             return default
 
     async def _generate_quick_findings(self, query: str, tool_results: Dict[str, Any]) -> str:
