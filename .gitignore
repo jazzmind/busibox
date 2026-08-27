@@ -122,3 +122,12 @@ k8s/terraform/.terraform/
 k8s/terraform/*.tfstate*
 provision/.cache/*
 mcp.json
+
+# HubSpot config file
+hubspot.config.yml
+
+# Generated reports / internal working documents and Word lock files
+busibox-*.docx
+busibox-app-builder-prompt.md
+busibox-intro-narration.txt
+~$*

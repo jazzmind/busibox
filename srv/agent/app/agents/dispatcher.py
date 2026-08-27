@@ -94,7 +94,14 @@ def get_dispatcher_agent() -> Agent[None, RoutingDecision]:
             system_prompt=DISPATCHER_SYSTEM_PROMPT,
             model_settings={
                 "temperature": 0.3,  # Low temperature for consistent routing
-                "max_tokens": 10000,  # Increased from 1000 to handle structured output
+                # Must fit the "fast" model's context (max_model_len=4096 in
+                # model_registry.yml). 10000 exceeded it and made the LLM 400
+                # ("max_completion_tokens cannot be greater than max_model_len"),
+                # so routing returned nothing. Routing output (a small
+                # RoutingDecision JSON) needs far less; 2048 leaves room for the
+                # prompt within 4096. If routing prompts grow, raise the fast
+                # model's max_model_len instead of this.
+                "max_tokens": 2048,
             }
         )
     return _dispatcher_agent

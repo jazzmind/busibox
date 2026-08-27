@@ -152,9 +152,6 @@
           depends_on:
             - "etcd"
             - "minio"
-      networks:
-        default:
-          name: milvus      
 
   register: milvus_compose_changed
   notify: Up Milvus
@@ -206,6 +203,12 @@
 - name: Remove stale RocksDB lock files
   shell: |
     find /srv/milvus/data/milvus -type f -name "LOCK" -delete
+  ignore_errors: yes
+
+- name: Remove stale Milvus Docker networks
+  shell: |
+    docker network rm milvus 2>/dev/null || true
+    docker network rm milvus_default 2>/dev/null || true
   ignore_errors: yes
 
 - name: Stop and remove any existing Milvus containers

@@ -72,7 +72,25 @@ class Settings(BaseSettings):
         "http://embedding-api:8005",
         description="Dedicated embedding service URL (port 8005). No auth required for internal services.",
     )
-    
+
+    # Semantic router (embedding-based intent routing fast path)
+    semantic_router_enabled: bool = Field(
+        False,
+        description="Enable the semantic router in front of the fast-ack LLM classifier",
+    )
+    semantic_router_mode: str = Field(
+        "shadow",
+        description="'shadow' = log router decisions without acting on them; 'live' = confident matches skip the fast-ack LLM call",
+    )
+    semantic_router_threshold: float = Field(
+        0.82,
+        description="Global cosine-similarity threshold for a route match (per-route override in routes.yaml)",
+    )
+    semantic_router_config_path: Optional[str] = Field(
+        None,
+        description="Path to routes.yaml (defaults to <service root>/config/routes.yaml)",
+    )
+
     # Milvus configuration (for insights)
     milvus_host: str = Field(
         "milvus",

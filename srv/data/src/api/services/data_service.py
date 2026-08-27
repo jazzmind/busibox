@@ -530,11 +530,15 @@ class DataService:
         async with self.acquire_with_rls(request) as conn:
             use_table = await self._use_records_table(conn, document_id)
             
+            # Plain read (no FOR UPDATE): a record write only needs the document
+            # to be READABLE, not owned. FOR UPDATE forced the data_files UPDATE
+            # policy (owner-only for `authenticated` docs), which made record
+            # writes 404 ("Document not found") for any non-owner user. The record
+            # write itself is still governed by data_records' own RLS.
             row = await conn.fetchrow("""
                 SELECT data_schema, data_content, data_version
                 FROM data_files
                 WHERE file_id = $1 AND doc_type = 'data'
-                FOR UPDATE
             """, uuid.UUID(document_id))
             
             if not row:
@@ -667,11 +671,15 @@ class DataService:
         async with self.acquire_with_rls(request) as conn:
             use_table = await self._use_records_table(conn, document_id)
             
+            # Plain read (no FOR UPDATE): a record write only needs the document
+            # to be READABLE, not owned. FOR UPDATE forced the data_files UPDATE
+            # policy (owner-only for `authenticated` docs), which made record
+            # writes 404 ("Document not found") for any non-owner user. The record
+            # write itself is still governed by data_records' own RLS.
             row = await conn.fetchrow("""
                 SELECT data_schema, data_content, data_version
                 FROM data_files
                 WHERE file_id = $1 AND doc_type = 'data'
-                FOR UPDATE
             """, uuid.UUID(document_id))
             
             if not row:
@@ -802,11 +810,13 @@ class DataService:
         async with self.acquire_with_rls(request) as conn:
             use_table = await self._use_records_table(conn, document_id)
             
+            # Plain read (no FOR UPDATE) — see insert_records: deleting records
+            # needs the document readable, not owned. Record-level RLS still
+            # governs which rows a non-owner may delete.
             row = await conn.fetchrow("""
                 SELECT data_content, data_version
                 FROM data_files
                 WHERE file_id = $1 AND doc_type = 'data'
-                FOR UPDATE
             """, uuid.UUID(document_id))
             
             if not row:
