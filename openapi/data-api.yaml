@@ -128,7 +128,18 @@ paths:
                   example: '{"tags": ["report", "Q4"], "department": "finance"}'
                 processing_config:
                   type: string
-                  description: Optional JSON processing configuration
+                  description: |
+                    Optional JSON processing configuration. Supported fields include
+                    `start_pass`, `page_batch_size`, `force_reprocess`,
+                    `llm_cleanup_enabled`, `marker_enabled`, `entity_extraction_enabled`,
+                    `chunk_size_min`/`chunk_size_max`, `chunk_overlap_pct`,
+                    `colpali_enabled`, `multi_flow_enabled`, `max_parallel_strategies`,
+                    and (PDFs only) `skip_indexing`: when `true`, Pass 1 still extracts
+                    text and reaches `available` with real progress exactly as usual,
+                    but skips chunking/embedding/indexing for this document — for
+                    callers that only need the extracted text (e.g. passing it to an
+                    LLM) and have no use for this document being searchable. Pass 2
+                    (OCR enhancement) still runs afterward regardless of this flag.
                   example: '{"extraction_strategy": "marker", "chunk_size": 500}'
                 visibility:
                   type: string
