@@ -226,6 +226,18 @@ class ChatAgent(BaseStreamingAgent):
         """Build lightweight context for a fast classification + ack pass."""
         lines: List[str] = []
 
+        # Company terminology so the classifier and planner recognize
+        # internal acronyms (a query about "PREC" is a company question,
+        # not Canadian real estate).
+        try:
+            from app.services.org_glossary import glossary_prompt_section
+            glossary = glossary_prompt_section()
+            if glossary:
+                lines.append(glossary)
+                lines.append("")
+        except Exception:  # noqa: BLE001
+            pass
+
         if context.compressed_history_summary:
             lines.append("Conversation summary:")
             lines.append(context.compressed_history_summary[:800])

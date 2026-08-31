@@ -1,0 +1,18 @@
+# Company terminology glossary.
+#
+# Injected into chat prompts so the assistant resolves internal acronyms,
+# entities, and shorthand the way an employee would — instead of falling
+# back to general-knowledge meanings (e.g. PREC != Canadian real estate).
+#
+# Edit + restart agent-api to apply. Keep entries to one line each; this
+# whole file is injected into prompts, so brevity matters (~15 tokens per
+# entry). Aim for terms a new employee would need decoded.
+
+terms:
+  PREC: "Patriot Renewable Energy Capital, LLC — renewable energy investment affiliate (also 'Patriot')"
+  C-SAFE: "Cashman's company-wide safety program and safety vision"
+  "2-and-1": "Standard rotational work schedule for non-union field operations (two weeks on, one off)"
+  QCR: "Quality Control Report — daily construction/dredging log (also 'QC Report')"
+  Sterling: "Sterling Equipment, Inc. — affiliated marine equipment company (barges, cranes)"
+  JCI: "Jay Cashman, Inc. — the parent company"
+  PVT: "Production Verification Test — post-deployment validation checks"
