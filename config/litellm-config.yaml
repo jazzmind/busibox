@@ -117,10 +117,11 @@ model_list:
 
   - model_name: frontier
     litellm_params:
-      model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      # No date/version suffix on 4.6 — see model_registry.yml.
+      model: bedrock/us.anthropic.claude-sonnet-4-6
     model_info:
       display_name: "Frontier"
-      description: "Claude 4.5 Sonnet - Most capable, frontier model (Sept 2025)"
+      description: "Claude 4.6 Sonnet - frontier model, 1M ctx (Feb 2026)"
       multimodal: true
       tool_calling: true
 
@@ -210,6 +211,14 @@ model_list:
       api_key: local
     model_info:
       description: "Qwen3.6 MoE 35B/A3B at MLX dynamic 4-bit (~23GB) — best 4-bit quality, fits 48GB+ Macs."
+      multimodal: true
+      tool_calling: true
+
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-6
+    model_info:
+      description: "Claude 4.6 Sonnet - frontier model, 1M ctx (Feb 2026)"
       multimodal: true
       tool_calling: true
 

@@ -226,6 +226,18 @@ class ChatAgent(BaseStreamingAgent):
         """Build lightweight context for a fast classification + ack pass."""
         lines: List[str] = []
 
+        # Company terminology so the classifier and planner recognize
+        # internal acronyms (a query about "PREC" is a company question,
+        # not Canadian real estate).
+        try:
+            from app.services.org_glossary import glossary_prompt_section
+            glossary = glossary_prompt_section()
+            if glossary:
+                lines.append(glossary)
+                lines.append("")
+        except Exception:  # noqa: BLE001
+            pass
+
         if context.compressed_history_summary:
             lines.append("Conversation summary:")
             lines.append(context.compressed_history_summary[:800])
@@ -492,6 +504,15 @@ class ChatAgent(BaseStreamingAgent):
             )
         return decision
 
+    # Neutral acknowledgments used whenever tools will run. Deterministic
+    # per-query (hash-picked) so repeated questions get consistent wording.
+    _ACK_RESPONSES = (
+        "Let me look into that for you.",
+        "Checking the company documents now.",
+        "On it — gathering the details.",
+        "Sure — looking that up now.",
+    )
+
     async def _generate_fast_ack(self, query: str, context: AgentContext) -> FastAckDecision:
         """
         Generate a fast first response and decide whether we need a deeper tool pass.
@@ -527,7 +548,16 @@ class ChatAgent(BaseStreamingAgent):
             "Intent guidance (IMPORTANT):\n"
             "- Queries about owned records/documents/candidates/resumes (e.g. 'do I have resumes for data analytics?') MUST set action_type=search and needs_tools=true.\n"
             "- If user asks to find/list/show/filter internal data, do NOT answer directly; use tools.\n"
-            "- Prefer false positives (using tools) over false negatives (missing a search).\n"
+            "- Prefer false positives (using tools) over false negatives (missing a search).\n\n"
+            "Examples (query -> decision):\n"
+            "- 'how do I submit for reimbursement' -> action_type=search, needs_tools=true\n"
+            "- 'how much vacation do I have left' -> action_type=search, needs_tools=true\n"
+            "- 'is tomorrow a company holiday' -> action_type=search, needs_tools=true\n"
+            "- 'what about managers?' (after a policy question) -> action_type=search, needs_tools=true\n"
+            "- 'what is the difference between a bid bond and a performance bond' -> action_type=direct, needs_tools=false\n"
+            "- 'hi' -> action_type=direct, needs_tools=false\n"
+            "- 'thanks, that helped' -> action_type=direct, needs_tools=false\n"
+            "- 'can you help me with something' -> action_type=clarify, needs_tools=false\n"
             + (
                 "- User has uploaded attachments. If the question is about the attachments, "
                 "set needs_tools=true and respond with something like 'Let me review that attachment.' "
@@ -580,9 +610,23 @@ class ChatAgent(BaseStreamingAgent):
                 if not parsed.follow_up_question:
                     parsed.follow_up_question = "Could you clarify what you want me to focus on?"
             parsed.routing_source = "llm"
+            if parsed.needs_tools:
+                # Never let the fast model state a factual answer before tools
+                # have run. Its freeform ack sometimes contains a speculative
+                # guess ("Yes, tomorrow appears to be a holiday.") that the
+                # synthesis then contradicts. Classification stays with the
+                # model; the ack wording does not.
+                parsed.response = self._ACK_RESPONSES[
+                    hash(query) % len(self._ACK_RESPONSES)
+                ]
             return parsed
         except (json.JSONDecodeError, ValidationError, Exception) as exc:
-            logger.warning("Fast ack generation fallback after %dms: %s", round((time.monotonic() - t_llm) * 1000) if 't_llm' in dir() else -1, exc)
+            logger.warning(
+                "Fast ack generation fallback after %dms: %s | raw=%r",
+                round((time.monotonic() - t_llm) * 1000) if 't_llm' in dir() else -1,
+                exc,
+                (raw[:200] if 'raw' in dir() else None),
+            )
             return default
 
     async def _generate_quick_findings(self, query: str, tool_results: Dict[str, Any]) -> str:

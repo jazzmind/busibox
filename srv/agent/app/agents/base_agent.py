@@ -2855,6 +2855,18 @@ class BaseStreamingAgent(StreamingAgent):
         parts.append("When the user refers to a month, day, or time period without specifying a year, assume the current year unless context clearly indicates otherwise.")
         parts.append("")
 
+        # Company terminology: resolve internal acronyms/entities (PREC,
+        # C-SAFE, ...) to their organizational meanings instead of
+        # general-knowledge guesses.
+        try:
+            from app.services.org_glossary import glossary_prompt_section
+            glossary = glossary_prompt_section()
+            if glossary:
+                parts.append(glossary)
+                parts.append("")
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"org_glossary injection skipped: {e}")
+
         # Add role-gated SKILL.md skills if enabled.
         try:
             skills_prompt = get_skills_service().render_skills_prompt(context.principal)

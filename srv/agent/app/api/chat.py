@@ -1150,6 +1150,11 @@ async def send_chat_message_stream_agentic(
             
             # Collect content for storing
             full_content = []
+            # Fast-ack text is excluded from full_content (on tool-path turns it
+            # is an acknowledgment, not the answer) but kept here so direct-path
+            # turns — where the fast response IS the final answer — still persist
+            # real content instead of the "No response generated." placeholder.
+            fast_ack_content = None
             thoughts = []
             run_events = []
             selected_agent_id = None
@@ -1243,8 +1248,13 @@ async def send_chat_message_stream_agentic(
                         selected_agent_id = event.data["selected_agent"]
             
             # Store assistant message
-            # Join without separator - content chunks are already properly formatted
-            response_text = "".join(full_content) if full_content else "No response generated."
+            # Join without separator - content chunks are already properly formatted.
+            # Direct-path turns stream only the fast-ack, so fall back to it
+            # before admitting defeat with the placeholder.
+            response_text = (
+                "".join(full_content) if full_content
+                else (fast_ack_content or "No response generated.")
+            )
             
             # Build routing_decision payload.  Always include citations even when
             # no thoughts/agents present, so the frontend can render source chips.

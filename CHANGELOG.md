@@ -120,3 +120,13 @@ listed here so the first public changelog gives a complete picture.
 
 [Unreleased]: https://github.com/jazzmind/busibox/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/jazzmind/busibox/releases/tag/v0.1.0
+
+### Fixed
+
+- **Chat fast-path fixes** from the August production review:
+  short conversational turns ("hi", "yes") no longer persist
+  "No response generated."; the fast classifier no longer streams
+  speculative answers as acknowledgments when tools are about to run;
+  few-shot examples added to the intent classifier so policy questions
+  reach document retrieval. Full findings with evidence in
+  `docs/developers/chat-qa-findings-2026-08.md`.
