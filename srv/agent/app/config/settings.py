@@ -91,6 +91,15 @@ class Settings(BaseSettings):
         description="Path to routes.yaml (defaults to <service root>/config/routes.yaml)",
     )
 
+    # Model aliases that route to cloud providers (Bedrock/OpenAI) via LiteLLM.
+    # Local-only params (vLLM/MLX extra_body like chat_template_kwargs) must not
+    # be sent to these — cloud providers reject unknown params with a 400.
+    # Keep in sync with model purpose mappings when re-pointing aliases.
+    cloud_routed_aliases: str = Field(
+        "chat,research,frontier,frontier-fast,fallback",
+        description="Comma-separated model aliases served by cloud providers; vLLM/MLX-only request params are suppressed for these",
+    )
+
     # Milvus configuration (for insights)
     milvus_host: str = Field(
         "milvus",

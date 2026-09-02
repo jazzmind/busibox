@@ -742,10 +742,30 @@ class BaseStreamingAgent(StreamingAgent):
             return True
         return False
 
+    @classmethod
+    def _routes_to_cloud(cls, model_name: str) -> bool:
+        """Whether *model_name* is served by a cloud provider (Bedrock/OpenAI).
+
+        Checks both the frontier prefixes and the settings-driven
+        ``cloud_routed_aliases`` list. Aliases like ``chat`` can be re-pointed
+        from local vLLM to Bedrock at runtime (LiteLLM model purposes), and
+        cloud providers reject vLLM-only params (e.g. ``chat_template_kwargs``
+        in ``extra_body``) with a 400 — so anything listed there must never
+        receive local-backend request params.
+        """
+        name = (model_name or "").lower()
+        aliases = {
+            a.strip().lower()
+            for a in get_settings().cloud_routed_aliases.split(",")
+            if a.strip()
+        }
+        return name in aliases or any(
+            name.startswith(p) for p in cls._FRONTIER_MODEL_PREFIXES
+        )
+
     def _is_frontier_model(self) -> bool:
         """Whether the model routes to a frontier API (Claude, OpenAI, etc.)."""
-        model_name = (self.config.model or "").lower()
-        return any(model_name.startswith(p) for p in self._FRONTIER_MODEL_PREFIXES)
+        return self._routes_to_cloud(self.config.model or "")
 
     def _inject_thinking_settings(self, model_settings: Dict[str, Any]) -> None:
         """Mutate *model_settings* to control thinking across all backends.
@@ -2348,7 +2368,9 @@ class BaseStreamingAgent(StreamingAgent):
             },
         }
         _so_backend = get_settings().llm_backend.lower()
-        if _so_backend in ("mlx", "vllm"):
+        if _so_backend in ("mlx", "vllm") and not self._routes_to_cloud(model_name):
+            # chat_template_kwargs is a vLLM/MLX-only param; cloud providers
+            # (Bedrock/OpenAI) reject it with 400 "Extra inputs are not permitted".
             kwargs["extra_body"] = {
                 "chat_template_kwargs": {"enable_thinking": False},
             }
