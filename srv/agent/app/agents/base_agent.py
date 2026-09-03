@@ -705,12 +705,44 @@ class BaseStreamingAgent(StreamingAgent):
             model_settings["max_tokens"] = config.max_tokens
         self._inject_thinking_settings(model_settings)
         
-        # Create synthesis agent
+        # Create synthesis agent.
+        # The synthesizer has NO tool executor, but it inherits the agent's
+        # general instructions ("use tools proactively") when no dedicated
+        # synthesis prompt is configured — so models "call" tools in text
+        # (<tool_code> print(web_search(...))) when results feel thin.
+        # Always append the synthesis guard so the final answer never
+        # contains tool-call syntax.
+        _synth_base = config.synthesis_prompt or config.instructions or ""
         self.synthesis_agent = Agent(
             model=self.synthesis_model,
-            system_prompt=config.synthesis_prompt or config.instructions,
+            system_prompt=f"{_synth_base}\n\n{self._SYNTHESIS_GUARD}".strip(),
             model_settings=model_settings if model_settings else None,
         )
+
+    # Appended to every synthesis system prompt (see __init__).
+    _SYNTHESIS_GUARD = (
+        "## Final-answer rules (synthesis stage)\n"
+        "You are writing the final answer from the tool results already gathered "
+        "above. You have NO tools available in this step and cannot run searches. "
+        "Never write tool calls, function calls, code blocks, or tags such as "
+        "<tool_code>, <tool_call>, print(web_search(...)) or similar — they will "
+        "be shown to the user verbatim as broken output. If the gathered results "
+        "are insufficient, say plainly what could not be found (and, if a tool "
+        "reported an error, say that the search was unavailable), then answer as "
+        "best you can from the available context and general knowledge, clearly "
+        "labelling anything that is not from the provided sources."
+    )
+
+    # Detects tool-call syntax leaking into synthesized text.
+    _TOOL_SYNTAX_RE = re.compile(
+        r"<tool_code>|<tool_call>|<function_call>|<\|tool_call\|>"
+        r"|\bprint\(\s*[a-z_]+\("
+        r"|\b(?:web_search|document_search|query_data|get_weather|memory_search)"
+        r"\(\s*(?:query|queries|q)\s*=",
+        re.IGNORECASE,
+    )
+    # Characters held back from streaming so a leak can be caught before emit.
+    _SYNTHESIS_HOLDBACK = 48
     
     _THINKING_DISABLED_MODELS = {"fast", "test", "chat"}
     _FRONTIER_MODEL_PREFIXES = {"frontier", "claude", "gpt", "o1", "o3", "gemini"}
@@ -2792,18 +2824,65 @@ class BaseStreamingAgent(StreamingAgent):
         ))
         
         try:
+            async def _emit(text: str) -> None:
+                if text:
+                    await stream(content(
+                        source=self.name,
+                        message=text,
+                        data={"streaming": True, "partial": True}
+                    ))
+
             async def _run_synthesis():
+                """Stream the synthesized answer with a tool-syntax leak guard.
+
+                Text is emitted with a small hold-back window so that a tool
+                call written as text (finding #8) is caught before it reaches
+                the user. On detection the stream is cut at the leak, and a
+                second, non-streaming pass with a stricter instruction produces
+                the replacement tail.
+                """
                 full_output = ""
+                emitted = 0
+                leaked = False
                 async with self.synthesis_agent.run_stream(synthesis_context) as result:
                     async for chunk in result.stream_text(delta=True):
                         if cancel.is_set():
                             break
                         full_output += chunk
-                        await stream(content(
-                            source=self.name,
-                            message=chunk,
-                            data={"streaming": True, "partial": True}
-                        ))
+                        m = self._TOOL_SYNTAX_RE.search(full_output, max(0, emitted - 16))
+                        if m:
+                            leaked = True
+                            full_output = full_output[:m.start()].rstrip()
+                            break
+                        safe_upto = len(full_output) - self._SYNTHESIS_HOLDBACK
+                        if safe_upto > emitted:
+                            await _emit(full_output[emitted:safe_upto])
+                            emitted = safe_upto
+
+                if leaked:
+                    logger.warning(
+                        f"{self.name} synthesis emitted tool-call syntax; regenerating tail",
+                        extra={"leaked_preview": full_output[-200:]},
+                    )
+                    retry_prompt = (
+                        f"{synthesis_context}\n\n"
+                        "IMPORTANT: You cannot run tools now. Do NOT write any tool call, "
+                        "function call, code block or tag. Write the final answer directly "
+                        "from the results above; if something could not be found, say so "
+                        "in one sentence and give your best answer from available context."
+                    )
+                    retry = await self.synthesis_agent.run(retry_prompt)
+                    retry_text = getattr(retry, "output", None) or getattr(retry, "data", None) or ""
+                    tail = self._TOOL_SYNTAX_RE.split(str(retry_text))[0].strip()
+                    if not tail:
+                        tail = (
+                            "I wasn't able to gather additional information for this "
+                            "request, so I can't give a complete answer here."
+                        )
+                    full_output = (full_output + ("\n\n" if full_output else "") + tail)
+
+                # Flush whatever is still held back (or the regenerated tail).
+                await _emit(full_output[emitted:])
                 return full_output
 
             full_output = await asyncio.wait_for(
