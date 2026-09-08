@@ -123,6 +123,14 @@ listed here so the first public changelog gives a complete picture.
 
 ### Fixed
 
+- **Chat agent pipeline fixes** (September production review):
+  the planner now accepts loosely-typed model output instead of
+  discarding every plan (multi-step plans and web search run again);
+  synthesized answers can no longer contain tool-call syntax; vLLM-only
+  request parameters are suppressed for cloud-routed model aliases (new
+  setting `CLOUD_ROUTED_ALIASES`, default
+  `chat,research,frontier,frontier-fast,fallback`); replying "yes" to an
+  offer no longer crashes the clarify path.
 - **Chat fast-path fixes** from the August production review:
   short conversational turns ("hi", "yes") no longer persist
   "No response generated."; the fast classifier no longer streams
