@@ -705,6 +705,55 @@ pub fn sync_vault_file(
     }
 }
 
+/// Push the local `ssl/` directory to a remote host.
+///
+/// The main `sync()` excludes `ssl/` for security (it contains private keys
+/// and is gitignored). But Ansible's nginx role needs the cert files on the
+/// controller when deploying the proxy. This function rsyncs the ssl/
+/// directory separately, skipping if it doesn't exist or is empty.
+pub fn sync_ssl_dir(
+    local_path: &Path,
+    host: &str,
+    user: &str,
+    key_path: &str,
+    remote_path: &str,
+) -> Result<()> {
+    let ssl_dir = local_path.join("ssl");
+    if !ssl_dir.is_dir() {
+        return Ok(());
+    }
+    let has_files = std::fs::read_dir(&ssl_dir)
+        .map(|mut rd| rd.any(|e| e.is_ok()))
+        .unwrap_or(false);
+    if !has_files {
+        return Ok(());
+    }
+
+    let key_expanded = shellexpand(key_path);
+    let mut args: Vec<String> = vec!["-az".into(), "--delete".into()];
+    if !key_expanded.is_empty() && Path::new(&key_expanded).exists() {
+        args.push("-e".into());
+        args.push(format!(
+            "ssh -i {key_expanded} -o StrictHostKeyChecking=accept-new"
+        ));
+    }
+    // Trailing slash on source = sync contents into destination directory
+    args.push(format!("{}/", ssl_dir.to_string_lossy()));
+    args.push(format!("{user}@{host}:{remote_path}/ssl/"));
+
+    let output = Command::new("rsync").args(&args).output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(eyre!(
+            "ssl rsync failed (exit {:?}): {}",
+            output.status.code(),
+            stderr.trim()
+        ))
+    }
+}
+
 /// Known insecure/placeholder defaults that indicate a vault value hasn't been
 /// configured for production. Mirrors the blocklist in
 /// provision/ansible/roles/validate_env/tasks/docker.yml.

@@ -333,17 +333,27 @@ class PipelineMixin:
     ):
         """
         Process a PDF using the progressive enhancement pipeline.
-        
+
         Runs 3 passes, making the document viewable after Pass 1 and
         progressively improving quality through Pass 2 (OCR) and Pass 3 (LLM+Marker).
-        
+
         Supports processing_config["start_pass"] (1, 2, or 3) to skip earlier passes
         during reprocessing.
+
+        Supports processing_config["skip_indexing"] (bool, default False) for
+        callers that only want the extracted text (e.g. a one-off LLM prompt)
+        and have no use for this document being chunked, embedded, and
+        indexed into Milvus for search. Markdown is still generated and
+        uploaded, and the file still reaches stage "available" with real
+        progress, exactly as it does today — only the chunk/embed/index work
+        within each Pass 1 batch is skipped. Pass 2 (OCR) and Pass 3 still run
+        as usual afterward; this flag only affects Pass 1's indexing step.
         """
         from processors.pdf_splitter import PDFSplitter
-        
+
         start_pass = int(processing_config.get("start_pass", 1)) if processing_config else 1
         start_pass = max(1, min(3, start_pass))
+        skip_indexing = bool(processing_config.get("skip_indexing", False)) if processing_config else False
         
         page_count = self.text_extractor.pdf_splitter.get_page_count(temp_file_path)
         
@@ -389,9 +399,10 @@ class PipelineMixin:
             file_id, "parsing",
             f"Progressive Pass 1: Fast text extraction (pymupdf4llm + layout)"
             f"{' (' + str(num_batches) + ' batches)' if use_batching else ''}"
-            f"{' (text-only, skipping index)' if start_pass > 1 else ''}",
+            f"{' (text-only, skipping index)' if start_pass > 1 or skip_indexing else ''}",
             metadata={"pass": 1, "page_count": page_count, "start_pass": start_pass,
-                       "page_batch_size": page_batch_size, "num_batches": num_batches},
+                       "page_batch_size": page_batch_size, "num_batches": num_batches,
+                       "skip_indexing": skip_indexing},
         )
         self.postgres_service.update_pass_info(
             file_id, processing_pass=1,
@@ -426,19 +437,20 @@ class PipelineMixin:
             ctx.pass1_texts.extend([pt.text for pt in batch_page_texts])
 
             if start_pass <= 1:
-                batch_chunks = self.progressive_pipeline.chunk_text_for_batch(
-                    batch_page_texts, overlap_page_texts, chunk_index_offset,
-                )
-
-                if batch_chunks:
-                    self._batch_chunk_embed_index(
-                        file_id, user_id, content_hash,
-                        visibility, role_ids,
-                        batch_chunks, processing_pass=1,
+                if not skip_indexing:
+                    batch_chunks = self.progressive_pipeline.chunk_text_for_batch(
+                        batch_page_texts, overlap_page_texts, chunk_index_offset,
                     )
-                    all_pass1_chunks.extend(batch_chunks)
-                    chunk_index_offset += len(batch_chunks)
-                    total_chunks += len(batch_chunks)
+
+                    if batch_chunks:
+                        self._batch_chunk_embed_index(
+                            file_id, user_id, content_hash,
+                            visibility, role_ids,
+                            batch_chunks, processing_pass=1,
+                        )
+                        all_pass1_chunks.extend(batch_chunks)
+                        chunk_index_offset += len(batch_chunks)
+                        total_chunks += len(batch_chunks)
 
                 batch_combined_for_md = self.progressive_pipeline._combine_page_texts(
                     batch_page_texts

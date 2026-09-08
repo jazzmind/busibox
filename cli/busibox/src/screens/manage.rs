@@ -2156,6 +2156,14 @@ fn spawn_update_worker(app: &mut App, service_list: &str) {
                         let _ = tx.send(ManageUpdate::Log(format!("WARNING: vault push failed: {e}")));
                     }
                 }
+                match remote::sync_ssl_dir(&repo_root, display_host, user, key, &remote_path) {
+                    Ok(()) => {
+                        let _ = tx.send(ManageUpdate::Log("✓ SSL certificates synced".into()));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(ManageUpdate::Log(format!("WARNING: SSL cert sync failed: {e}")));
+                    }
+                }
                 let _ = remote::cleanup_remote_state(&ssh, &remote_path);
             }
         }
@@ -2612,6 +2620,14 @@ fn spawn_action_worker(app: &mut App, service_name: &str, action: &str) {
                         let _ = tx.send(ManageUpdate::Log(format!(
                             "WARNING: vault push failed: {e}"
                         )));
+                    }
+                }
+                match remote::sync_ssl_dir(&repo_root, display_host, user, key, &remote_path) {
+                    Ok(()) => {
+                        let _ = tx.send(ManageUpdate::Log("✓ SSL certificates synced".into()));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(ManageUpdate::Log(format!("WARNING: SSL cert sync failed: {e}")));
                     }
                 }
 
@@ -3164,6 +3180,14 @@ pub fn spawn_install_with_env(app: &mut App, services: &str, extra_env: &str) {
                         let _ = tx.send(ManageUpdate::Log(format!(
                             "WARNING: vault push failed: {e}"
                         )));
+                    }
+                }
+                match remote::sync_ssl_dir(&repo_root, display_host, user, key, &remote_path) {
+                    Ok(()) => {
+                        let _ = tx.send(ManageUpdate::Log("✓ SSL certificates synced".into()));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(ManageUpdate::Log(format!("WARNING: SSL cert sync failed: {e}")));
                     }
                 }
 

@@ -360,9 +360,12 @@ case "${1:-start}" in
             fi
         fi
 
-        # Start enabled apps via supervisord
+        # Start all apps that have been built (regardless of ENABLED_APPS).
+        # ENABLED_APPS controls what gets built on first boot / code update,
+        # but once an app is deployed (e.g. via `make install SERVICE=busibox-chat`)
+        # it should survive container restarts.
         for app_name in portal agents admin chat appbuilder media documents; do
-            if is_app_enabled "${app_name}" && is_app_built "${app_name}"; then
+            if is_app_built "${app_name}"; then
                 log_info "Starting busibox-${app_name}..."
                 supervisorctl start "busibox-${app_name}" 2>&1 || true
             fi

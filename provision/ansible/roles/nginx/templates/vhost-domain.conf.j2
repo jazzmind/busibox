@@ -3,8 +3,9 @@
 # Handles domain and path-based routing
 
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
     
     # Server names from all domain-type routes
     server_name {% for app in apps_with_routes %}{% for route in app.routes %}{% if route.type == 'domain' %}{% for d in route.domains %}{{ d }} {% endfor %}{% endif %}{% endfor %}{% endfor %}{{ domain }};

@@ -11,6 +11,13 @@ changes — see release notes per version.
 
 ### Added
 
+- **`skip_indexing` PDF upload option for data-api** (off by default).
+  `POST /upload`'s `processing_config` now accepts `"skip_indexing": true`
+  for PDFs: Pass 1 still extracts text and reaches stage `available` with
+  real progress, but skips chunking/embedding/indexing for callers that
+  only need the extracted text (e.g. as an LLM prompt) and have no use for
+  the document being made searchable. Pass 2 (OCR) is unaffected. See
+  `srv/data/src/worker/pipeline.py`'s `_process_pdf_progressive` docstring.
 - **Semantic router fast path for chat intent routing** (off by default).
   Embeds queries against example utterances in
   `srv/agent/config/routes.yaml` and skips the fast-ack LLM call on
@@ -116,6 +123,14 @@ listed here so the first public changelog gives a complete picture.
 
 ### Fixed
 
+- **Chat agent pipeline fixes** (September production review):
+  the planner now accepts loosely-typed model output instead of
+  discarding every plan (multi-step plans and web search run again);
+  synthesized answers can no longer contain tool-call syntax; vLLM-only
+  request parameters are suppressed for cloud-routed model aliases (new
+  setting `CLOUD_ROUTED_ALIASES`, default
+  `chat,research,frontier,frontier-fast,fallback`); replying "yes" to an
+  offer no longer crashes the clarify path.
 - **Chat fast-path fixes** from the August production review:
   short conversational turns ("hi", "yes") no longer persist
   "No response generated."; the fast classifier no longer streams

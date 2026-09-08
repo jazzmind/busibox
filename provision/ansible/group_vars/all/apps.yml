@@ -233,6 +233,7 @@ applications:
       <<: *common_env
       NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/chat"
       NEXT_PUBLIC_BASE_PATH: "/chat"
+      NEXT_PUBLIC_CHAT_BRAND: "marine"
       PORT: "3003"
 
   - name: busibox-appbuilder
