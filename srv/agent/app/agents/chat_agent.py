@@ -36,6 +36,7 @@ import re
 logger = logging.getLogger(__name__)
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+_URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
 
 _YES_NO_PATTERNS = [
     re.compile(r"\bwould you like me to\b"),
@@ -291,6 +292,9 @@ class ChatAgent(BaseStreamingAgent):
             model="chat",
             tools=[
                 "web_search",
+                "web_extract",
+                "web_map",
+                "deep_research",
                 "get_weather",
                 "document_search",
                 "list_data_documents",
@@ -406,6 +410,13 @@ class ChatAgent(BaseStreamingAgent):
             "search_documents": "document_search",
             "web_search": "web_search",
             "search_web": "web_search",
+            "web_extract": "web_extract",
+            "extract": "web_extract",
+            "read_page": "web_extract",
+            "web_map": "web_map",
+            "site_map": "web_map",
+            "deep_research": "deep_research",
+            "research": "deep_research",
             "weather": "get_weather",
             "get_weather": "get_weather",
             "task": "create_task",
@@ -456,6 +467,21 @@ class ChatAgent(BaseStreamingAgent):
         except Exception:
             # Keep planner args as-is if signature introspection fails.
             pass
+
+        # Tavily tools: the planner sometimes names the intent but not the
+        # required argument. Backfill from the user message where possible.
+        if tool_name == "deep_research" and not normalized.get("question"):
+            normalized["question"] = query
+        elif tool_name in {"web_extract", "web_map"}:
+            urls_in_query = _URL_RE.findall(query or "")
+            if tool_name == "web_extract":
+                raw_urls = normalized.get("urls")
+                if isinstance(raw_urls, str):
+                    normalized["urls"] = [raw_urls]
+                elif not raw_urls and urls_in_query:
+                    normalized["urls"] = urls_in_query
+            elif not normalized.get("url") and urls_in_query:
+                normalized["url"] = urls_in_query[0]
         return normalized
 
     def _heuristic_fast_ack(self, query: str) -> FastAckDecision:
@@ -1014,6 +1040,10 @@ class ChatAgent(BaseStreamingAgent):
             "- Do NOT include `memory_search` or `memory_save` unless the user asks about previous conversations or preferences.\n"
             + doc_search_rule +
             "- When `web_search` is also needed, run it IN PARALLEL with `document_search` by putting both step IDs in the same parallel_groups entry.\n"
+            "- For news or time-sensitive questions pass `topic=\"news\"` and a `time_range` (day/week/month/year) to `web_search`.\n"
+            "- Use `web_extract` only when the user gives a URL or asks to read a specific page in full; use `web_map` only to discover pages on a named website.\n"
+            "- Use `deep_research` ONLY when the user explicitly asks for a report, deep dive, comprehensive comparison or market/company analysis "
+            "(it takes minutes and costs credits); it replaces `web_search` in that plan and runs after `document_search`.\n"
             "- Use `list_data_documents`, `get_data_document`, or `query_data` ONLY when the user explicitly asks about structured data tables/records.\n\n"
             f"Dispatch action type: {dispatch.action_type}\n"
             f"User query: {query}\n"
