@@ -27,6 +27,45 @@ changes — see release notes per version.
   `SEMANTIC_ROUTER_CONFIG_PATH`. See
   `docs/developers/guides/semantic-router.md`.
 
+### Fixed
+
+- **Chat attachments** (September 9 production incident): a message that
+  carries a file now always goes to the deep pass (`routing_source =
+  attachment_rule`) instead of asking the 0.8B classifier, which had
+  answered the last line of its own prompt ("What are the missing profile
+  fields you need me to gather?"); profile follow-ups and missing-field
+  hints were removed from the classifier prompt and any classifier output
+  that echoes prompt scaffolding is discarded; a file sent without a
+  question gets a default "summarize the attached document" objective;
+  attachments from the previous turn are carried forward and history is
+  annotated with `[Attached: ...]`, so "what's the attached?" resolves to
+  the file sent last turn; the attachment-only fallback plan no longer runs
+  an unrelated web search; a processed PDF with no extractable text
+  (scanned) is described as such instead of a bare `[Attachment]`
+  placeholder the model could invent contents for.
+- **`citations` is always present in `routing_decision`** (empty list when
+  no document sources), and is included in the `message_complete` event, so
+  the chat UI no longer shows "Sources pending" indefinitely.
+- **Agent-api JSON logs keep `extra={...}` fields.** `structlog.stdlib.ExtraAdder`
+  was missing from the formatter's `foreign_pre_chain`, so routing and
+  planner diagnostics (`action_type`, `needs_tools`, timings) were dropped
+  before reaching journald.
+- **Chat agent pipeline fixes** (September production review):
+  the planner now accepts loosely-typed model output instead of
+  discarding every plan (multi-step plans and web search run again);
+  synthesized answers can no longer contain tool-call syntax; vLLM-only
+  request parameters are suppressed for cloud-routed model aliases (new
+  setting `CLOUD_ROUTED_ALIASES`, default
+  `chat,research,frontier,frontier-fast,fallback`); replying "yes" to an
+  offer no longer crashes the clarify path.
+- **Chat fast-path fixes** from the August production review:
+  short conversational turns ("hi", "yes") no longer persist
+  "No response generated."; the fast classifier no longer streams
+  speculative answers as acknowledgments when tools are about to run;
+  few-shot examples added to the intent classifier so policy questions
+  reach document retrieval. Full findings with evidence in
+  `docs/developers/chat-qa-findings-2026-08.md`.
+
 ## [0.1.0] — 2026-05-04
 
 Initial public, MIT-licensed release of Busibox. This is an **early-stage
@@ -120,21 +159,3 @@ listed here so the first public changelog gives a complete picture.
 
 [Unreleased]: https://github.com/jazzmind/busibox/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/jazzmind/busibox/releases/tag/v0.1.0
-
-### Fixed
-
-- **Chat agent pipeline fixes** (September production review):
-  the planner now accepts loosely-typed model output instead of
-  discarding every plan (multi-step plans and web search run again);
-  synthesized answers can no longer contain tool-call syntax; vLLM-only
-  request parameters are suppressed for cloud-routed model aliases (new
-  setting `CLOUD_ROUTED_ALIASES`, default
-  `chat,research,frontier,frontier-fast,fallback`); replying "yes" to an
-  offer no longer crashes the clarify path.
-- **Chat fast-path fixes** from the August production review:
-  short conversational turns ("hi", "yes") no longer persist
-  "No response generated."; the fast classifier no longer streams
-  speculative answers as acknowledgments when tools are about to run;
-  few-shot examples added to the intent classifier so policy questions
-  reach document retrieval. Full findings with evidence in
-  `docs/developers/chat-qa-findings-2026-08.md`.
