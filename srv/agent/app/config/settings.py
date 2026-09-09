@@ -100,6 +100,16 @@ class Settings(BaseSettings):
         description="Comma-separated model aliases served by cloud providers; vLLM/MLX-only request params are suppressed for these",
     )
 
+    # Grounding policy (synthesis): tier selection thresholds
+    grounding_strong_doc_score: float = Field(
+        0.65,
+        description="document_search score at/above which the answer is grounded in documents only (tier 'documents')",
+    )
+    grounding_stale_after_months: int = Field(
+        12,
+        description="Documents older than this are flagged as possibly outdated in the synthesis prompt",
+    )
+
     # Milvus configuration (for insights)
     milvus_host: str = Field(
         "milvus",

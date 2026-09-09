@@ -680,6 +680,8 @@ class AgentContext:
     # _build_user_content skips malformed entries from unvalidated paths.
     # Each item: {"media_type": "image/jpeg", "data": "<base64>"}
     images: List[Dict[str, str]] = field(default_factory=list)
+    # Grounding assessment computed before synthesis (services/grounding.py)
+    grounding: Optional[Dict[str, Any]] = None
     # Deduplication cache for tool calls: maps (tool_name, args_json) -> result
     _tool_call_dedup: Dict[str, Any] = field(default_factory=dict)
 
@@ -2542,6 +2544,15 @@ class BaseStreamingAgent(StreamingAgent):
         parts.append(f"Today is {now.strftime('%A, %B %d, %Y, %H:%M UTC')}.")
         parts.append("When the user refers to a month or time period without specifying a year, assume the current year unless context clearly indicates otherwise.")
 
+        # The model calls tools itself on this path, so the tier cannot be
+        # known up front; give it the policy in static form.
+        try:
+            from app.services.grounding import STATIC_GROUNDING_RULES
+            parts.append("")
+            parts.append(STATIC_GROUNDING_RULES)
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"grounding rules skipped: {e}")
+
         try:
             skills_prompt = get_skills_service().render_skills_prompt(context.principal)
             if skills_prompt:
@@ -2850,7 +2861,19 @@ class BaseStreamingAgent(StreamingAgent):
         # Build synthesis context
         SYNTHESIS_TIMEOUT_SECONDS = 90
         synthesis_context = self._build_synthesis_context(query, context)
-        
+
+        if context.grounding:
+            await stream(thought(
+                source=self.name,
+                message=(
+                    f"Grounding: {context.grounding.get('tier')} "
+                    f"(docs={context.grounding.get('doc_hits')}, "
+                    f"max_score={float(context.grounding.get('doc_max_score') or 0):.2f}, "
+                    f"web={context.grounding.get('web_hits')})"
+                ),
+                data={"phase": "grounding", **context.grounding},
+            ))
+
         await stream(progress(
             source=self.name,
             message="Generating response...",
@@ -3092,7 +3115,25 @@ class BaseStreamingAgent(StreamingAgent):
                     parts.append(f"\n### {tool_name}\n{result}")
             parts.append("")
         
-        parts.append("Please answer the user's question based on all available context. Be conversational and reference relevant context when appropriate. If any tool results above are not relevant to the user's query, ignore them completely.")
+        # 7. Tiered grounding policy chosen from the evidence above.
+        try:
+            from app.services.grounding import assess_grounding, grounding_prompt_section
+            _settings = get_settings()
+            assessment = assess_grounding(
+                query,
+                context.tool_results,
+                context.resolved_attachments,
+                strong_doc_score=_settings.grounding_strong_doc_score,
+            )
+            context.grounding = assessment.as_dict()
+            parts.append(grounding_prompt_section(
+                assessment, today=_now.date(), stale_after_months=_settings.grounding_stale_after_months,
+            ))
+            parts.append("")
+        except Exception as e:  # noqa: BLE001 — policy must never break synthesis
+            logger.warning(f"grounding assessment skipped: {e}")
+
+        parts.append("Answer the user's question following the grounding policy above. Be conversational and reference relevant context when appropriate. If any tool results above are not relevant to the user's query, ignore them completely.")
         return "\n".join(parts)
     
     def _build_fallback_response(self, query: str, context: AgentContext) -> str:
