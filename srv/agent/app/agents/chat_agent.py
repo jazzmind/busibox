@@ -27,6 +27,13 @@ from app.agents.base_agent import (
     ToolStrategy,
 )
 from app.schemas.streaming import clarify_parallel, content, error, interim, plan, progress, prompt, thought
+from app.services.routing_guards import (
+    GuardOutcome,
+    affirmation_guard,
+    cap_plan_steps,
+    clarify_loop_guard,
+    factual_guard,
+)
 from pydantic import BaseModel, ValidationError, field_validator
 
 from busibox_common.llm import get_client
@@ -248,6 +255,9 @@ class ExecutionPlan(BaseModel):
     parallel_groups: List[List[str]] = []
     feedback_points: List[FeedbackPoint] = []
     estimated_duration: str = "quick"
+    # llm = planner model produced it; fallback = deterministic mapping after
+    # the planner failed. Read by the escalation guard.
+    source: str = "llm"
 
     @field_validator("summary", mode="before")
     @classmethod
@@ -652,6 +662,46 @@ class ChatAgent(BaseStreamingAgent):
                     "query_preview": query[:80],
                 },
             )
+        return decision
+
+    async def _stream_guard(self, stream, outcome: GuardOutcome) -> None:
+        logger.info(
+            "Routing guard triggered",
+            extra={"guard": outcome.name, "reason": outcome.reason, "rewritten_query": (outcome.query or "")[:80]},
+        )
+        await stream(thought(
+            source=self.name,
+            message=f"Guard: {outcome.name} — {outcome.reason}",
+            data={"phase": "guard", "guard": outcome.name, "reason": outcome.reason},
+        ))
+
+    async def _apply_routing_guards(
+        self,
+        query: str,
+        decision: FastAckDecision,
+        history: List[Dict[str, Any]],
+        stream,
+    ) -> FastAckDecision:
+        """Deterministic overrides of the classifier (services/routing_guards.py)."""
+        outcome = clarify_loop_guard(decision.action_type, history)
+        if not outcome.triggered:
+            try:
+                from app.services.org_glossary import mentioned_terms
+                terms = mentioned_terms(query)
+            except Exception:  # noqa: BLE001
+                terms = []
+            outcome = factual_guard(
+                query, decision.action_type, decision.needs_tools, decision.routing_source, terms
+            )
+        if not outcome.triggered:
+            return decision
+        await self._stream_guard(stream, outcome)
+        decision.action_type = outcome.action_type or decision.action_type
+        decision.needs_tools = outcome.needs_tools if outcome.needs_tools is not None else decision.needs_tools
+        decision.follow_up_question = None
+        if decision.needs_tools:
+            decision.response = self._ACK_RESPONSES[hash(query) % len(self._ACK_RESPONSES)]
+        decision.routing_source = f"{decision.routing_source}+{outcome.name}_guard"
         return decision
 
     @staticmethod
@@ -1080,6 +1130,9 @@ class ChatAgent(BaseStreamingAgent):
         except (json.JSONDecodeError, ValidationError, Exception) as exc:
             logger.warning("Plan generation fallback: %s", exc)
             planned = fallback
+            plan_source = "fallback"
+        else:
+            plan_source = "llm"
 
         seen_steps: List[PlanStep] = []
         used_ids: Set[str] = set()
@@ -1133,6 +1186,7 @@ class ChatAgent(BaseStreamingAgent):
             parallel_groups=normalized_groups,
             feedback_points=feedback_points,
             estimated_duration=planned.estimated_duration or fallback.estimated_duration,
+            source=plan_source,
         )
 
     def _format_plan_summary(self, execution_plan: ExecutionPlan) -> str:
@@ -1144,6 +1198,54 @@ class ChatAgent(BaseStreamingAgent):
             f"Estimated duration: {execution_plan.estimated_duration}\n"
             "Planned steps:\n- " + "\n- ".join(bullets)
         )
+
+    # Tools whose failures are usually transient (search-api 500, provider
+    # timeout). Retried once before the answer is written without them.
+    _RETRYABLE_TOOLS = {"document_search", "web_search", "query_data"}
+    _RETRY_DELAY_SECONDS = 1.0
+
+    @staticmethod
+    def _step_failed(agent_context: AgentContext, tool: str) -> Optional[str]:
+        """Return a short failure reason if the tool produced no usable result."""
+        result = agent_context.tool_results.get(tool)
+        if result is None:
+            return "no result"
+        error = getattr(result, "error", None)
+        found = getattr(result, "found", None)
+        has_items = bool(getattr(result, "results", None))
+        if error and not has_items and found is not True:
+            return str(error)[:120]
+        return None
+
+    async def _retry_failed_search_steps(
+        self, steps: List[PlanStep], stream, cancel, agent_context: AgentContext
+    ) -> None:
+        for step in steps:
+            if cancel.is_set():
+                return
+            if step.tool not in self._RETRYABLE_TOOLS:
+                continue
+            reason = self._step_failed(agent_context, step.tool)
+            if not reason:
+                continue
+            logger.warning("Tool %s failed (%s); retrying once", step.tool, reason)
+            await stream(thought(
+                source=self.name,
+                message=f"{step.tool} failed ({reason}); retrying once.",
+                data={"phase": "retry", "tool": step.tool, "reason": reason},
+            ))
+            await asyncio.sleep(self._RETRY_DELAY_SECONDS)
+            await self._execute_step(PipelineStep(tool=step.tool, args=step.args), stream, cancel, agent_context)
+
+    def _turn_budget_exhausted(self, agent_context: AgentContext) -> bool:
+        if not agent_context.turn_started:
+            return False
+        try:
+            from app.config.settings import get_settings as _gs
+            budget = _gs().chat_turn_budget_seconds
+        except Exception:  # noqa: BLE001
+            budget = 120
+        return (time.monotonic() - agent_context.turn_started) > budget
 
     async def _execute_plan(
         self,
@@ -1181,6 +1283,8 @@ class ChatAgent(BaseStreamingAgent):
                 for s in fast_steps
             ]
             await asyncio.gather(*fast_tasks, return_exceptions=True)
+
+            await self._retry_failed_search_steps(fast_steps, stream, cancel, agent_context)
 
             for step in fast_steps:
                 completed.add(step.id)
@@ -1247,6 +1351,23 @@ class ChatAgent(BaseStreamingAgent):
                 else:
                     runnable = [next_step]
 
+                # Turn time budget: stop starting new slow steps once the
+                # turn has run long, except deep_research, which the user
+                # asked for explicitly and which is slow by design.
+                if self._turn_budget_exhausted(agent_context):
+                    skipped = [s for s in runnable if s.tool != "deep_research"]
+                    runnable = [s for s in runnable if s.tool == "deep_research"]
+                    for step in skipped:
+                        completed.add(step.id)
+                        logger.warning("Skipping %s: turn time budget exhausted", step.tool)
+                        await stream(thought(
+                            source=self.name,
+                            message=f"Skipping {step.tool}: this turn has used its time budget.",
+                            data={"phase": "budget", "skipped_tool": step.tool},
+                        ))
+                    if not runnable:
+                        continue
+
                 tasks = [
                     self._execute_step(
                         PipelineStep(tool=s.tool, args=s.args), stream, cancel, agent_context
@@ -1254,6 +1375,7 @@ class ChatAgent(BaseStreamingAgent):
                     for s in runnable
                 ]
                 await asyncio.gather(*tasks, return_exceptions=True)
+                await self._retry_failed_search_steps(runnable, stream, cancel, agent_context)
 
                 for step in runnable:
                     completed.add(step.id)
@@ -1313,9 +1435,34 @@ class ChatAgent(BaseStreamingAgent):
             query = self._default_attachment_objective(agent_context)
             logger.info("Chat attachment-only message; using default objective: %s", query[:80])
         agent_context.current_query = query
+        agent_context.turn_started = t0
+
+        # "yes" / "no" after an offer is resolved before routing: the offer
+        # becomes the query, or the turn closes politely — never a fresh
+        # classification of the word "yes".
+        history = agent_context.recent_messages or agent_context.conversation_history
+        affirmation = affirmation_guard(query, history, _ends_with_yes_no_question)
+        if affirmation.triggered:
+            await self._stream_guard(stream, affirmation)
+            if affirmation.direct_reply:
+                await stream(content(source=self.name, message=affirmation.direct_reply, data={"phase": "direct"}))
+                return affirmation.direct_reply
+            query = affirmation.query or query
+            agent_context.current_query = query
 
         t_ack = time.monotonic()
-        decision = await self._route_intent(query, agent_context)
+        if affirmation.triggered:
+            decision = FastAckDecision(
+                action_type="search",
+                needs_tools=True,
+                response=self._ACK_RESPONSES[hash(query) % len(self._ACK_RESPONSES)],
+                confidence=1.0,
+                routing_source="affirmation_guard",
+                complexity="moderate",
+            )
+        else:
+            decision = await self._route_intent(query, agent_context)
+            decision = await self._apply_routing_guards(query, decision, history, stream)
         logger.info(
             "Chat fast_ack decision",
             extra={
@@ -1494,6 +1641,44 @@ class ChatAgent(BaseStreamingAgent):
         await self._resolve_attachments(query, stream, agent_context)
 
         execution_plan = await self._generate_plan(query, agent_context, decision)
+
+        # Escalation: a generic fallback plan is a poor fit for a complex
+        # request. Let the synthesis model drive the tools itself instead.
+        if (
+            execution_plan.source == "fallback"
+            and decision.complexity == "complex"
+            and self.config.tool_strategy == ToolStrategy.LLM_DRIVEN
+        ):
+            logger.info("Planner fallback on complex request; escalating to LLM-driven tool use")
+            await stream(thought(
+                source=self.name,
+                message="Planner unavailable for a complex request — letting the model choose tools directly.",
+                data={"phase": "escalation", "from": "plan_fallback", "to": "llm_driven"},
+            ))
+            execution_plan = ExecutionPlan(
+                summary="Letting the model choose tools directly.", steps=[], source="fallback",
+            )
+
+        # Budget: never run more than chat_max_tool_steps steps in one turn.
+        try:
+            from app.config.settings import get_settings as _gs
+            max_steps = _gs().chat_max_tool_steps
+        except Exception:  # noqa: BLE001
+            max_steps = 6
+        if len(execution_plan.steps) > max_steps:
+            dropped = [s.tool for s in execution_plan.steps]
+            execution_plan.steps = cap_plan_steps(execution_plan.steps, max_steps)
+            kept_ids = {s.id for s in execution_plan.steps}
+            execution_plan.parallel_groups = [
+                [sid for sid in g if sid in kept_ids] for g in execution_plan.parallel_groups
+            ]
+            logger.info("Plan capped to %d steps (planned %d: %s)", max_steps, len(dropped), dropped)
+            await stream(thought(
+                source=self.name,
+                message=f"Limiting this turn to {max_steps} tool steps.",
+                data={"phase": "budget", "max_steps": max_steps, "planned": len(dropped)},
+            ))
+
         await stream(plan(
             source=self.name,
             message=self._format_plan_summary(execution_plan),
