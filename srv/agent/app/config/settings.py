@@ -110,6 +110,16 @@ class Settings(BaseSettings):
         description="Documents older than this are flagged as possibly outdated in the synthesis prompt",
     )
 
+    # Chat turn budget (escalation guards)
+    chat_max_tool_steps: int = Field(
+        6,
+        description="Maximum planned tool steps executed per chat turn (deep_research is never dropped)",
+    )
+    chat_turn_budget_seconds: int = Field(
+        120,
+        description="After this many seconds in a turn, remaining slow tool steps are skipped (deep_research exempt)",
+    )
+
     # Milvus configuration (for insights)
     milvus_host: str = Field(
         "milvus",

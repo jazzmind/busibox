@@ -26,6 +26,32 @@ changes — see release notes per version.
   `SEMANTIC_ROUTER_MODE` (`shadow`/`live`), `SEMANTIC_ROUTER_THRESHOLD`,
   `SEMANTIC_ROUTER_CONFIG_PATH`. See
   `docs/developers/guides/semantic-router.md`.
+- **Tavily deep research, extract and map tools for chat.** `web_search` now
+  calls Tavily with `search_depth=advanced` and three snippets per source,
+  and accepts `topic` (news/finance), `time_range` and `include_domains`.
+  New chat tools: `web_extract` (clean markdown for given URLs, scraper
+  fallback without a key), `web_map` (site URL discovery) and
+  `deep_research` (Tavily Research: multi-search cited report, polled up to
+  `TAVILY_RESEARCH_TIMEOUT_SECONDS`). The planner is told to reserve
+  `deep_research` for explicit report/deep-dive requests.
+- **Tiered grounding policy for synthesis** (`app/services/grounding.py`).
+  The synthesis prompt now carries a tier chosen from the evidence —
+  attachment, documents, web, estimate, knowledge — plus absence, recency
+  (document age), conflict and tool-failure rules, so answers say where
+  they come from and never refuse a figure outright. `document_search`
+  hits carry `document_date` when the search API provides one. Settings:
+  `GROUNDING_STRONG_DOC_SCORE`, `GROUNDING_STALE_AFTER_MONTHS`.
+- **Anti-loop and escalation guards** (`app/services/routing_guards.py`):
+  a second clarifying question in a row is replaced by a search; "yes"/"no"
+  after an offer becomes the offer (or a polite close) instead of a fresh
+  classification; a no-tools answer to a company-fact question (policy,
+  rates, holidays, glossary terms) is forced through retrieval; failed
+  document/web searches are retried once; a generic fallback plan on a
+  complex request escalates to model-driven tool use; per-turn caps
+  `CHAT_MAX_TOOL_STEPS` (6) and `CHAT_TURN_BUDGET_SECONDS` (120,
+  `deep_research` exempt). Earlier assistant turns in the history now
+  carry their routing `action_type`, and every guard emits a `Guard: ...`
+  thought.
 
 ### Fixed
 

@@ -1159,7 +1159,16 @@ async def send_chat_message_stream_agentic(
                 if prior_files:
                     names = ", ".join(p.filename for p in prior_files)
                     content_text = f"{content_text}\n[Attached: {names}]".strip()
-                history_dicts.append({"role": msg.role, "content": content_text})
+                entry: Dict[str, Any] = {"role": msg.role, "content": content_text}
+                # Expose the routing action of earlier assistant turns so the
+                # clarify-loop guard can see that a question was already asked.
+                if msg.role == "assistant" and isinstance(msg.routing_decision, dict):
+                    for t in msg.routing_decision.get("thoughts") or []:
+                        data = t.get("data") if isinstance(t, dict) else None
+                        if isinstance(data, dict) and data.get("phase") == "intent_routing":
+                            entry["action_type"] = data.get("action_type")
+                            break
+                history_dicts.append(entry)
 
             if not attachment_metadata and prior_files_by_message:
                 for msg in reversed(history_messages):

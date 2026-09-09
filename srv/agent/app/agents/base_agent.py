@@ -682,6 +682,8 @@ class AgentContext:
     images: List[Dict[str, str]] = field(default_factory=list)
     # Grounding assessment computed before synthesis (services/grounding.py)
     grounding: Optional[Dict[str, Any]] = None
+    # time.monotonic() when the turn started; read by the turn time budget
+    turn_started: float = 0.0
     # Deduplication cache for tool calls: maps (tool_name, args_json) -> result
     _tool_call_dedup: Dict[str, Any] = field(default_factory=dict)
 
