@@ -1185,7 +1185,7 @@ async def send_chat_message_stream_agentic(
                 available_agents = payload.selected_agents
             else:
                 available_agents = ["chat"]
-            
+
             # Collect content for storing
             full_content = []
             # Fast-ack text is excluded from full_content (on tool-path turns it
@@ -1199,7 +1199,7 @@ async def send_chat_message_stream_agentic(
             # Citations gathered from document_search tool results, keyed by file_id.
             # Stored as a dict to deduplicate (keep highest score, earliest page).
             citations_by_file: Dict[str, Any] = {}
-            
+
             # Run agentic dispatcher
             dispatcher_metadata: Dict[str, Any] = dict(payload.metadata or {})
             dispatcher_metadata["conversation_id"] = str(conversation.id)
@@ -1303,8 +1303,10 @@ async def send_chat_message_stream_agentic(
             if thoughts or available_agents:
                 routing_payload["thoughts"] = thoughts
                 routing_payload["selected_agents"] = available_agents
-            if collected_citations:
-                routing_payload["citations"] = collected_citations
+            # Always present, even when empty: a missing key reads as "not
+            # collected yet" and left the UI showing "Sources pending" forever
+            # on answers that had no document sources.
+            routing_payload["citations"] = collected_citations
 
             assistant_message = Message(
                 conversation_id=conversation.id,
@@ -1410,9 +1412,10 @@ async def send_chat_message_stream_agentic(
             completion_data = {
                 'message_id': str(assistant_message.id),
                 'conversation_id': str(conversation.id),
+                'citations': collected_citations,
             }
             yield f"event: message_complete\ndata: {json.dumps(completion_data)}\n\n"
-            
+
             logger.info(
                 "Agentic chat request complete",
                 extra={

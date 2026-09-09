@@ -95,6 +95,11 @@ def setup_logging(settings: Settings) -> None:
         foreign_pre_chain=[
             structlog.stdlib.add_logger_name,
             structlog.stdlib.add_log_level,
+            # Copy `extra={...}` fields from stdlib records into the JSON
+            # event. Without this every logger.info(..., extra=...) in the
+            # agents (routing decisions, plan stats, timings) was reduced to
+            # its bare message in journald.
+            structlog.stdlib.ExtraAdder(),
             structlog.processors.TimeStamper(fmt="iso"),
             TraceContextFilter.add_trace_context,
         ],

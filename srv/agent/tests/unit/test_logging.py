@@ -85,6 +85,31 @@ def test_setup_logging_configures_json_formatter():
     assert handler is not None
 
 
+def test_setup_logging_keeps_extra_fields(capsys):
+    """`extra={...}` on stdlib log calls must survive into the JSON line.
+
+    The agents log their routing/planning decisions this way; before
+    ExtraAdder was in the foreign_pre_chain those fields were dropped and
+    journald only showed the bare event name.
+    """
+    import json
+
+    settings = Settings(log_level="INFO")
+    setup_logging(settings)
+
+    logging.getLogger("app.agents.test").info(
+        "Chat fast_ack decision",
+        extra={"action_type": "clarify", "needs_tools": False, "confidence": 0.9},
+    )
+
+    lines = [line for line in capsys.readouterr().out.splitlines() if "Chat fast_ack decision" in line]
+    assert lines, "expected a JSON log line on stdout"
+    payload = json.loads(lines[-1])
+    assert payload["action_type"] == "clarify"
+    assert payload["needs_tools"] is False
+    assert payload["confidence"] == 0.9
+
+
 def test_setup_tracing_creates_tracer_provider():
     """Test that setup_tracing creates and configures tracer provider."""
     settings = Settings(environment="test", debug=True)
