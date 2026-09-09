@@ -33,7 +33,12 @@ changes — see release notes per version.
   fallback without a key), `web_map` (site URL discovery) and
   `deep_research` (Tavily Research: multi-search cited report, polled up to
   `TAVILY_RESEARCH_TIMEOUT_SECONDS`). The planner is told to reserve
-  `deep_research` for explicit report/deep-dive requests.
+  `deep_research` for explicit report/deep-dive requests. A `deep_research`
+  semantic-router route (plus a regex fallback guard) detects "write a
+  report / deep dive / market analysis" phrasing, replies immediately that
+  a multi-source research pass will take a few minutes, forces the
+  `deep_research` step in the plan, and posts a progress note when the
+  step starts; without a Tavily key it downgrades to a normal web search.
 - **Tiered grounding policy for synthesis** (`app/services/grounding.py`).
   The synthesis prompt now carries a tier chosen from the evidence —
   attachment, documents, web, estimate, knowledge — plus absence, recency

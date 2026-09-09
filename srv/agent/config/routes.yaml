@@ -66,6 +66,30 @@ routes:
       - "what are the company's notable projects"
       - "how big is the company fleet"
 
+  deep_research:
+    # Explicit requests for a report / deep dive. preferred_tool makes the
+    # planner include deep_research (Tavily Research), which takes minutes,
+    # so the acknowledgement sets that expectation up front. When Tavily is
+    # not configured the agent downgrades this to a normal web search.
+    decision:
+      action_type: research
+      needs_tools: true
+      preferred_tool: deep_research
+      response: "This looks like a research task. I'll run a deep, multi-source research pass and put together a cited report — that usually takes a few minutes. I'll post it here when it's ready."
+      complexity: complex
+    threshold: 0.84
+    utterances:
+      - "do a deep research on the US hopper dredge market"
+      - "write a comprehensive report on port infrastructure funding"
+      - "research the competitors in marine construction and write a report"
+      - "give me an in-depth analysis of offshore wind port projects"
+      - "prepare a market analysis of dredging contractors on the east coast"
+      - "deep dive into the Army Corps dredging budget for next year"
+      - "put together a research report on beach nourishment costs"
+      - "I need a detailed competitive analysis of Great Lakes Dredge and Dock"
+      - "compile a report with sources on environmental dredging regulations"
+      - "research this topic thoroughly and cite your sources"
+
   greeting:
     # Pure greetings are answered directly without tools. The response
     # here is final only until "Phi never answers alone" lands; greetings

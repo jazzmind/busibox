@@ -3109,6 +3109,23 @@ class BaseStreamingAgent(StreamingAgent):
                             parts.append(f"\n{i}. {item.model_dump()}")
                         else:
                             parts.append(f"\n{i}. {item}")
+                elif hasattr(result, 'report'):
+                    # deep_research: cited markdown report plus its source list
+                    report = str(getattr(result, "report", "") or "")
+                    if report.strip():
+                        parts.append(f"\n### {tool_name} (cited research report)\n{report[:12000]}")
+                        sources = getattr(result, "sources", None) or []
+                        if sources:
+                            parts.append("\nSources used by the report:")
+                            for src in sources[:25]:
+                                title = getattr(src, "title", "") or ""
+                                url = getattr(src, "url", "") or ""
+                                parts.append(f"- {title} {url}".strip())
+                    else:
+                        parts.append(
+                            f"\n### {tool_name}\nNo report was produced "
+                            f"({getattr(result, 'status', 'unknown')}: {getattr(result, 'error', '') or 'no details'})."
+                        )
                 elif hasattr(result, 'content'):
                     # Web scraper style result
                     parts.append(f"\n### {tool_name}\n{result.content[:2000]}")

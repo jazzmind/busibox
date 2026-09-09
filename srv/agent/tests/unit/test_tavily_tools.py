@@ -297,4 +297,5 @@ def test_planner_backfills_tavily_args():
     assert agent._normalize_planned_step_args("web_extract", {}, q)["urls"] == ["https://www.nae.usace.army.mil/Missions/"]
     assert agent._normalize_planned_step_args("web_extract", {"urls": "https://x.example"}, q)["urls"] == ["https://x.example"]
     assert agent._normalize_planned_step_args("web_map", {}, q)["url"] == "https://www.nae.usace.army.mil/Missions/"
-    assert agent._resolve_planned_tool("research") == "deep_research"
+    assert agent._resolve_planned_tool("deep_research") == "deep_research"
+    assert agent._resolve_planned_tool("research") is None  # never upgrade a plain search by alias
