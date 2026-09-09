@@ -319,6 +319,9 @@ TOOL_SCOPES: Dict[str, List[str]] = {
     "document_search": ["search.read"],
     "web_search": [],  # No auth needed
     "web_scraper": [],  # No auth needed
+    "web_extract": [],  # No auth needed
+    "web_map": [],  # No auth needed
+    "deep_research": [],  # No auth needed
     "playwright_browser": [],  # No auth needed
     "data_document": ["data.write"],
     "list_data_documents": ["data.read"],
@@ -372,6 +375,9 @@ TOOL_CLASSES: Dict[str, Dict[str, Any]] = {
     "rag_query": {"class": "fast", "timeout": 15},
     "web_search": {"class": "slow", "timeout": 30},
     "web_scraper": {"class": "slow", "timeout": 180},
+    "web_extract": {"class": "slow", "timeout": 90},
+    "web_map": {"class": "slow", "timeout": 160},
+    "deep_research": {"class": "slow", "timeout": 300},
     "playwright_browser": {"class": "slow", "timeout": 120},
     "generate_image": {"class": "slow", "timeout": 120},
     "transcribe_audio": {"class": "slow", "timeout": 60},
@@ -520,6 +526,11 @@ def _register_builtin_tools():
     from app.tools.document_search_tool import search_documents, DocumentSearchOutput
     from app.tools.web_search_tool import search_web, WebSearchOutput
     from app.tools.web_scraper_tool import scrape_webpage, WebScraperOutput
+    from app.tools.tavily_tools import (
+        web_extract, WebExtractOutput,
+        web_map, WebMapOutput,
+        deep_research, DeepResearchOutput,
+    )
     from app.tools.weather_tool import get_weather, WeatherOutput
     from app.tools.image_tool import generate_image, ImageOutput
     from app.tools.transcription_tool import transcribe_audio, TranscriptionOutput
@@ -535,6 +546,9 @@ def _register_builtin_tools():
     ToolRegistry.register("document_search", search_documents, DocumentSearchOutput)
     ToolRegistry.register("web_search", search_web, WebSearchOutput)
     ToolRegistry.register("web_scraper", scrape_webpage, WebScraperOutput)
+    ToolRegistry.register("web_extract", web_extract, WebExtractOutput)
+    ToolRegistry.register("web_map", web_map, WebMapOutput)
+    ToolRegistry.register("deep_research", deep_research, DeepResearchOutput)
     
     try:
         from app.tools.playwright_tool import browse_webpage as playwright_browse, PlaywrightBrowserOutput

@@ -156,6 +156,14 @@ class Settings(BaseSettings):
     search_duckduckgo_enabled: bool = Field(True, description="Enable DuckDuckGo search (free)")
     search_tavily_enabled: bool = Field(False, description="Enable Tavily search")
     tavily_api_key: Optional[str] = Field(None, description="Tavily API key")
+    tavily_research_timeout_seconds: int = Field(
+        240,
+        description="Max seconds to wait for a Tavily deep_research task before returning what is available",
+    )
+    tavily_research_default_model: str = Field(
+        "auto",
+        description="Tavily research agent model: mini (narrow questions), pro (multi-topic), auto",
+    )
     search_perplexity_enabled: bool = Field(False, description="Enable Perplexity search")
     perplexity_api_key: Optional[str] = Field(None, description="Perplexity API key")
     search_brave_enabled: bool = Field(False, description="Enable Brave search")
