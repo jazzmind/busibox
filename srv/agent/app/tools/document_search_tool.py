@@ -35,6 +35,27 @@ class SearchResultItem(BaseModel):
     score: float = Field(description="Relevance score")
     page_number: Optional[int] = Field(default=None, description="Page number if available")
     chunk_index: int = Field(default=0, description="Chunk index within the document")
+    document_date: Optional[str] = Field(
+        default=None,
+        description="Document date (ISO) when the search API provides one; used for recency rules",
+    )
+
+
+_DATE_KEYS = ("document_date", "modified_at", "updated_at", "last_modified", "created_at", "date")
+
+
+def _result_date(result: dict) -> Optional[str]:
+    """Best-effort ISO date for a search hit (top-level or metadata keys)."""
+    sources = [result]
+    meta = result.get("metadata")
+    if isinstance(meta, dict):
+        sources.append(meta)
+    for src in sources:
+        for key in _DATE_KEYS:
+            value = src.get(key)
+            if value:
+                return str(value)[:10]
+    return None
 
 
 class DocumentSearchOutput(BaseModel):
@@ -220,6 +241,7 @@ async def search_documents(
             page_num = result.get("page_number") if result.get("page_number", 0) > 0 else None
             score = result.get("score", 0.0)
 
+            doc_date = _result_date(result)
             result_item = SearchResultItem(
                 file_id=fid,
                 filename=fname,
@@ -227,12 +249,15 @@ async def search_documents(
                 score=score,
                 page_number=page_num,
                 chunk_index=result.get("chunk_index", 0),
+                document_date=doc_date,
             )
             formatted_results.append(result_item)
             
             source_parts = [fname]
             if page_num:
                 source_parts.append(f"p.{page_num}")
+            if doc_date:
+                source_parts.append(f"dated {doc_date}")
             source_ref = ", ".join(source_parts)
             # Citation URL includes page number so the UI can scroll directly to it.
             citation_url = f"doc:{fid}:{page_num}" if page_num else f"doc:{fid}"
