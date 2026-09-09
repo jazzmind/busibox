@@ -218,6 +218,13 @@ class AttachmentResolver:
                 logger.warning("Attachment resolution failed for %s: %s", attachment.get("id"), exc)
                 resolved.append(self._fallback_attachment(attachment))
 
+        # Every branch above appends exactly one result per attachment, so the
+        # lists line up. Carry the "sent on an earlier turn" marker through so
+        # the prompt can say so.
+        for meta, item in zip(attachment_metadata, resolved):
+            if meta.get("carried_forward"):
+                item["carried_forward"] = True
+
         return resolved
 
     async def _resolve_document(
@@ -291,8 +298,19 @@ class AttachmentResolver:
     ) -> Dict[str, Any]:
         """Full-quality path for completed documents."""
         markdown = await self._fetch_markdown(client=client, file_id=file_id)
-        if not markdown:
-            return self._fallback_attachment(attachment)
+        if not (markdown or "").strip():
+            # Processing finished but produced no text: almost always a
+            # scanned / image-only PDF whose OCR pass has not run yet. Say so
+            # explicitly rather than handing the model a bare "[Attachment]"
+            # placeholder it might invent contents for.
+            logger.info("Attachment %s completed with no extractable text", file_id)
+            if stream:
+                await stream(thought(
+                    source="attachments",
+                    message=f"**{filename}** has no extractable text yet (scanned document?).",
+                    data={"phase": "attachment_no_text", "file_id": file_id},
+                ))
+            return self._no_text_attachment(attachment)
 
         markdown_tokens = self._estimate_tokens(markdown)
         if markdown_tokens <= available_tokens:
@@ -704,6 +722,16 @@ class AttachmentResolver:
             "filename": filename,
             "source_kind": "fallback",
             "content": f"[Attachment: {filename}]",
+        }
+
+    def _no_text_attachment(self, attachment: Dict[str, Any]) -> Dict[str, Any]:
+        """Result for a processed document that yielded no text (e.g. a scan)."""
+        return {
+            "attachment_id": attachment.get("id"),
+            "filename": attachment.get("filename") or "attachment",
+            "source_kind": "no_text",
+            "mime_type": (attachment.get("mime_type") or "").lower(),
+            "content": "",
         }
 
 

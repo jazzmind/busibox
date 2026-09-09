@@ -71,6 +71,51 @@ def _strip_think_tags(text: str) -> tuple:
     return cleaned, think_text
 
 
+# Words that mean "the thing I attached". Used to decide whether a file carried
+# forward from an earlier turn (see api/chat.py) is the subject of this message.
+_ATTACHMENT_REF_RE = re.compile(
+    r"\b(?:attach(?:ed|ment|ments)?|upload(?:ed|s)?"
+    r"|(?:this|that|the|my) (?:file|files|doc|docs|document|documents|pdf|spreadsheet"
+    r"|sheet|image|photo|scan|report|drawing|contract|invoice)"
+    r"|it says|what does it say|summari[sz]e it|read it)\b",
+    re.IGNORECASE,
+)
+
+# Placeholder texts clients send when a message is attachment-only.
+_ATTACHMENT_ONLY_PLACEHOLDERS = {
+    "attached document", "attached documents", "attachment", "attachments",
+    "see attached", "file attached", "attached file", "attached",
+}
+
+# Phrases that only exist in the classifier's own scaffolding. A small model
+# occasionally answers the prompt instead of the user ("What are the missing
+# profile fields you need me to gather?"); such output must be discarded.
+_PROMPT_ECHO_MARKERS = (
+    "profile field", "needs_tools", "action_type", "follow_up_question",
+    "current user message", "return only json",
+)
+
+
+def _mentions_attachment(text: str) -> bool:
+    return bool(_ATTACHMENT_REF_RE.search(text or ""))
+
+
+def _looks_like_prompt_echo(text: Optional[str]) -> bool:
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in _PROMPT_ECHO_MARKERS)
+
+
+def _is_attachment_only_message(query: str, attachments: List[Dict[str, Any]]) -> bool:
+    """True when the message carries files but no real question."""
+    if not attachments:
+        return False
+    text = (query or "").strip().lower().rstrip(".!:")
+    if not text or text in _ATTACHMENT_ONLY_PLACEHOLDERS:
+        return True
+    names = {str(a.get("filename", "")).strip().lower() for a in attachments}
+    return text in names
+
+
 # Chat agent system prompt - focused on behavior, tools are auto-documented by PydanticAI
 CHAT_SYSTEM_PROMPT = """You are a versatile chat assistant that helps users by using available tools when appropriate.
 
@@ -338,22 +383,15 @@ class ChatAgent(BaseStreamingAgent):
             for attachment in context.attachment_metadata:
                 filename = attachment.get("filename", "attachment")
                 mime_type = attachment.get("mime_type", "unknown")
-                lines.append(f"- {filename} ({mime_type})")
+                note = " — sent earlier in this conversation" if attachment.get("carried_forward") else ""
+                lines.append(f"- {filename} ({mime_type}){note}")
             lines.append("")
 
+        # The user message is deliberately the last line: the classifier is a
+        # small model and answers whatever comes last. Profile follow-ups and
+        # missing profile fields used to trail it here and were echoed back
+        # as the reply; they belong to synthesis only (base_agent).
         lines.append(f"Current user message: {query}")
-
-        if context.insights_enabled:
-            if context.pending_questions:
-                lines.append("")
-                lines.append("(Optional, low-priority) After answering the user, you may append one of these profile follow-ups:")
-                for item in context.pending_questions[:2]:
-                    question = str(item.get("content", "")).strip()
-                    if question:
-                        lines.append(f"- {question}")
-
-            if context.missing_profile_fields:
-                lines.append(f"Missing profile fields: {', '.join(context.missing_profile_fields)}")
         return "\n".join(lines)
 
     def _normalize_action_type(self, action_type: str) -> str:
@@ -528,6 +566,12 @@ class ChatAgent(BaseStreamingAgent):
         """
         from app.config.settings import get_settings
 
+        # Messages about uploaded files never take the fast path: attachments
+        # are only read in the deep pass, and neither the router nor the
+        # small classifier needs to decide that.
+        if context.attachment_metadata:
+            return self._attachment_decision(query, context)
+
         router_settings = get_settings()
         if not router_settings.semantic_router_enabled:
             return await self._generate_fast_ack(query, context)
@@ -583,6 +627,44 @@ class ChatAgent(BaseStreamingAgent):
                 },
             )
         return decision
+
+    @staticmethod
+    def _attachments_in_focus(query: str, context: AgentContext) -> List[Dict[str, Any]]:
+        """Return the attachments this message is about.
+
+        Files uploaded with the message always count. Files carried forward
+        from earlier turns count only when the message refers to them, so
+        "what's the weather" after a PDF upload is not treated as a document
+        question, while "what's the attached?" resolves to last turn's file.
+        """
+        current = [a for a in context.attachment_metadata if not a.get("carried_forward")]
+        if current:
+            return current
+        if _mentions_attachment(query):
+            return list(context.attachment_metadata)
+        return []
+
+    @staticmethod
+    def _default_attachment_objective(context: AgentContext) -> str:
+        """Objective used when the user sent files without a question."""
+        names = [a.get("filename", "attachment") for a in context.attachment_metadata]
+        noun = "document" if len(names) == 1 else "documents"
+        return (
+            f"Summarize the attached {noun} ({', '.join(names)}): what it is, who it is "
+            "from or for, key dates, amounts, decisions and any action items."
+        )
+
+    def _attachment_decision(self, query: str, context: AgentContext) -> FastAckDecision:
+        """Deterministic routing decision for messages about uploaded files."""
+        count = len(context.attachment_metadata)
+        return FastAckDecision(
+            action_type="analysis",
+            needs_tools=True,
+            response="Let me review that attachment." if count == 1 else "Let me review those attachments.",
+            confidence=1.0,
+            routing_source="attachment_rule",
+            complexity="moderate",
+        )
 
     # Neutral acknowledgments used whenever tools will run. Deterministic
     # per-query (hash-picked) so repeated questions get consistent wording.
@@ -683,6 +765,12 @@ class ChatAgent(BaseStreamingAgent):
                     raw = raw[start:end + 1]
             parsed = FastAckDecision.model_validate(json.loads(raw))
             if not parsed.response.strip():
+                return default
+            if _looks_like_prompt_echo(parsed.response) or _looks_like_prompt_echo(parsed.follow_up_question):
+                logger.warning(
+                    "fast_ack: classifier echoed its own prompt; using heuristic decision | raw=%r",
+                    raw[:200],
+                )
                 return default
             parsed.action_type = self._normalize_action_type(parsed.action_type)
             if parsed.action_type == "clarify":
@@ -846,7 +934,11 @@ class ChatAgent(BaseStreamingAgent):
                     args={"limit": 50},
                 )
             )
-        if not fallback_steps and enabled_tools:
+        # A question about an uploaded file needs no tool at all: the content
+        # is injected into the prompt and the model answers from it. Without
+        # this guard the fallback ran an unrelated web_search just to have a
+        # step.
+        if not fallback_steps and enabled_tools and not attachment_only_query:
             fallback_steps.append(
                 PlanStep(id="step_1", tool=enabled_tools[0], objective="Collect supporting context", args={"query": query})
             )
@@ -855,7 +947,11 @@ class ChatAgent(BaseStreamingAgent):
         parallel_groups = [parallel_step_ids] if len(parallel_step_ids) > 1 else [[]]
 
         fallback = ExecutionPlan(
-            summary="I'll gather the most relevant information first, then synthesize the final answer.",
+            summary=(
+                "I'll read the attached file(s) and answer from their content."
+                if attachment_only_query and not fallback_steps
+                else "I'll gather the most relevant information first, then synthesize the final answer."
+            ),
             steps=fallback_steps,
             parallel_groups=parallel_groups,
             feedback_points=[],
@@ -1178,6 +1274,15 @@ class ChatAgent(BaseStreamingAgent):
             return "Authentication or session error. Please sign in and try again."
         if cancel.is_set():
             return ""
+
+        # Keep only the attachments this message is about, and give a file
+        # sent without a question a concrete objective so planning and
+        # synthesis have something to work from.
+        agent_context.attachment_metadata = self._attachments_in_focus(query, agent_context)
+        if _is_attachment_only_message(query, agent_context.attachment_metadata):
+            query = self._default_attachment_objective(agent_context)
+            logger.info("Chat attachment-only message; using default objective: %s", query[:80])
+        agent_context.current_query = query
 
         t_ack = time.monotonic()
         decision = await self._route_intent(query, agent_context)

@@ -1375,7 +1375,23 @@ class BaseStreamingAgent(StreamingAgent):
         for idx, attachment in enumerate(context.resolved_attachments, start=1):
             filename = attachment.get("filename", f"attachment-{idx}")
             source_kind = attachment.get("source_kind", "document")
-            parts.append(f"\n### Attachment {idx}: {filename} ({source_kind})")
+            origin = " — sent earlier in this conversation" if attachment.get("carried_forward") else ""
+            parts.append(f"\n### Attachment {idx}: {filename} ({source_kind}){origin}")
+
+            if source_kind == "no_text":
+                is_pdf = (
+                    str(attachment.get("mime_type", "")).lower() == "application/pdf"
+                    or filename.lower().endswith(".pdf")
+                )
+                parts.append(
+                    "No text could be extracted from this "
+                    + ("PDF. It is most likely a scanned or image-only document; OCR runs as a "
+                       "later processing pass and may still be in progress. "
+                       if is_pdf else "file. ")
+                    + "Tell the user this plainly, do not guess at the contents, and suggest "
+                    "asking again in a few minutes or uploading a text-based copy."
+                )
+                continue
 
             if source_kind == "image":
                 image_url = attachment.get("image_url")

@@ -1135,11 +1135,49 @@ async def send_chat_message_stream_agentic(
                 .order_by(Message.created_at.asc())
             )
             history_messages = history_result.scalars().all()
-            history_dicts = [
-                {"role": msg.role, "content": msg.content}
-                for msg in history_messages
-            ]
-            
+
+            # Attachments live on the message they were sent with, so a
+            # follow-up like "what's the attached?" used to arrive with no
+            # attachment at all and the agent would deny a file existed.
+            # Annotate the history with the filenames each turn carried, and
+            # when this message has no files of its own, carry the most recent
+            # turn's files forward (flagged so the agent can decide whether
+            # the new message is actually about them).
+            prior_files_by_message: Dict[uuid.UUID, List[ChatAttachment]] = {}
+            prior_user_ids = [msg.id for msg in history_messages if msg.role == "user"]
+            if prior_user_ids:
+                prior_result = await session.execute(
+                    select(ChatAttachment).where(ChatAttachment.message_id.in_(prior_user_ids))
+                )
+                for prior in prior_result.scalars().all():
+                    prior_files_by_message.setdefault(prior.message_id, []).append(prior)
+
+            history_dicts = []
+            for msg in history_messages:
+                content_text = msg.content or ""
+                prior_files = prior_files_by_message.get(msg.id)
+                if prior_files:
+                    names = ", ".join(p.filename for p in prior_files)
+                    content_text = f"{content_text}\n[Attached: {names}]".strip()
+                history_dicts.append({"role": msg.role, "content": content_text})
+
+            if not attachment_metadata and prior_files_by_message:
+                for msg in reversed(history_messages):
+                    prior_files = prior_files_by_message.get(msg.id)
+                    if not prior_files:
+                        continue
+                    for prior in prior_files:
+                        attachment_metadata.append({
+                            "id": str(prior.id),
+                            "file_id": _extract_file_id_from_url(prior.file_url),
+                            "filename": prior.filename,
+                            "mime_type": prior.mime_type,
+                            "file_url": prior.file_url,
+                            "parsed_content": prior.parsed_content,
+                            "carried_forward": True,
+                        })
+                    break
+
             # Determine available agents
             # Default to chat agent only - it's the versatile general-purpose agent
             # that can use tools (web search, documents, etc.) when needed
