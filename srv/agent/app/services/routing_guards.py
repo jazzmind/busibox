@@ -42,6 +42,18 @@ _FACTUAL_RE = re.compile(
     r"mileage)\b",
     re.IGNORECASE,
 )
+# Explicit asks for a report / deep dive. Backs up the semantic router's
+# deep_research route when the router is off or the query is phrased in a
+# way its utterances do not cover.
+_RESEARCH_RE = re.compile(
+    r"\b(?:deep[- ]research|deep[- ]dive|research report|research (?:this|it|the topic) (?:thoroughly|in depth|in-depth)|"
+    r"(?:comprehensive|in-depth|detailed|thorough|full) (?:report|analysis|overview|study|review|comparison)|"
+    r"(?:write|prepare|compile|put together|draft|create|produce)(?: me)? a (?:\w+ )?(?:report|white ?paper|market analysis|competitive analysis|literature review)|"
+    r"market (?:analysis|research|study)|competitive analysis|due diligence|white ?paper|literature review|"
+    r"cite your sources|with sources)\b",
+    re.IGNORECASE,
+)
+
 _GREETING_RE = re.compile(r"^\s*(?:hi|hello|hey|thanks|thank you|good (?:morning|afternoon|evening))\b", re.IGNORECASE)
 
 
@@ -173,3 +185,20 @@ def cap_plan_steps(steps: List[Any], max_steps: int, protected: Sequence[str] = 
     order = {id(s): i for i, s in enumerate(steps)}
     kept.sort(key=lambda s: order[id(s)])
     return kept
+
+
+def research_intent_guard(query: str) -> GuardOutcome:
+    """Detect an explicit request for deep, multi-source research."""
+    text = (query or "").strip()
+    if len(text.split()) < 4:
+        return GuardOutcome()
+    hit = _RESEARCH_RE.search(text)
+    if not hit:
+        return GuardOutcome()
+    return GuardOutcome(
+        triggered=True,
+        name="research_intent",
+        reason=f"explicit research request ('{hit.group(0)}')",
+        action_type="research",
+        needs_tools=True,
+    )

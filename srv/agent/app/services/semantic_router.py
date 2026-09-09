@@ -55,6 +55,9 @@ class RouteDefinition:
     needs_tools: bool = True
     response: str = "Let me look into that for you."
     complexity: str = "moderate"
+    # Optional tool the planner must include when this route fires
+    # (e.g. "deep_research"). None = planner decides.
+    preferred_tool: Optional[str] = None
     # Optional per-route threshold override (falls back to global).
     threshold: Optional[float] = None
     # Embedded lazily at load time.
@@ -73,6 +76,7 @@ class RouteMatch:
     complexity: str
     matched_utterance: str
     elapsed_ms: int
+    preferred_tool: Optional[str] = None
 
 
 def _cosine(a: List[float], b: List[float]) -> float:
@@ -137,6 +141,7 @@ class SemanticRouter:
                     "response", "Let me look into that for you."
                 ),
                 complexity=decision.get("complexity", "moderate"),
+                preferred_tool=decision.get("preferred_tool") or None,
                 threshold=spec.get("threshold"),
             )
         return routes
@@ -248,6 +253,7 @@ class SemanticRouter:
                         complexity=route.complexity,
                         matched_utterance=utterance,
                         elapsed_ms=0,
+                        preferred_tool=route.preferred_tool,
                     )
         if best is None:
             return None

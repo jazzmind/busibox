@@ -33,6 +33,7 @@ from app.services.routing_guards import (
     cap_plan_steps,
     clarify_loop_guard,
     factual_guard,
+    research_intent_guard,
 )
 from pydantic import BaseModel, ValidationError, field_validator
 
@@ -171,6 +172,9 @@ class FastAckDecision(BaseModel):
     confidence: float = 0.75
     routing_source: str = "llm"
     complexity: str = "moderate"  # simple | moderate | complex
+    # Tool the planner must include (set by the semantic router's route or
+    # a routing guard), e.g. "deep_research". None = planner decides.
+    preferred_tool: Optional[str] = None
 
 
 def _coerce_str(value: Any) -> Any:
@@ -426,7 +430,6 @@ class ChatAgent(BaseStreamingAgent):
             "web_map": "web_map",
             "site_map": "web_map",
             "deep_research": "deep_research",
-            "research": "deep_research",
             "weather": "get_weather",
             "get_weather": "get_weather",
             "task": "create_task",
@@ -637,6 +640,7 @@ class ChatAgent(BaseStreamingAgent):
                 confidence=match.score,
                 routing_source=f"semantic_router:{match.route}",
                 complexity=match.complexity,
+                preferred_tool=match.preferred_tool,
             )
 
         # Shadow mode (or live-mode miss): use the LLM classifier.
@@ -693,6 +697,14 @@ class ChatAgent(BaseStreamingAgent):
             outcome = factual_guard(
                 query, decision.action_type, decision.needs_tools, decision.routing_source, terms
             )
+        if not outcome.triggered and not decision.preferred_tool:
+            # Explicit "research this / write a report" phrasing that the
+            # router did not catch (router off, or below threshold).
+            research = research_intent_guard(query)
+            if research.triggered:
+                outcome = research
+                decision.preferred_tool = "deep_research"
+                decision.complexity = "complex"
         if not outcome.triggered:
             return decision
         await self._stream_guard(stream, outcome)
@@ -702,6 +714,49 @@ class ChatAgent(BaseStreamingAgent):
         if decision.needs_tools:
             decision.response = self._ACK_RESPONSES[hash(query) % len(self._ACK_RESPONSES)]
         decision.routing_source = f"{decision.routing_source}+{outcome.name}_guard"
+        return decision
+
+    # Acknowledgement for deep research: sets the time expectation up front
+    # because the Tavily research task runs for minutes, not seconds.
+    _RESEARCH_ACK = (
+        "This looks like a research task. I'll run a deep, multi-source research "
+        "pass and put together a cited report — that usually takes a few minutes. "
+        "I'll post it here when it's ready."
+    )
+
+    async def _confirm_deep_research(self, decision: FastAckDecision, stream) -> FastAckDecision:
+        """Keep deep research only when it can actually run; set the ack accordingly.
+
+        Without a Tavily key (or with the tool disabled) the request is
+        downgraded to a normal web search and the ack must not promise a
+        multi-minute report.
+        """
+        if decision.preferred_tool != "deep_research":
+            return decision
+        available = "deep_research" in self.config.tools and ToolRegistry.has("deep_research")
+        if available:
+            try:
+                from app.tools.tavily_tools import _tavily_api_key
+                available = bool(await _tavily_api_key())
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("deep_research availability check failed: %s", exc)
+                available = False
+        if not available:
+            logger.info("deep_research requested but unavailable (no Tavily key); using web search")
+            await stream(thought(
+                source=self.name,
+                message="Deep research isn't configured (no Tavily key) — running a standard web search instead.",
+                data={"phase": "escalation", "from": "deep_research", "to": "web_search"},
+            ))
+            decision.preferred_tool = None
+            decision.action_type = "research"
+            decision.needs_tools = True
+            return decision
+        decision.needs_tools = True
+        decision.action_type = "research"
+        decision.complexity = "complex"
+        decision.follow_up_question = None
+        decision.response = self._RESEARCH_ACK
         return decision
 
     @staticmethod
@@ -991,7 +1046,21 @@ class ChatAgent(BaseStreamingAgent):
             )
             parallel_step_ids.append("step_1")
 
-        if (
+        wants_deep_research = (
+            dispatch.preferred_tool == "deep_research" and "deep_research" in enabled_tools
+        )
+        if wants_deep_research:
+            # Tavily Research replaces the plain web search; it runs after the
+            # (fast) document search so company context is available too.
+            fallback_steps.append(
+                PlanStep(
+                    id=f"step_{len(fallback_steps) + 1}",
+                    tool="deep_research",
+                    objective="Run multi-source deep research and produce a cited report",
+                    args={"question": query, "model": "auto"},
+                )
+            )
+        elif (
             dispatch.action_type in {"research", "search"}
             and "web_search" in enabled_tools
         ):
@@ -1094,7 +1163,12 @@ class ChatAgent(BaseStreamingAgent):
             "- Use `web_extract` only when the user gives a URL or asks to read a specific page in full; use `web_map` only to discover pages on a named website.\n"
             "- Use `deep_research` ONLY when the user explicitly asks for a report, deep dive, comprehensive comparison or market/company analysis "
             "(it takes minutes and costs credits); it replaces `web_search` in that plan and runs after `document_search`.\n"
-            "- Use `list_data_documents`, `get_data_document`, or `query_data` ONLY when the user explicitly asks about structured data tables/records.\n\n"
+            + (
+                "- REQUIRED: the user asked for deep research. Include a `deep_research` step with "
+                "question=<the user's request, with any context they gave> and do NOT include `web_search`.\n"
+                if wants_deep_research else ""
+            )
+            + "- Use `list_data_documents`, `get_data_document`, or `query_data` ONLY when the user explicitly asks about structured data tables/records.\n\n"
             f"Dispatch action type: {dispatch.action_type}\n"
             f"User query: {query}\n"
             f"{self._build_fast_ack_context(query, context)}"
@@ -1159,6 +1233,20 @@ class ChatAgent(BaseStreamingAgent):
 
         if not seen_steps:
             seen_steps = fallback.steps
+
+        if wants_deep_research:
+            # The router/guard decided this turn is deep research; the small
+            # planner must not quietly drop it or double up with web_search.
+            seen_steps = [step for step in seen_steps if step.tool != "web_search"]
+            if not any(step.tool == "deep_research" for step in seen_steps):
+                seen_steps.append(
+                    PlanStep(
+                        id=f"step_{len(seen_steps) + 1}",
+                        tool="deep_research",
+                        objective="Run multi-source deep research and produce a cited report",
+                        args={"question": query, "model": "auto"},
+                    )
+                )
 
         valid_step_ids = {step.id for step in seen_steps}
         normalized_groups: List[List[str]] = []
@@ -1368,6 +1456,21 @@ class ChatAgent(BaseStreamingAgent):
                     if not runnable:
                         continue
 
+                if any(s.tool == "deep_research" for s in runnable):
+                    await stream(content(
+                        source=self.name,
+                        message=(
+                            "Deep research is running — searching and reading sources, then "
+                            "drafting a cited report. This usually takes a few minutes."
+                        ),
+                        data={"phase": "interim", "tool": "deep_research"},
+                    ))
+                    await stream(progress(
+                        source=self.name,
+                        message="Deep research in progress",
+                        data={"phase": "deep_research", "expected_minutes": "1-4"},
+                    ))
+
                 tasks = [
                     self._execute_step(
                         PipelineStep(tool=s.tool, args=s.args), stream, cancel, agent_context
@@ -1463,6 +1566,7 @@ class ChatAgent(BaseStreamingAgent):
         else:
             decision = await self._route_intent(query, agent_context)
             decision = await self._apply_routing_guards(query, decision, history, stream)
+        decision = await self._confirm_deep_research(decision, stream)
         logger.info(
             "Chat fast_ack decision",
             extra={
@@ -1488,6 +1592,7 @@ class ChatAgent(BaseStreamingAgent):
                 "confidence": decision.confidence,
                 "routing_source": decision.routing_source,
                 "follow_up_question": decision.follow_up_question,
+                "preferred_tool": decision.preferred_tool,
             },
         ))
         fast_response = decision.response.strip()
