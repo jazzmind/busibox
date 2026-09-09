@@ -757,6 +757,7 @@ class BaseStreamingAgent(StreamingAgent):
 
     _FRONTIER_EFFORT_MAP: Dict[str, str] = {
         "default": "medium",
+        "agent": "medium",
         "chat": "medium",
         "complex": "high",
         "research": "high",
@@ -812,9 +813,16 @@ class BaseStreamingAgent(StreamingAgent):
         model_name = (self.config.model or "").lower()
 
         if self._is_frontier_model():
+            # LiteLLM maps reasoning_effort to the provider's native parameter
+            # (Anthropic extended thinking / OpenAI reasoning effort). Do not
+            # send Qwen/MLX-only knobs (max_thinking_tokens, chat_template_kwargs).
+            effort = self._FRONTIER_EFFORT_MAP.get(
+                model_name, self._DEFAULT_FRONTIER_EFFORT
+            )
+            model_settings["reasoning_effort"] = effort
             logger.info(
-                "Thinking settings [frontier]: model=%s — no thinking limits applied",
-                model_name,
+                "Thinking settings [frontier]: model=%s reasoning_effort=%s",
+                model_name, effort,
             )
             return
 

@@ -96,7 +96,7 @@ class Settings(BaseSettings):
     # be sent to these — cloud providers reject unknown params with a 400.
     # Keep in sync with model purpose mappings when re-pointing aliases.
     cloud_routed_aliases: str = Field(
-        "chat,research,frontier,frontier-fast,fallback",
+        "agent,default,chat,research,frontier,frontier-fast,fallback",
         description="Comma-separated model aliases served by cloud providers; vLLM/MLX-only request params are suppressed for these",
     )
 

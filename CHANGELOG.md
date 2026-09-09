@@ -56,7 +56,9 @@ changes — see release notes per version.
   synthesized answers can no longer contain tool-call syntax; vLLM-only
   request parameters are suppressed for cloud-routed model aliases (new
   setting `CLOUD_ROUTED_ALIASES`, default
-  `chat,research,frontier,frontier-fast,fallback`); replying "yes" to an
+  `agent,default,chat,research,frontier,frontier-fast,fallback`); cloud
+  aliases also receive LiteLLM `reasoning_effort` (`medium` for agent/
+  default/chat, `high` for research/frontier); replying "yes" to an
   offer no longer crashes the clarify path.
 - **Chat fast-path fixes** from the August production review:
   short conversational turns ("hi", "yes") no longer persist
