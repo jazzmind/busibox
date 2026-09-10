@@ -1161,12 +1161,16 @@ async def send_chat_message_stream_agentic(
                     content_text = f"{content_text}\n[Attached: {names}]".strip()
                 entry: Dict[str, Any] = {"role": msg.role, "content": content_text}
                 # Expose the routing action of earlier assistant turns so the
-                # clarify-loop guard can see that a question was already asked.
+                # clarify-loop guard can see that a question was already asked,
+                # and the question a deep-research offer is waiting on so
+                # "yes" on the next turn resumes it.
                 if msg.role == "assistant" and isinstance(msg.routing_decision, dict):
                     for t in msg.routing_decision.get("thoughts") or []:
                         data = t.get("data") if isinstance(t, dict) else None
                         if isinstance(data, dict) and data.get("phase") == "intent_routing":
                             entry["action_type"] = data.get("action_type")
+                            if data.get("pending_research"):
+                                entry["pending_research"] = data["pending_research"]
                             break
                 history_dicts.append(entry)
 
@@ -1254,6 +1258,8 @@ async def send_chat_message_stream_agentic(
                                 "confidence": event.data.get("confidence"),
                                 "routing_source": event.data.get("routing_source"),
                                 "follow_up_question": event.data.get("follow_up_question"),
+                                "preferred_tool": event.data.get("preferred_tool"),
+                                "pending_research": event.data.get("pending_research"),
                             }
                         elif phase:
                             # Preserve phase for all other thought types (e.g. model_reasoning)

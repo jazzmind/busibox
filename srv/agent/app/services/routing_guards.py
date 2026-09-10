@@ -11,6 +11,9 @@ modes seen in production review and override it without another model call:
 - factual guard     a company-fact question (policy, rates, holidays, glossary
                     terms) settled without retrieval — answered from the model's
                     priors, or clarified instead of searched → search
+- research offer    "yes" after the deep-research offer ("takes a few minutes,
+                    run it?") → run deep research on the original question;
+                    "no" → short close
 - tool-step budget  cap the number of planned steps per turn
 
 All functions are pure; the agent decides how to act on the result.
@@ -56,6 +59,11 @@ _RESEARCH_RE = re.compile(
 )
 
 _GREETING_RE = re.compile(r"^\s*(?:hi|hello|hey|thanks|thank you|good (?:morning|afternoon|evening))\b", re.IGNORECASE)
+
+# The closing question of the deep-research offer. Kept here so the guard can
+# recognise the offer from message text alone when the routing annotation
+# (``pending_research`` on the history entry) is missing.
+DEEP_RESEARCH_OFFER_QUESTION = "Would you like me to run it?"
 
 
 @dataclass
@@ -144,6 +152,74 @@ def affirmation_guard(query: str, history: Sequence[Dict[str, Any]],
             name="affirmation",
             reason="user declined the assistant's offer",
             direct_reply="Okay — I'll leave it there. Let me know if you'd like anything else.",
+            action_type="direct",
+            needs_tools=False,
+        )
+    return GuardOutcome()
+
+
+def _previous_user_message(history: Sequence[Dict[str, Any]], before: Dict[str, Any]) -> str:
+    """The user message that preceded *before* in the history."""
+    items = list(history or [])
+    for i, msg in enumerate(items):
+        if msg is before:
+            for prior in reversed(items[:i]):
+                if prior.get("role") == "user" and str(prior.get("content", "")).strip():
+                    return str(prior["content"]).strip()
+            break
+    return ""
+
+
+def pending_research_query(history: Sequence[Dict[str, Any]]) -> Optional[str]:
+    """The question a deep-research offer is waiting on, if the last assistant turn was one.
+
+    Prefers the ``pending_research`` annotation api/chat.py copies from the
+    persisted routing decision; falls back to recognising the offer text and
+    taking the user's previous message as the question.
+    """
+    last = _last_assistant(history)
+    if not last:
+        return None
+    pending = str(last.get("pending_research") or "").strip()
+    if pending:
+        return pending
+    if DEEP_RESEARCH_OFFER_QUESTION.lower() in str(last.get("content", "")).lower():
+        return _previous_user_message(history, last) or None
+    return None
+
+
+def deep_research_offer_guard(query: str, history: Sequence[Dict[str, Any]]) -> GuardOutcome:
+    """Resolve the user's answer to the deep-research offer.
+
+    "yes" restores the original question as the query so the planner runs
+    deep research on it (not on the word "yes"); "no" closes politely. Any
+    other reply — including a rephrased question — falls through to normal
+    routing, which may offer again for the new question.
+    """
+    text = (query or "").strip()
+    if not text or len(text) > 40:
+        return GuardOutcome()
+    original = pending_research_query(history)
+    if not original:
+        return GuardOutcome()
+    if _AFFIRMATIVE_RE.match(text):
+        return GuardOutcome(
+            triggered=True,
+            name="deep_research_offer",
+            reason="user accepted the deep-research offer",
+            query=original,
+            action_type="research",
+            needs_tools=True,
+        )
+    if _NEGATIVE_RE.match(text):
+        return GuardOutcome(
+            triggered=True,
+            name="deep_research_offer",
+            reason="user declined the deep-research offer",
+            direct_reply=(
+                "Okay — I won't run the deep research. If you'd like a quick answer "
+                "instead, ask the question again and I'll do a standard search."
+            ),
             action_type="direct",
             needs_tools=False,
         )
