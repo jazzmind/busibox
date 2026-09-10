@@ -56,6 +56,14 @@ changes — see release notes per version.
   specific question. Any failure leaves the original decision untouched. The
   factual guard now also covers `clarify`, not just `direct`, as a backstop
   when the review is unavailable.
+- **Deep research asks before it runs.** When a request is routed to
+  `deep_research`, the turn now stops at an offer — "…it usually takes a few
+  minutes. Would you like me to run it?" — rendered with Yes/No buttons. "Yes"
+  on the next turn resumes the *original* question (carried as
+  `pending_research` on the persisted routing decision, with a text-match
+  fallback) straight into a forced `deep_research` plan; "no" closes
+  politely; anything else is routed normally. `DEEP_RESEARCH_CONFIRM=false`
+  restores announce-and-run.
 - **Expanded `config/routes.yaml`.** New routes `who_to_contact`,
   `company_news` and `industry_research`; `hr_policy`, `document_lookup` and
   `company_info` gained utterances mined from real production queries.

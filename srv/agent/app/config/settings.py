@@ -197,6 +197,13 @@ class Settings(BaseSettings):
         "auto",
         description="Tavily research agent model: mini (narrow questions), pro (multi-topic), auto",
     )
+    deep_research_confirm: bool = Field(
+        True,
+        description=(
+            "Ask the user (Yes/No) before running a multi-minute deep_research pass. "
+            "False announces the expected wait and runs immediately."
+        ),
+    )
     search_perplexity_enabled: bool = Field(False, description="Enable Perplexity search")
     perplexity_api_key: Optional[str] = Field(None, description="Perplexity API key")
     search_brave_enabled: bool = Field(False, description="Enable Brave search")

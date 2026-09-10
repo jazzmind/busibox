@@ -28,10 +28,12 @@ from app.agents.base_agent import (
 )
 from app.schemas.streaming import clarify_parallel, content, error, interim, plan, progress, prompt, thought
 from app.services.routing_guards import (
+    DEEP_RESEARCH_OFFER_QUESTION,
     GuardOutcome,
     affirmation_guard,
     cap_plan_steps,
     clarify_loop_guard,
+    deep_research_offer_guard,
     factual_guard,
     research_intent_guard,
 )
@@ -175,6 +177,9 @@ class FastAckDecision(BaseModel):
     # Tool the planner must include (set by the semantic router's route or
     # a routing guard), e.g. "deep_research". None = planner decides.
     preferred_tool: Optional[str] = None
+    # Set when this turn only *offers* deep research: the question the offer
+    # is waiting on. Persisted with the turn so "yes" next turn resumes it.
+    pending_research: Optional[str] = None
 
 
 def _coerce_str(value: Any) -> Any:
@@ -830,20 +835,39 @@ class ChatAgent(BaseStreamingAgent):
         decision.routing_source = f"{decision.routing_source}+{outcome.name}_guard"
         return decision
 
-    # Acknowledgement for deep research: sets the time expectation up front
-    # because the Tavily research task runs for minutes, not seconds.
+    # Deep research runs for minutes, not seconds, so the user is told up
+    # front. With DEEP_RESEARCH_CONFIRM (default) the turn stops at an offer
+    # and Yes/No buttons; otherwise it announces the wait and runs.
+    _RESEARCH_OFFER = (
+        "This looks like a research task. I can run a deep, multi-source research "
+        "pass and put together a cited report — it usually takes a few minutes. "
+        + DEEP_RESEARCH_OFFER_QUESTION
+    )
     _RESEARCH_ACK = (
         "This looks like a research task. I'll run a deep, multi-source research "
         "pass and put together a cited report — that usually takes a few minutes. "
         "I'll post it here when it's ready."
     )
+    _RESEARCH_CONFIRMED_ACK = (
+        "Starting the deep research now — this usually takes a few minutes. "
+        "I'll post the cited report here when it's ready."
+    )
 
-    async def _confirm_deep_research(self, decision: FastAckDecision, stream) -> FastAckDecision:
-        """Keep deep research only when it can actually run; set the ack accordingly.
+    async def _confirm_deep_research(
+        self,
+        decision: FastAckDecision,
+        stream,
+        query: str = "",
+        confirmed: bool = False,
+    ) -> FastAckDecision:
+        """Gate deep research on availability and, by default, on the user's consent.
 
         Without a Tavily key (or with the tool disabled) the request is
         downgraded to a normal web search and the ack must not promise a
-        multi-minute report.
+        multi-minute report. When it is available, the turn either stops at
+        an offer the user answers next turn (``confirmed`` is then True via
+        ``deep_research_offer_guard``) or, with confirmation disabled, runs
+        immediately behind an announcement of the expected wait.
         """
         if decision.preferred_tool != "deep_research":
             return decision
@@ -865,12 +889,30 @@ class ChatAgent(BaseStreamingAgent):
             decision.preferred_tool = None
             decision.action_type = "research"
             decision.needs_tools = True
+            decision.pending_research = None
+            if not decision.response.strip():
+                decision.response = self._ACK_RESPONSES[hash(query) % len(self._ACK_RESPONSES)]
             return decision
+
+        from app.config.settings import get_settings
+        if getattr(get_settings(), "deep_research_confirm", True) and not confirmed:
+            # Offer only. The turn ends here with Yes/No buttons; the
+            # question is carried on the decision so the next turn can
+            # resume it without re-classifying the word "yes".
+            decision.needs_tools = False
+            decision.action_type = "direct"
+            decision.follow_up_question = None
+            decision.pending_research = (query or "").strip() or None
+            decision.response = self._RESEARCH_OFFER
+            decision.routing_source = f"{decision.routing_source}+research_offer"
+            return decision
+
         decision.needs_tools = True
         decision.action_type = "research"
         decision.complexity = "complex"
         decision.follow_up_question = None
-        decision.response = self._RESEARCH_ACK
+        decision.pending_research = None
+        decision.response = self._RESEARCH_CONFIRMED_ACK if confirmed else self._RESEARCH_ACK
         return decision
 
     @staticmethod
@@ -1658,7 +1700,13 @@ class ChatAgent(BaseStreamingAgent):
         # becomes the query, or the turn closes politely — never a fresh
         # classification of the word "yes".
         history = agent_context.recent_messages or agent_context.conversation_history
-        affirmation = affirmation_guard(query, history, _ends_with_yes_no_question)
+        # The deep-research offer is checked first: its closing question also
+        # matches the generic affirmation guard, which would otherwise turn
+        # "yes" into a search for the offer sentence itself.
+        research_answer = deep_research_offer_guard(query, history)
+        affirmation = research_answer if research_answer.triggered else affirmation_guard(
+            query, history, _ends_with_yes_no_question
+        )
         if affirmation.triggered:
             await self._stream_guard(stream, affirmation)
             if affirmation.direct_reply:
@@ -1668,7 +1716,18 @@ class ChatAgent(BaseStreamingAgent):
             agent_context.current_query = query
 
         t_ack = time.monotonic()
-        if affirmation.triggered:
+        research_confirmed = research_answer.triggered
+        if research_confirmed:
+            decision = FastAckDecision(
+                action_type="research",
+                needs_tools=True,
+                response="",
+                confidence=1.0,
+                routing_source="deep_research_offer_guard",
+                complexity="complex",
+                preferred_tool="deep_research",
+            )
+        elif affirmation.triggered:
             decision = FastAckDecision(
                 action_type="search",
                 needs_tools=True,
@@ -1680,7 +1739,9 @@ class ChatAgent(BaseStreamingAgent):
         else:
             decision = await self._route_intent(query, agent_context)
             decision = await self._apply_routing_guards(query, decision, history, stream, agent_context)
-        decision = await self._confirm_deep_research(decision, stream)
+        decision = await self._confirm_deep_research(
+            decision, stream, query=query, confirmed=research_confirmed
+        )
         logger.info(
             "Chat fast_ack decision",
             extra={
@@ -1707,6 +1768,7 @@ class ChatAgent(BaseStreamingAgent):
                 "routing_source": decision.routing_source,
                 "follow_up_question": decision.follow_up_question,
                 "preferred_tool": decision.preferred_tool,
+                "pending_research": decision.pending_research,
             },
         ))
         fast_response = decision.response.strip()
