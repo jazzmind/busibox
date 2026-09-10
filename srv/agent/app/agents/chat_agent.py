@@ -668,6 +668,103 @@ class ChatAgent(BaseStreamingAgent):
             )
         return decision
 
+    # The 0.8B classifier decides ambiguity from the query text alone. When it
+    # says "clarify" a larger model re-reads the same query and either confirms
+    # it (writing a better question) or overturns it. Local by default
+    # (tool_calling = Qwen 35B on vLLM), so there is no marginal cost.
+    _CLARIFY_REVIEW_PROMPT = (
+        "A small classifier flagged this user message as too ambiguous to answer and wants to ask a "
+        "clarifying question. Decide whether that is right.\n\n"
+        "Return ONLY JSON with keys: ambiguous (boolean), question (string), reason (string).\n"
+        "Rules:\n"
+        "- ambiguous=false when the message is a well-formed request that could be answered by searching "
+        "company documents or the web, even if the answer might not be found. Not knowing the answer is "
+        "NOT ambiguity.\n"
+        "- ambiguous=true ONLY when the message cannot be acted on at all: no topic ('can you help me'), "
+        "or an unresolved reference with nothing in the conversation to resolve it ('what about that one?').\n"
+        "- If ambiguous=true, 'question' must be ONE specific question, max 20 words, that would let you "
+        "proceed. Never ask the user to restate what they already said.\n"
+        "- reason: at most 12 words.\n"
+    )
+
+    async def _review_clarify(self, query: str, decision: FastAckDecision,
+                              context: Optional[AgentContext] = None) -> FastAckDecision:
+        """Second opinion on a clarify decision from a larger model.
+
+        Overturning is the common case: a well-formed question that simply
+        might not be answerable is not ambiguous, and should go to retrieval.
+        Any failure (model down, bad JSON, timeout) leaves the original
+        decision untouched.
+        """
+        if decision.action_type != "clarify":
+            return decision
+        try:
+            from app.config.settings import get_settings
+            settings = get_settings()
+            review_model = (settings.clarify_review_model or "").strip()
+            timeout = float(settings.clarify_review_timeout_seconds)
+        except Exception:  # noqa: BLE001
+            review_model, timeout = "tool_calling", 6.0
+        if not review_model:
+            return decision
+
+        prompt = (
+            f"{self._CLARIFY_REVIEW_PROMPT}\n"
+            f"Proposed clarifying question: {decision.follow_up_question or '(none)'}\n\n"
+            f"{self._build_fast_ack_context(query, context or AgentContext())}"
+        )
+        t0 = time.monotonic()
+        try:
+            client = get_client()
+            result = await asyncio.wait_for(
+                client.chat_completion(
+                    model=review_model,
+                    messages=[
+                        {"role": "system", "content": "You are a strict JSON generator. Return only valid JSON."},
+                        {"role": "user", "content": f"/no_think\n{prompt}"},
+                    ],
+                    temperature=0.0,
+                    enable_thinking=False,
+                ),
+                timeout=timeout,
+            )
+            raw = (result.get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip()
+            start, end = raw.find("{"), raw.rfind("}")
+            if start == -1 or end <= start:
+                raise ValueError(f"no JSON object in review response: {raw[:120]!r}")
+            parsed = json.loads(raw[start:end + 1])
+        except Exception as exc:  # noqa: BLE001 — review must never break routing
+            logger.warning(
+                "clarify_review: skipped after %dms (%s)",
+                round((time.monotonic() - t0) * 1000), exc,
+            )
+            return decision
+
+        elapsed = round((time.monotonic() - t0) * 1000)
+        ambiguous = bool(parsed.get("ambiguous"))
+        reason = str(parsed.get("reason", ""))[:120]
+        if ambiguous:
+            question = str(parsed.get("question", "")).strip()
+            if question and not _looks_like_prompt_echo(question):
+                decision.follow_up_question = question
+            decision.routing_source = f"{decision.routing_source}+clarify_review:kept"
+            logger.info(
+                "clarify_review: kept clarify",
+                extra={"model": review_model, "elapsed_ms": elapsed, "reason": reason},
+            )
+            return decision
+
+        logger.info(
+            "clarify_review: overturned clarify → search",
+            extra={"model": review_model, "elapsed_ms": elapsed, "reason": reason},
+        )
+        decision.action_type = "search"
+        decision.needs_tools = True
+        decision.follow_up_question = None
+        decision.response = self._ACK_RESPONSES[hash(query) % len(self._ACK_RESPONSES)]
+        decision.routing_source = f"{decision.routing_source}+clarify_review:overturned"
+        return decision
+
     async def _stream_guard(self, stream, outcome: GuardOutcome) -> None:
         logger.info(
             "Routing guard triggered",
@@ -685,10 +782,27 @@ class ChatAgent(BaseStreamingAgent):
         decision: FastAckDecision,
         history: List[Dict[str, Any]],
         stream,
+        context: Optional[AgentContext] = None,
     ) -> FastAckDecision:
         """Deterministic overrides of the classifier (services/routing_guards.py)."""
+        # A larger model reviews any clarify decision first: the 0.8B model
+        # judges ambiguity from the query text alone and gets it wrong on
+        # well-formed questions it simply cannot answer itself.
+        if decision.action_type == "clarify" and decision.routing_source.startswith("llm"):
+            before = decision.routing_source
+            decision = await self._review_clarify(query, decision, context)
+            if decision.routing_source != before and decision.action_type != "clarify":
+                await self._stream_guard(stream, GuardOutcome(
+                    triggered=True,
+                    name="clarify_review",
+                    reason="a larger model judged the question answerable — searching instead of asking",
+                ))
+
         outcome = clarify_loop_guard(decision.action_type, history)
-        if not outcome.triggered:
+        # A clarify the review deliberately upheld is left alone; otherwise a
+        # company-fact question must not be settled without retrieval.
+        review_upheld = decision.routing_source.endswith("clarify_review:kept")
+        if not outcome.triggered and not review_upheld:
             try:
                 from app.services.org_glossary import mentioned_terms
                 terms = mentioned_terms(query)
@@ -1565,7 +1679,7 @@ class ChatAgent(BaseStreamingAgent):
             )
         else:
             decision = await self._route_intent(query, agent_context)
-            decision = await self._apply_routing_guards(query, decision, history, stream)
+            decision = await self._apply_routing_guards(query, decision, history, stream, agent_context)
         decision = await self._confirm_deep_research(decision, stream)
         logger.info(
             "Chat fast_ack decision",

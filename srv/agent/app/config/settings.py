@@ -110,6 +110,19 @@ class Settings(BaseSettings):
         description="Documents older than this are flagged as possibly outdated in the synthesis prompt",
     )
 
+    # Clarify review: the fast-ack classifier (0.8B) decides whether a query is
+    # ambiguous, but it sees only the query text. When it says "clarify" the
+    # decision is re-checked by a larger model before the user is asked
+    # anything. Set to "" to disable the second opinion.
+    clarify_review_model: str = Field(
+        "tool_calling",
+        description="Model alias used to confirm or overturn a 'clarify' routing decision (empty disables)",
+    )
+    clarify_review_timeout_seconds: float = Field(
+        6.0,
+        description="Max seconds to wait for the clarify review before keeping the original decision",
+    )
+
     # Chat turn budget (escalation guards)
     chat_max_tool_steps: int = Field(
         6,

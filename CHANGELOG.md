@@ -46,6 +46,21 @@ changes — see release notes per version.
   they come from and never refuse a figure outright. `document_search`
   hits carry `document_date` when the search API provides one. Settings:
   `GROUNDING_STRONG_DOC_SCORE`, `GROUNDING_STALE_AFTER_MONTHS`.
+- **Clarify decisions get a second opinion from a larger model.** The 0.8B
+  fast-ack classifier judges ambiguity from the query text alone, so a
+  well-formed question it cannot answer itself ("who should I ask about IT
+  questions?") looked identical to a genuinely ambiguous one. Any `clarify`
+  from the classifier is now re-read by `CLARIFY_REVIEW_MODEL` (default
+  `tool_calling` — the local 35B, no marginal cost, `CLARIFY_REVIEW_TIMEOUT_SECONDS`
+  6 s) which either overturns it to a search or upholds it with a more
+  specific question. Any failure leaves the original decision untouched. The
+  factual guard now also covers `clarify`, not just `direct`, as a backstop
+  when the review is unavailable.
+- **Expanded `config/routes.yaml`.** New routes `who_to_contact`,
+  `company_news` and `industry_research`; `hr_policy`, `document_lookup` and
+  `company_info` gained utterances mined from real production queries.
+  `industry_research` deliberately sits between the two so a plain market
+  question cannot be captured by `deep_research` and spend credits.
 - **Anti-loop and escalation guards** (`app/services/routing_guards.py`):
   a second clarifying question in a row is replaced by a search; "yes"/"no"
   after an offer becomes the offer (or a polite close) instead of a fresh
