@@ -8,8 +8,9 @@ modes seen in production review and override it without another model call:
                     interpretation instead of asking again
 - affirmation       "yes" / "ok" after an offer ("would you like me to…?") →
                     the offer becomes the query; "no" → short direct reply
-- factual guard     a direct (no-tools) answer to a question about company
-                    facts (policy, rates, holidays, glossary terms) → search
+- factual guard     a company-fact question (policy, rates, holidays, glossary
+                    terms) settled without retrieval — answered from the model's
+                    priors, or clarified instead of searched → search
 - tool-step budget  cap the number of planned steps per turn
 
 All functions are pure; the agent decides how to act on the result.
@@ -151,8 +152,13 @@ def affirmation_guard(query: str, history: Sequence[Dict[str, Any]],
 
 def factual_guard(query: str, action_type: str, needs_tools: bool, routing_source: str,
                   glossary_terms: Optional[List[str]] = None) -> GuardOutcome:
-    """Never let the fast path answer a company-fact question from memory."""
-    if needs_tools or action_type != "direct" or routing_source == "attachment_rule":
+    """Never let the fast path settle a company-fact question without retrieval.
+
+    Applies to both ``direct`` (answered from the model's priors) and
+    ``clarify`` (asked a question instead of looking): both are decisions not
+    to retrieve, and both are wrong for a question the documents can answer.
+    """
+    if needs_tools or action_type not in {"direct", "clarify"} or routing_source == "attachment_rule":
         return GuardOutcome()
     text = (query or "").strip()
     if len(text.split()) < 3 or _GREETING_RE.match(text):
@@ -162,10 +168,11 @@ def factual_guard(query: str, action_type: str, needs_tools: bool, routing_sourc
     if not hit and not terms:
         return GuardOutcome()
     reason = f"matched '{hit.group(0)}'" if hit else f"mentions glossary term {terms[0]}"
+    settled = "answered from memory" if action_type == "direct" else "clarified instead of searched"
     return GuardOutcome(
         triggered=True,
         name="factual",
-        reason=f"direct answer to a company-fact question ({reason})",
+        reason=f"company-fact question {settled} ({reason})",
         action_type="search",
         needs_tools=True,
     )
