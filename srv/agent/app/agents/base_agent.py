@@ -716,8 +716,14 @@ class BaseStreamingAgent(StreamingAgent):
         )
         logger.info(f"Agent '{config.display_name}' using model: {model_name}")
         
-        # Build model settings - only include max_tokens if explicitly set
-        # If max_tokens is None, don't pass it so the model uses its natural limit
+        # Only send max_tokens when the agent sets one.
+        #
+        # Careful: omitting it does NOT mean "use the model's natural limit".
+        # That holds for OpenAI-compatible endpoints (vLLM, MLX), but the
+        # Anthropic Messages API *requires* max_tokens, so for a cloud-routed
+        # alias LiteLLM must invent a default — and its default is small enough
+        # to truncate a long answer mid-sentence, with no error raised anywhere.
+        # Any agent whose model may resolve to Anthropic should set max_tokens.
         model_settings: Dict[str, Any] = {}
         if config.max_tokens is not None:
             model_settings["max_tokens"] = config.max_tokens
