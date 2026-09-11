@@ -48,6 +48,38 @@ available_models:
     description: "Claude 4.5 Haiku - Fast, efficient, excellent for most tasks"
     multimodal: true
     tool_calling: true
+
+  # The 5-era IDs carry no -YYYYMMDD-v1:0 suffix either. Adding one by analogy
+  # with the 4.5-era IDs yields a dead ID, which surfaces as a *successful*
+  # agent run with empty output — see the claude-sonnet-4-6 note above.
+  "claude-sonnet-5":
+    provider: "bedrock"
+    model: "us.anthropic.claude-sonnet-5"
+    model_name: "us.anthropic.claude-sonnet-5"
+    context_window: 1000000
+    description: "Claude 5 Sonnet - general chat and research (Feb 2026), 1M ctx"
+    multimodal: true
+    tool_calling: true
+
+  # 'global.' rather than 'us.': the global cross-region inference profile has
+  # wider capacity, which is what a load-shedding fallback wants.
+  "claude-sonnet-5-global":
+    provider: "bedrock"
+    model: "global.anthropic.claude-sonnet-5"
+    model_name: "global.anthropic.claude-sonnet-5"
+    context_window: 1000000
+    description: "Claude 5 Sonnet on the global inference profile - fallback under load"
+    multimodal: true
+    tool_calling: true
+
+  "claude-opus-4-8":
+    provider: "bedrock"
+    model: "us.anthropic.claude-opus-4-8"
+    model_name: "us.anthropic.claude-opus-4-8"
+    context_window: 1000000
+    description: "Claude 4.8 Opus - frontier model for complex analysis, 1M ctx"
+    multimodal: true
+    tool_calling: true
   
 
   # =========================================================================
@@ -423,22 +455,40 @@ default_purposes:
 # Production overrides: default_purposes points to MLX keys, but production
 # runs vLLM. Override LLM roles here so generate_model_config.py resolves to
 # vLLM provider models that appear in model_config.yml.
+# Reconciled 2026-09-11 against what production actually serves, read from
+# LiteLLM /model/info on 10.96.200.207. These are seed values: once a purpose
+# has been set from the admin UI it lives in LiteLLM's database, the UI wins,
+# and the dedup step on deploy keeps it. They matter for a fresh install, for
+# disaster recovery, and for any purpose the UI has never touched — which is
+# how `research` came to be the odd one out (see below).
 model_purposes:
+  # Deliberately NOT reconciled: production currently serves fast/test/classify
+  # from the 35B, but these run on every turn ahead of the user's answer and
+  # the 0.8B is what the purpose is for. Left as the intent; the UI's entry
+  # overrides it on the existing box either way.
   fast: "qwen3.5-0.8b-vllm"
   test: "fast"
   classify: "fast"
   default: "qwen3.6-35b-a3b-vllm-fp8"
   agent: "qwen3.6-35b-a3b-vllm-fp8"
-  chat: "qwen3.6-35b-a3b-vllm-fp8"
-  research: "qwen3.6-35b-a3b-vllm-fp8"
+  # Cloud from here down. Chat is the model users talk to; research backs the
+  # default_model for other agents. Both were still mapped to the local 35B
+  # here while production ran them on Bedrock — and research had no UI entry
+  # to protect it, so a deploy would have silently moved it back to local.
+  chat: "claude-sonnet-5"
+  research: "claude-sonnet-5"
+  cleanup: "claude-sonnet-5"
+  frontier: "claude-opus-4-8"
+  fallback: "claude-sonnet-5-global"
   tool_calling: "agent"
   vision: "agent"
-  parsing: "chat"
-  cleanup: "chat"
-  fallback: "claude-haiku-4-5"
+  parsing: "agent"
   reranking: "bge-reranker-v2-m3-cpu"
   image: "flux2-klein-4b-gpu"
   transcribe: "whisper-large-v3-gpu"
+  # Also deliberately NOT reconciled: production has `voice` pointed at the
+  # 35B text model, which cannot synthesise speech. Kept correct here so a
+  # deploy repairs it rather than enshrining the mistake.
   voice: "kokoro-82m-gpu"
 
 # =============================================================================
