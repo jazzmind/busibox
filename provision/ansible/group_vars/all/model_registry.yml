@@ -477,12 +477,15 @@ model_purposes:
   # to protect it, so a deploy would have silently moved it back to local.
   chat: "claude-sonnet-5"
   research: "claude-sonnet-5"
-  cleanup: "claude-sonnet-5"
   frontier: "claude-opus-4-8"
   fallback: "claude-sonnet-5-global"
   tool_calling: "agent"
   vision: "agent"
   parsing: "agent"
+  # Local, matching the UI. Cleanup runs on every document ingested; on
+  # Bedrock that was both a per-document bill and a source of intermittent
+  # 400s while it was split across a local and a cloud deployment.
+  cleanup: "agent"
   reranking: "bge-reranker-v2-m3-cpu"
   image: "flux2-klein-4b-gpu"
   transcribe: "whisper-large-v3-gpu"
