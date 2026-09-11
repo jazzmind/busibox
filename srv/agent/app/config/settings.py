@@ -101,13 +101,19 @@ class Settings(BaseSettings):
     )
 
     # Attachment context budget. Resolved per turn from the model that will
-    # actually synthesize the answer: a 200k-window cloud model can read a
-    # whole document where a local 8k model needs retrieved chunks. Aliases
-    # not listed fall back to `default_context_window_tokens`.
+    # actually synthesize the answer: a 1M-window cloud model can read a whole
+    # document where a local 4B model needs retrieved chunks.
+    #
+    # Deliberately empty here. The alias -> model binding lives in
+    # model_registry.yml and differs per backend — "chat" is a 16k MLX model in
+    # dev and a 65k vLLM model in production — so any value hardcoded in the
+    # service would be wrong somewhere. Ansible renders the real map into the
+    # env from the registry (roles/agent_api/templates/agent-api.env.j2).
+    # Unset means every alias falls back to `default_context_window_tokens`,
+    # which is the conservative pre-existing behaviour.
     model_context_windows: str = Field(
-        "chat:200000,agent:200000,default:200000,frontier:200000,frontier-fast:200000,"
-        "fallback:128000,tool_calling:32768,fast:8192",
-        description="Comma-separated alias:token-window pairs used to size the attachment context budget",
+        "",
+        description="Comma-separated alias:token-window pairs sizing the attachment budget (rendered by Ansible from model_registry.yml)",
     )
     default_context_window_tokens: int = Field(
         12000,

@@ -19,25 +19,46 @@ def _settings(**kw) -> Settings:
     return Settings(**base)
 
 
+# What Ansible renders on a production (vLLM) host, from model_registry.yml.
+# 'chat' is a local 35B there, not a cloud model — the same alias resolves to
+# 16384 on an MLX dev box, which is why nothing is hardcoded in the service.
+PROD_MAP = (
+    "default:65536,agent:65536,chat:65536,research:65536,tool_calling:65536,"
+    "fast:4096,classify:4096,frontier:200000,frontier-fast:200000,fallback:200000"
+)
+
+
 # ---------------------------------------------------------------------------
 # alias -> window
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("alias,expected", [
-    ("chat", 200000),
-    ("CHAT", 200000),          # case-insensitive
-    ("  chat  ", 200000),      # tolerant of padding
-    ("tool_calling", 32768),
-    ("fast", 8192),
+    ("chat", 65536),
+    ("CHAT", 65536),           # case-insensitive
+    ("  chat  ", 65536),       # tolerant of padding
+    ("frontier", 200000),
+    ("fast", 4096),
 ])
 def test_known_aliases_resolve_to_their_window(alias, expected):
-    assert _settings().get_model_context_window(alias) == expected
+    assert _settings(model_context_windows=PROD_MAP).get_model_context_window(alias) == expected
+
+
+def test_the_shipped_default_claims_nothing():
+    """The service ships no map: the binding is per-backend and Ansible owns it.
+
+    A hardcoded default would be wrong on some backend, and wrong *upward*
+    means overrunning a local model's max_model_len.
+    """
+    s = _settings()
+    assert s.model_context_windows == ""
+    for alias in ("chat", "agent", "frontier", "tool_calling"):
+        assert s.get_model_context_window(alias) == 12000
 
 
 @pytest.mark.parametrize("alias", ["", None, "some-model-nobody-listed"])
 def test_unknown_aliases_fall_back_to_the_conservative_default(alias):
-    assert _settings().get_model_context_window(alias) == 12000
+    assert _settings(model_context_windows=PROD_MAP).get_model_context_window(alias) == 12000
 
 
 @pytest.mark.parametrize("mapping", [

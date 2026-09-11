@@ -30,6 +30,32 @@ litellm_database_url: "postgresql://{{ postgres_user }}:{{ secrets.postgresql.pa
 redis_host: "{{ hostvars[groups['data'][0]]['ansible_host'] if 'data' in groups else '127.0.0.1' }}"
 redis_port: 6379
 
+# Attachment context budget (MODEL_CONTEXT_WINDOWS)
+# ------------------------------------------------
+# The agent sizes the attachment context budget from the window of whichever
+# model writes the answer. The purpose -> model binding differs per backend
+# (MLX dev, vLLM production, cloud), so the env template resolves each purpose
+# through model_registry.yml rather than the agent hardcoding a map.
+agent_context_window_purposes:
+  - default
+  - agent
+  - chat
+  - research
+  - tool_calling
+  - fast
+  - classify
+  - parsing
+  - cleanup
+  - vision
+  - frontier
+  - frontier-fast
+  - fallback
+
+# Ceiling applied to every resolved window. A model accepting 1M tokens does
+# not mean we want a 1M-token prompt: Bedrock bills per input token and
+# time-to-first-token scales with the prompt. Raise deliberately.
+agent_max_context_window: 200000
+
 
 
 

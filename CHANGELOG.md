@@ -68,6 +68,17 @@ changes — see release notes per version.
   `DEFAULT_CONTEXT_WINDOW_TOKENS`, `ATTACHMENT_INLINE_MAX_TOKENS`. Unknown
   aliases and malformed maps fall back to the old 12,000, so a
   misconfiguration can only shrink the budget, never overrun the model.
+  `MODEL_CONTEXT_WINDOWS` is **derived from `model_registry.yml`**, not
+  hardcoded: a purpose means different windows on different backends — `chat`
+  is a 16k MLX model in dev and a 65k vLLM model (`max_model_len: 65536`) in
+  production — so `available_models` entries now carry `context_window`
+  (mirroring `max_model_len` where vLLM already pins it) and
+  `roles/agent_api/templates/agent-api.env.j2` resolves each purpose through
+  the registry, following purpose→purpose aliases. Every window is clamped by
+  `agent_max_context_window` (200,000): Sonnet 4.6 accepts 1M tokens, but a
+  1M-token prompt is a bill and a long time-to-first-token, so raising that
+  ceiling is a deliberate per-deployment act. The service itself ships an
+  empty map, so a non-Ansible deployment keeps the conservative 12,000.
 - **Deep research asks before it runs.** When a request is routed to
   `deep_research`, the turn now stops at an offer — "…it usually takes a few
   minutes. Would you like me to run it?" — rendered with Yes/No buttons. "Yes"
