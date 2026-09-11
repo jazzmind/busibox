@@ -279,6 +279,47 @@ async def test_an_empty_response_does_not_wipe_a_good_cache(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_failure_backs_off_instead_of_retrying_every_turn(monkeypatch):
+    """Without a cooldown, an outage puts a network timeout on every turn.
+
+    The refresh is called once per chat turn, so a down LiteLLM must be tried
+    occasionally, not on each message.
+    """
+    calls = {"n": 0}
+
+    async def always_fails():
+        calls["n"] += 1
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(mc, "_fetch_model_info", always_fails)
+    _ttl(monkeypatch, 600)
+
+    await mc.refresh(force=True)      # the startup attempt
+    for _ in range(5):                # five chat turns
+        await mc.refresh()
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_later_success_clears_the_backoff(monkeypatch):
+    async def fails():
+        raise RuntimeError("down")
+
+    async def works():
+        return PROD
+
+    _ttl(monkeypatch, 600)
+    monkeypatch.setattr(mc, "_fetch_model_info", fails)
+    await mc.refresh(force=True)
+    assert mc.routes_to_cloud("chat") is None       # still on fallbacks
+
+    monkeypatch.setattr(mc, "_fetch_model_info", works)
+    await mc.refresh(force=True)                     # LiteLLM comes back
+    assert mc.routes_to_cloud("chat") is True
+    assert mc._failed_at == 0.0
+
+
+@pytest.mark.asyncio
 async def test_the_ttl_suppresses_a_re_fetch(monkeypatch):
     calls = {"n": 0}
 

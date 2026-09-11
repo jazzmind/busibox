@@ -1696,6 +1696,16 @@ class ChatAgent(BaseStreamingAgent):
         agent_context.current_query = query
         agent_context.turn_started = t0
 
+        # Keep the purpose->model mapping current. TTL-guarded, so this is a
+        # dict check on almost every turn; it exists so a re-point from the
+        # admin UI takes effect without a restart, and so a LiteLLM outage at
+        # boot self-heals instead of pinning the agent to fallbacks forever.
+        try:
+            from app.services import model_capabilities
+            await model_capabilities.refresh()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("model capability refresh skipped: %s", exc)
+
         # "yes" / "no" after an offer is resolved before routing: the offer
         # becomes the query, or the turn closes politely — never a fresh
         # classification of the word "yes".

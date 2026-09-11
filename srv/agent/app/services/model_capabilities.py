@@ -79,6 +79,12 @@ class ModelCapability:
 
 _cache: Dict[str, ModelCapability] = {}
 _fetched_at: float = 0.0
+_failed_at: float = 0.0
+
+# After a failed fetch, don't try again for this long. Without it, a LiteLLM
+# outage would put a 10s timeout on the front of every chat turn that asks
+# for a refresh.
+_RETRY_COOLDOWN_SECONDS = 60.0
 
 
 def _host_of(api_base: str) -> str:
@@ -226,26 +232,35 @@ async def refresh(force: bool = False) -> int:
     Never raises: a failure leaves the previous cache (or an empty one) in
     place and callers fall back to settings.
     """
-    global _cache, _fetched_at
+    global _cache, _fetched_at, _failed_at
 
     from app.config.settings import get_settings
+    now = time.monotonic()
     ttl = get_settings().model_capabilities_ttl_seconds
-    if not force and _cache and (time.monotonic() - _fetched_at) < ttl:
-        return len(_cache)
+    if not force:
+        if _cache and (now - _fetched_at) < ttl:
+            return len(_cache)
+        # Back off after a failure so an outage can't put a network timeout
+        # on the front of every turn.
+        if _failed_at and (now - _failed_at) < _RETRY_COOLDOWN_SECONDS:
+            return len(_cache)
 
     try:
         entries = await _fetch_model_info()
     except Exception as exc:  # noqa: BLE001 — never break a turn over this
+        _failed_at = time.monotonic()
         logger.warning("model_capabilities: LiteLLM /model/info unavailable: %s", exc)
         return len(_cache)
 
     parsed = parse_model_info(entries)
     if not parsed:
+        _failed_at = time.monotonic()
         logger.warning("model_capabilities: /model/info returned nothing usable")
         return len(_cache)
 
     _cache = parsed
     _fetched_at = time.monotonic()
+    _failed_at = 0.0
     cloud = sorted(c.alias for c in parsed.values() if c.is_cloud)
     logger.info(
         "model_capabilities: %d purposes resolved from LiteLLM (cloud: %s)",
@@ -290,6 +305,7 @@ def snapshot() -> Dict[str, ModelCapability]:
 
 def reset() -> None:
     """Drop the cache (tests)."""
-    global _cache, _fetched_at
+    global _cache, _fetched_at, _failed_at
     _cache = {}
     _fetched_at = 0.0
+    _failed_at = 0.0
