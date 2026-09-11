@@ -131,7 +131,6 @@ class Settings(BaseSettings):
         24000,
         description="Ceiling on pre-parsed attachment text injected verbatim (no file_id, parsed_content only)",
     )
-
     # Grounding policy (synthesis): tier selection thresholds
     grounding_strong_doc_score: float = Field(
         0.65,

@@ -1709,6 +1709,9 @@ class ChatAgent(BaseStreamingAgent):
         # "yes" / "no" after an offer is resolved before routing: the offer
         # becomes the query, or the turn closes politely — never a fresh
         # classification of the word "yes".
+        # "yes" / "no" after an offer is resolved before routing: the offer
+        # becomes the query, or the turn closes politely — never a fresh
+        # classification of the word "yes".
         history = agent_context.recent_messages or agent_context.conversation_history
         # The deep-research offer is checked first: its closing question also
         # matches the generic affirmation guard, which would otherwise turn
