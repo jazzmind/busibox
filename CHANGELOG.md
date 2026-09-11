@@ -100,9 +100,6 @@ changes — see release notes per version.
 - **Deep research asks before it runs.** When a request is routed to
   `deep_research`, the turn now stops at an offer — "…it usually takes a few
   minutes. Would you like me to run it?" — rendered with Yes/No buttons. "Yes"
-- **Deep research asks before it runs.** When a request is routed to
-  `deep_research`, the turn now stops at an offer — "…it usually takes a few
-  minutes. Would you like me to run it?" — rendered with Yes/No buttons. "Yes"
   on the next turn resumes the *original* question (carried as
   `pending_research` on the persisted routing decision, with a text-match
   fallback) straight into a forced `deep_research` plan; "no" closes
