@@ -110,7 +110,10 @@ def test_a_purpose_repointed_from_the_ui_beats_the_deployed_config():
          "model_info": {"db_model": True, "max_input_tokens": 1000000}},   # admin UI
     ])
     assert caps["chat"].model == "bedrock/us.anthropic.claude-sonnet-5"
-    assert caps["chat"].context_window == 1000000
+    # The window is the smaller arm's, not the UI entry's — both deployments
+    # are live and the router picks between them. See
+    # test_a_load_balanced_purpose_budgets_for_the_smaller_arm.
+    assert caps["chat"].context_window == 200000
 
 
 def test_a_load_balanced_purpose_budgets_for_the_smaller_arm():
@@ -537,6 +540,8 @@ def _settings_stub(**kw):
     class S:
         model_capabilities_ttl_seconds = 600
         cloud_context_window_cap = 800000
+        litellm_base_url = "http://10.96.200.207:4000/v1"
+        litellm_api_key = "sk-test"
 
     for key, value in kw.items():
         setattr(S, key, value)

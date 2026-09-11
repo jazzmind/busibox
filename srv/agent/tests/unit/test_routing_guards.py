@@ -106,12 +106,20 @@ def test_glossary_term_forces_search():
     ("hi there, how are you", "direct", False, "llm"),
     ("thanks, that helped", "direct", False, "llm"),
     ("what is the difference between a bid bond and a performance bond", "direct", False, "llm"),
-    ("how many holidays do we get", "search", True, "llm"),
-    ("how many holidays do we get", "clarify", False, "llm"),
+    ("how many holidays do we get", "search", True, "llm"),      # already retrieving
     ("how many pages is the attached", "direct", False, "attachment_rule"),
 ])
 def test_factual_guard_leaves_other_cases_alone(query, action, needs, source):
     assert not factual_guard(query, action, needs, source).triggered
+
+
+def test_factual_guard_also_covers_clarify():
+    """`clarify` used to be exempt. It isn't: asking a question instead of
+    looking is the same decision not to retrieve as answering from memory,
+    and it is wrong for a question the documents can answer. See
+    test_clarify_review.py::test_factual_guard_now_covers_clarify_decisions."""
+    out = factual_guard("how many holidays do we get", "clarify", False, "llm")
+    assert out.triggered and out.action_type == "search"
 
 
 # ---------------------------------------------------------------------------
