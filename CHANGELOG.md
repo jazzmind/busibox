@@ -74,11 +74,21 @@ changes — see release notes per version.
   production — so `available_models` entries now carry `context_window`
   (mirroring `max_model_len` where vLLM already pins it) and
   `roles/agent_api/templates/agent-api.env.j2` resolves each purpose through
-  the registry, following purpose→purpose aliases. Every window is clamped by
-  `agent_max_context_window` (200,000): Sonnet 4.6 accepts 1M tokens, but a
-  1M-token prompt is a bill and a long time-to-first-token, so raising that
-  ceiling is a deliberate per-deployment act. The service itself ships an
-  empty map, so a non-Ansible deployment keeps the conservative 12,000.
+  the registry, following purpose→purpose aliases. Local models use their
+  served window as-is; cloud models are capped by
+  `agent_cloud_context_window_cap` (800,000), since Sonnet 4.6 accepts 1M
+  tokens but Bedrock bills per input token. The service itself ships an empty
+  map, so a non-Ansible deployment keeps the conservative 12,000.
+- **`CLOUD_ROUTED_ALIASES` is derived from the registry too.** It was a
+  hardcoded default listing `agent,default,chat,research,…` as cloud-routed,
+  and nothing in Ansible overrode it — but production `model_purposes` maps
+  all four to a local vLLM model. `_routes_to_cloud("chat")` therefore
+  returned True on production, so `_inject_thinking_settings` took the
+  frontier branch: it sent `reasoning_effort` to a Qwen model and returned
+  early, never applying `enable_thinking: false` or the thinking budget the
+  local branch exists to set. The env template now emits the alias list from
+  each purpose's resolved `provider`, so it cannot drift from the LiteLLM
+  config again.
 - **Deep research asks before it runs.** When a request is routed to
   `deep_research`, the turn now stops at an offer — "…it usually takes a few
   minutes. Would you like me to run it?" — rendered with Yes/No buttons. "Yes"

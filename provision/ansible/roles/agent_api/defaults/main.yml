@@ -30,14 +30,15 @@ litellm_database_url: "postgresql://{{ postgres_user }}:{{ secrets.postgresql.pa
 redis_host: "{{ hostvars[groups['data'][0]]['ansible_host'] if 'data' in groups else '127.0.0.1' }}"
 redis_port: 6379
 
-# Attachment context budget (MODEL_CONTEXT_WINDOWS)
+# LLM purposes resolved against model_registry.yml
 # ------------------------------------------------
-# The agent sizes the attachment context budget from the window of whichever
-# model writes the answer. The purpose -> model binding differs per backend
-# (MLX dev, vLLM production, cloud), so the env template resolves each purpose
-# through model_registry.yml rather than the agent hardcoding a map.
-agent_context_window_purposes:
+# The purpose -> model binding differs per backend (MLX dev, vLLM production,
+# cloud), so MODEL_CONTEXT_WINDOWS and CLOUD_ROUTED_ALIASES are both rendered
+# from the registry rather than hardcoded in the agent, where either would be
+# wrong on some backend.
+agent_llm_purposes:
   - default
+  - test
   - agent
   - chat
   - research
@@ -51,10 +52,18 @@ agent_context_window_purposes:
   - frontier-fast
   - fallback
 
-# Ceiling applied to every resolved window. A model accepting 1M tokens does
-# not mean we want a 1M-token prompt: Bedrock bills per input token and
-# time-to-first-token scales with the prompt. Raise deliberately.
-agent_max_context_window: 200000
+# Providers whose models are served over an API rather than locally. Drives
+# CLOUD_ROUTED_ALIASES, which tells the agent not to send vLLM/MLX-only
+# request params (extra_body.chat_template_kwargs, max_thinking_tokens) to a
+# provider that answers unknown params with a 400.
+agent_cloud_providers:
+  - bedrock
+  - openai
+
+# Local models use their served window as-is (max_model_len is the real
+# limit). Cloud models are capped: Sonnet 4.6 accepts 1M tokens, but Bedrock
+# bills per input token and time-to-first-token scales with the prompt.
+agent_cloud_context_window_cap: 800000
 
 
 

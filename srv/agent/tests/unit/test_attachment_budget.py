@@ -22,9 +22,10 @@ def _settings(**kw) -> Settings:
 # What Ansible renders on a production (vLLM) host, from model_registry.yml.
 # 'chat' is a local 35B there, not a cloud model — the same alias resolves to
 # 16384 on an MLX dev box, which is why nothing is hardcoded in the service.
+# Local windows pass through as served; Bedrock's 1M is capped to 800k.
 PROD_MAP = (
     "default:65536,agent:65536,chat:65536,research:65536,tool_calling:65536,"
-    "fast:4096,classify:4096,frontier:200000,frontier-fast:200000,fallback:200000"
+    "fast:4096,classify:4096,frontier:800000,frontier-fast:200000,fallback:200000"
 )
 
 
@@ -37,7 +38,7 @@ PROD_MAP = (
     ("chat", 65536),
     ("CHAT", 65536),           # case-insensitive
     ("  chat  ", 65536),       # tolerant of padding
-    ("frontier", 200000),
+    ("frontier", 800000),
     ("fast", 4096),
 ])
 def test_known_aliases_resolve_to_their_window(alias, expected):
