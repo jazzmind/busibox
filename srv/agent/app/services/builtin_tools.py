@@ -33,6 +33,22 @@ BUILTIN_TOOL_METADATA = {
                         "type": "integer",
                         "description": "Maximum number of results per provider (default: 5). Each enabled provider returns up to this many results.",
                         "default": 5
+                    },
+                    "topic": {
+                        "type": "string",
+                        "enum": ["general", "news", "finance"],
+                        "default": "general",
+                        "description": "Use 'news' for current events (Tavily only)"
+                    },
+                    "time_range": {
+                        "type": "string",
+                        "enum": ["day", "week", "month", "year"],
+                        "description": "Restrict to sources published/updated within this range (Tavily only)"
+                    },
+                    "include_domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Restrict results to these domains (Tavily only)"
                     }
                 },
                 "required": ["query"]
@@ -47,6 +63,97 @@ BUILTIN_TOOL_METADATA = {
                     "providers_used": {"type": "array", "description": "List of providers that returned results"},
                     "results_per_provider": {"type": "object", "description": "Number of results from each provider"},
                     "error": {"type": "string", "description": "Error message if search failed"}
+                }
+            }
+        }
+    },
+    "tavily_tools_extract": {
+        "name": "web_extract",
+        "description": "Read the full content of one or more web pages as clean markdown (Tavily Extract; falls back to the built-in scraper when Tavily is not configured). Use after web_search when a snippet is not enough, or when the user gives a URL.",
+        "entrypoint": "app.tools.tavily_tools:web_extract",
+        "scopes": [],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "urls": {"type": "array", "items": {"type": "string"}, "description": "One to twenty page URLs"},
+                    "query": {"type": "string", "description": "Optional focus; returns only the chunks relevant to it"},
+                    "extract_depth": {"type": "string", "enum": ["basic", "advanced"], "default": "basic", "description": "advanced handles tables/embedded content (slower, 2x credits)"},
+                    "max_chars_per_url": {"type": "integer", "default": 12000, "description": "Cap on returned content per page"}
+                },
+                "required": ["urls"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "pages": {"type": "array", "description": "Extracted pages: url, content, truncated"},
+                    "failed": {"type": "array", "description": "URLs that failed with the error"},
+                    "provider": {"type": "string", "description": "tavily or web_scraper"},
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    },
+    "tavily_tools_map": {
+        "name": "web_map",
+        "description": "Discover the pages of a website (site map) so the right ones can be read with web_extract (Tavily Map).",
+        "entrypoint": "app.tools.tavily_tools:web_map",
+        "scopes": [],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Root URL of the site"},
+                    "instructions": {"type": "string", "description": "Optional natural-language focus for the crawl"},
+                    "max_depth": {"type": "integer", "default": 1, "description": "Link hops from the root (1-5)"},
+                    "limit": {"type": "integer", "default": 50, "description": "Maximum URLs to return"},
+                    "select_paths": {"type": "array", "items": {"type": "string"}, "description": "Regex path filters"}
+                },
+                "required": ["url"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "base_url": {"type": "string"},
+                    "urls": {"type": "array", "description": "Discovered URLs"},
+                    "url_count": {"type": "integer"},
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    },
+    "tavily_tools_research": {
+        "name": "deep_research",
+        "description": "Comprehensive multi-source web research returning a cited markdown report (Tavily Research). Use for reports, deep dives, comparisons and market/company analysis; takes 1-4 minutes and costs more than web_search.",
+        "entrypoint": "app.tools.tavily_tools:deep_research",
+        "scopes": [],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "description": "The research task with context and desired output format"},
+                    "model": {"type": "string", "enum": ["mini", "pro", "auto"], "description": "mini for narrow questions, pro for multi-topic research, auto to let Tavily choose"},
+                    "output_length": {"type": "string", "enum": ["short", "standard", "long"], "default": "standard"},
+                    "include_domains": {"type": "array", "items": {"type": "string"}, "description": "Preferred source domains (max 20)"},
+                    "exclude_domains": {"type": "array", "items": {"type": "string"}, "description": "Domains to block (max 20)"}
+                },
+                "required": ["question"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "status": {"type": "string", "description": "completed, failed, timeout or error"},
+                    "report": {"type": "string", "description": "Markdown report with numbered citations"},
+                    "sources": {"type": "array", "description": "Cited sources: title, url"},
+                    "request_id": {"type": "string"},
+                    "elapsed_seconds": {"type": "number"},
+                    "error": {"type": "string"}
                 }
             }
         }
@@ -1244,6 +1351,9 @@ def get_tool_executor(tool_name: str) -> Optional[Callable]:
         "get_weather": ("app.tools.weather_tool", "get_weather"),
         "data_document": ("app.tools.data_tool", "data_document"),
         "web_scraper": ("app.tools.web_scraper_tool", "scrape_webpage"),
+        "web_extract": ("app.tools.tavily_tools", "web_extract"),
+        "web_map": ("app.tools.tavily_tools", "web_map"),
+        "deep_research": ("app.tools.tavily_tools", "deep_research"),
         "playwright_browser": ("app.tools.playwright_tool", "browse_webpage"),
         # Data management tools
         "create_data_document": ("app.tools.data_tool", "create_data_document"),
@@ -1318,6 +1428,9 @@ def get_tool_object(tool_name: str) -> Optional[Any]:
         "get_weather": ("app.tools.weather_tool", "weather_tool"),
         "data_document": ("app.tools.ingestion_tool", "data_tool"),
         "web_scraper": ("app.tools.web_scraper_tool", "web_scraper_tool"),
+        "web_extract": ("app.tools.tavily_tools", "web_extract_tool"),
+        "web_map": ("app.tools.tavily_tools", "web_map_tool"),
+        "deep_research": ("app.tools.tavily_tools", "deep_research_tool"),
         "playwright_browser": ("app.tools.playwright_tool", "playwright_browser_tool"),
         # Data management tools
         "create_data_document": ("app.tools.data_tool", "create_data_document_tool"),

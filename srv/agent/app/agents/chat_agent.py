@@ -27,7 +27,17 @@ from app.agents.base_agent import (
     ToolStrategy,
 )
 from app.schemas.streaming import clarify_parallel, content, error, interim, plan, progress, prompt, thought
-from pydantic import BaseModel, ValidationError
+from app.services.routing_guards import (
+    DEEP_RESEARCH_OFFER_QUESTION,
+    GuardOutcome,
+    affirmation_guard,
+    cap_plan_steps,
+    clarify_loop_guard,
+    deep_research_offer_guard,
+    factual_guard,
+    research_intent_guard,
+)
+from pydantic import BaseModel, ValidationError, field_validator
 
 from busibox_common.llm import get_client
 
@@ -36,6 +46,7 @@ import re
 logger = logging.getLogger(__name__)
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+_URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
 
 _YES_NO_PATTERNS = [
     re.compile(r"\bwould you like me to\b"),
@@ -69,6 +80,51 @@ def _strip_think_tags(text: str) -> tuple:
     think_text = "\n".join(m.strip() for m in matches)
     cleaned = _THINK_RE.sub("", text).strip()
     return cleaned, think_text
+
+
+# Words that mean "the thing I attached". Used to decide whether a file carried
+# forward from an earlier turn (see api/chat.py) is the subject of this message.
+_ATTACHMENT_REF_RE = re.compile(
+    r"\b(?:attach(?:ed|ment|ments)?|upload(?:ed|s)?"
+    r"|(?:this|that|the|my) (?:file|files|doc|docs|document|documents|pdf|spreadsheet"
+    r"|sheet|image|photo|scan|report|drawing|contract|invoice)"
+    r"|it says|what does it say|summari[sz]e it|read it)\b",
+    re.IGNORECASE,
+)
+
+# Placeholder texts clients send when a message is attachment-only.
+_ATTACHMENT_ONLY_PLACEHOLDERS = {
+    "attached document", "attached documents", "attachment", "attachments",
+    "see attached", "file attached", "attached file", "attached",
+}
+
+# Phrases that only exist in the classifier's own scaffolding. A small model
+# occasionally answers the prompt instead of the user ("What are the missing
+# profile fields you need me to gather?"); such output must be discarded.
+_PROMPT_ECHO_MARKERS = (
+    "profile field", "needs_tools", "action_type", "follow_up_question",
+    "current user message", "return only json",
+)
+
+
+def _mentions_attachment(text: str) -> bool:
+    return bool(_ATTACHMENT_REF_RE.search(text or ""))
+
+
+def _looks_like_prompt_echo(text: Optional[str]) -> bool:
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in _PROMPT_ECHO_MARKERS)
+
+
+def _is_attachment_only_message(query: str, attachments: List[Dict[str, Any]]) -> bool:
+    """True when the message carries files but no real question."""
+    if not attachments:
+        return False
+    text = (query or "").strip().lower().rstrip(".!:")
+    if not text or text in _ATTACHMENT_ONLY_PLACEHOLDERS:
+        return True
+    names = {str(a.get("filename", "")).strip().lower() for a in attachments}
+    return text in names
 
 
 # Chat agent system prompt - focused on behavior, tools are auto-documented by PydanticAI
@@ -118,6 +174,48 @@ class FastAckDecision(BaseModel):
     confidence: float = 0.75
     routing_source: str = "llm"
     complexity: str = "moderate"  # simple | moderate | complex
+    # Tool the planner must include (set by the semantic router's route or
+    # a routing guard), e.g. "deep_research". None = planner decides.
+    preferred_tool: Optional[str] = None
+    # Set when this turn only *offers* deep research: the question the offer
+    # is waiting on. Persisted with the turn so "yes" next turn resumes it.
+    pending_research: Optional[str] = None
+
+
+def _coerce_str(value: Any) -> Any:
+    """Coerce ints/floats to str for ID-like fields (small planner models emit 1, not "1")."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return str(int(value)) if float(value).is_integer() else str(value)
+    return value
+
+
+_DURATION_LABELS = ("quick", "moderate", "long")
+
+
+def _coerce_duration(value: Any) -> Any:
+    """Map numeric or free-text durations onto quick | moderate | long.
+
+    The planner is asked for a label but the 0.8B model frequently returns
+    seconds/minutes as a number (e.g. 5). Strict validation rejected the whole
+    plan (QA finding #6); coerce instead.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return "quick" if value <= 10 else ("moderate" if value <= 60 else "long")
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in _DURATION_LABELS:
+            return v
+        if any(k in v for k in ("quick", "fast", "short", "sec")):
+            return "quick"
+        if any(k in v for k in ("long", "slow", "hour")):
+            return "long"
+        if v:
+            return "moderate"
+    return value
 
 
 class PlanStep(BaseModel):
@@ -129,6 +227,16 @@ class PlanStep(BaseModel):
     run_mode: str = "serial"  # serial | parallel
     args: Dict[str, Any] = {}
 
+    @field_validator("id", "tool", "objective", "run_mode", mode="before")
+    @classmethod
+    def _stringify(cls, v: Any) -> Any:
+        return _coerce_str(v)
+
+    @field_validator("args", mode="before")
+    @classmethod
+    def _args_dict(cls, v: Any) -> Any:
+        return {} if v is None else v
+
 
 class FeedbackPoint(BaseModel):
     """A user-facing update point during execution."""
@@ -137,15 +245,52 @@ class FeedbackPoint(BaseModel):
     message: str
     kind: str = "interim"  # interim | clarify
 
+    @field_validator("after_step_id", mode="before")
+    @classmethod
+    def _stringify(cls, v: Any) -> Any:
+        return _coerce_str(v)
+
 
 class ExecutionPlan(BaseModel):
-    """Structured plan produced before tool execution."""
+    """Structured plan produced before tool execution.
+
+    Validators are deliberately lenient: the plan is generated by the small
+    `fast` model, and a single wrong scalar type used to discard an otherwise
+    good multi-step plan in favour of the generic fallback (finding #6).
+    """
 
     summary: str
     steps: List[PlanStep] = []
     parallel_groups: List[List[str]] = []
     feedback_points: List[FeedbackPoint] = []
     estimated_duration: str = "quick"
+    # llm = planner model produced it; fallback = deterministic mapping after
+    # the planner failed. Read by the escalation guard.
+    source: str = "llm"
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def _summary_str(cls, v: Any) -> Any:
+        return "" if v is None else _coerce_str(v)
+
+    @field_validator("steps", "feedback_points", mode="before")
+    @classmethod
+    def _lists_not_none(cls, v: Any) -> Any:
+        return [] if v is None else v
+
+    @field_validator("parallel_groups", mode="before")
+    @classmethod
+    def _groups_of_str(cls, v: Any) -> Any:
+        if v is None:
+            return []
+        if isinstance(v, list) and v and not isinstance(v[0], list):
+            v = [v]  # model returned a flat list of ids
+        return [[_coerce_str(x) for x in (g or [])] for g in v if isinstance(g, list)]
+
+    @field_validator("estimated_duration", mode="before")
+    @classmethod
+    def _duration_label(cls, v: Any) -> Any:
+        return "quick" if v is None else _coerce_duration(v)
 
 
 class ChatAgent(BaseStreamingAgent):
@@ -166,6 +311,9 @@ class ChatAgent(BaseStreamingAgent):
             model="chat",
             tools=[
                 "web_search",
+                "web_extract",
+                "web_map",
+                "deep_research",
                 "get_weather",
                 "document_search",
                 "list_data_documents",
@@ -258,22 +406,15 @@ class ChatAgent(BaseStreamingAgent):
             for attachment in context.attachment_metadata:
                 filename = attachment.get("filename", "attachment")
                 mime_type = attachment.get("mime_type", "unknown")
-                lines.append(f"- {filename} ({mime_type})")
+                note = " — sent earlier in this conversation" if attachment.get("carried_forward") else ""
+                lines.append(f"- {filename} ({mime_type}){note}")
             lines.append("")
 
+        # The user message is deliberately the last line: the classifier is a
+        # small model and answers whatever comes last. Profile follow-ups and
+        # missing profile fields used to trail it here and were echoed back
+        # as the reply; they belong to synthesis only (base_agent).
         lines.append(f"Current user message: {query}")
-
-        if context.insights_enabled:
-            if context.pending_questions:
-                lines.append("")
-                lines.append("(Optional, low-priority) After answering the user, you may append one of these profile follow-ups:")
-                for item in context.pending_questions[:2]:
-                    question = str(item.get("content", "")).strip()
-                    if question:
-                        lines.append(f"- {question}")
-
-            if context.missing_profile_fields:
-                lines.append(f"Missing profile fields: {', '.join(context.missing_profile_fields)}")
         return "\n".join(lines)
 
     def _normalize_action_type(self, action_type: str) -> str:
@@ -288,6 +429,12 @@ class ChatAgent(BaseStreamingAgent):
             "search_documents": "document_search",
             "web_search": "web_search",
             "search_web": "web_search",
+            "web_extract": "web_extract",
+            "extract": "web_extract",
+            "read_page": "web_extract",
+            "web_map": "web_map",
+            "site_map": "web_map",
+            "deep_research": "deep_research",
             "weather": "get_weather",
             "get_weather": "get_weather",
             "task": "create_task",
@@ -338,6 +485,21 @@ class ChatAgent(BaseStreamingAgent):
         except Exception:
             # Keep planner args as-is if signature introspection fails.
             pass
+
+        # Tavily tools: the planner sometimes names the intent but not the
+        # required argument. Backfill from the user message where possible.
+        if tool_name == "deep_research" and not normalized.get("question"):
+            normalized["question"] = query
+        elif tool_name in {"web_extract", "web_map"}:
+            urls_in_query = _URL_RE.findall(query or "")
+            if tool_name == "web_extract":
+                raw_urls = normalized.get("urls")
+                if isinstance(raw_urls, str):
+                    normalized["urls"] = [raw_urls]
+                elif not raw_urls and urls_in_query:
+                    normalized["urls"] = urls_in_query
+            elif not normalized.get("url") and urls_in_query:
+                normalized["url"] = urls_in_query[0]
         return normalized
 
     def _heuristic_fast_ack(self, query: str) -> FastAckDecision:
@@ -448,6 +610,12 @@ class ChatAgent(BaseStreamingAgent):
         """
         from app.config.settings import get_settings
 
+        # Messages about uploaded files never take the fast path: attachments
+        # are only read in the deep pass, and neither the router nor the
+        # small classifier needs to decide that.
+        if context.attachment_metadata:
+            return self._attachment_decision(query, context)
+
         router_settings = get_settings()
         if not router_settings.semantic_router_enabled:
             return await self._generate_fast_ack(query, context)
@@ -477,6 +645,7 @@ class ChatAgent(BaseStreamingAgent):
                 confidence=match.score,
                 routing_source=f"semantic_router:{match.route}",
                 complexity=match.complexity,
+                preferred_tool=match.preferred_tool,
             )
 
         # Shadow mode (or live-mode miss): use the LLM classifier.
@@ -503,6 +672,286 @@ class ChatAgent(BaseStreamingAgent):
                 },
             )
         return decision
+
+    # The 0.8B classifier decides ambiguity from the query text alone. When it
+    # says "clarify" a larger model re-reads the same query and either confirms
+    # it (writing a better question) or overturns it. Local by default
+    # (tool_calling = Qwen 35B on vLLM), so there is no marginal cost.
+    _CLARIFY_REVIEW_PROMPT = (
+        "A small classifier flagged this user message as too ambiguous to answer and wants to ask a "
+        "clarifying question. Decide whether that is right.\n\n"
+        "Return ONLY JSON with keys: ambiguous (boolean), question (string), reason (string).\n"
+        "Rules:\n"
+        "- ambiguous=false when the message is a well-formed request that could be answered by searching "
+        "company documents or the web, even if the answer might not be found. Not knowing the answer is "
+        "NOT ambiguity.\n"
+        "- ambiguous=true ONLY when the message cannot be acted on at all: no topic ('can you help me'), "
+        "or an unresolved reference with nothing in the conversation to resolve it ('what about that one?').\n"
+        "- If ambiguous=true, 'question' must be ONE specific question, max 20 words, that would let you "
+        "proceed. Never ask the user to restate what they already said.\n"
+        "- reason: at most 12 words.\n"
+    )
+
+    async def _review_clarify(self, query: str, decision: FastAckDecision,
+                              context: Optional[AgentContext] = None) -> FastAckDecision:
+        """Second opinion on a clarify decision from a larger model.
+
+        Overturning is the common case: a well-formed question that simply
+        might not be answerable is not ambiguous, and should go to retrieval.
+        Any failure (model down, bad JSON, timeout) leaves the original
+        decision untouched.
+        """
+        if decision.action_type != "clarify":
+            return decision
+        try:
+            from app.config.settings import get_settings
+            settings = get_settings()
+            review_model = (settings.clarify_review_model or "").strip()
+            timeout = float(settings.clarify_review_timeout_seconds)
+        except Exception:  # noqa: BLE001
+            review_model, timeout = "tool_calling", 6.0
+        if not review_model:
+            return decision
+
+        prompt = (
+            f"{self._CLARIFY_REVIEW_PROMPT}\n"
+            f"Proposed clarifying question: {decision.follow_up_question or '(none)'}\n\n"
+            f"{self._build_fast_ack_context(query, context or AgentContext())}"
+        )
+        t0 = time.monotonic()
+        try:
+            client = get_client()
+            result = await asyncio.wait_for(
+                client.chat_completion(
+                    model=review_model,
+                    messages=[
+                        {"role": "system", "content": "You are a strict JSON generator. Return only valid JSON."},
+                        {"role": "user", "content": f"/no_think\n{prompt}"},
+                    ],
+                    temperature=0.0,
+                    enable_thinking=False,
+                ),
+                timeout=timeout,
+            )
+            raw = (result.get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip()
+            start, end = raw.find("{"), raw.rfind("}")
+            if start == -1 or end <= start:
+                raise ValueError(f"no JSON object in review response: {raw[:120]!r}")
+            parsed = json.loads(raw[start:end + 1])
+        except Exception as exc:  # noqa: BLE001 — review must never break routing
+            logger.warning(
+                "clarify_review: skipped after %dms (%s)",
+                round((time.monotonic() - t0) * 1000), exc,
+            )
+            return decision
+
+        elapsed = round((time.monotonic() - t0) * 1000)
+        ambiguous = bool(parsed.get("ambiguous"))
+        reason = str(parsed.get("reason", ""))[:120]
+        if ambiguous:
+            question = str(parsed.get("question", "")).strip()
+            if question and not _looks_like_prompt_echo(question):
+                decision.follow_up_question = question
+            decision.routing_source = f"{decision.routing_source}+clarify_review:kept"
+            logger.info(
+                "clarify_review: kept clarify",
+                extra={"model": review_model, "elapsed_ms": elapsed, "reason": reason},
+            )
+            return decision
+
+        logger.info(
+            "clarify_review: overturned clarify → search",
+            extra={"model": review_model, "elapsed_ms": elapsed, "reason": reason},
+        )
+        decision.action_type = "search"
+        decision.needs_tools = True
+        decision.follow_up_question = None
+        decision.response = self._ACK_RESPONSES[hash(query) % len(self._ACK_RESPONSES)]
+        decision.routing_source = f"{decision.routing_source}+clarify_review:overturned"
+        return decision
+
+    async def _stream_guard(self, stream, outcome: GuardOutcome) -> None:
+        logger.info(
+            "Routing guard triggered",
+            extra={"guard": outcome.name, "reason": outcome.reason, "rewritten_query": (outcome.query or "")[:80]},
+        )
+        await stream(thought(
+            source=self.name,
+            message=f"Guard: {outcome.name} — {outcome.reason}",
+            data={"phase": "guard", "guard": outcome.name, "reason": outcome.reason},
+        ))
+
+    async def _apply_routing_guards(
+        self,
+        query: str,
+        decision: FastAckDecision,
+        history: List[Dict[str, Any]],
+        stream,
+        context: Optional[AgentContext] = None,
+    ) -> FastAckDecision:
+        """Deterministic overrides of the classifier (services/routing_guards.py)."""
+        # A larger model reviews any clarify decision first: the 0.8B model
+        # judges ambiguity from the query text alone and gets it wrong on
+        # well-formed questions it simply cannot answer itself.
+        if decision.action_type == "clarify" and decision.routing_source.startswith("llm"):
+            before = decision.routing_source
+            decision = await self._review_clarify(query, decision, context)
+            if decision.routing_source != before and decision.action_type != "clarify":
+                await self._stream_guard(stream, GuardOutcome(
+                    triggered=True,
+                    name="clarify_review",
+                    reason="a larger model judged the question answerable — searching instead of asking",
+                ))
+
+        outcome = clarify_loop_guard(decision.action_type, history)
+        # A clarify the review deliberately upheld is left alone; otherwise a
+        # company-fact question must not be settled without retrieval.
+        review_upheld = decision.routing_source.endswith("clarify_review:kept")
+        if not outcome.triggered and not review_upheld:
+            try:
+                from app.services.org_glossary import mentioned_terms
+                terms = mentioned_terms(query)
+            except Exception:  # noqa: BLE001
+                terms = []
+            outcome = factual_guard(
+                query, decision.action_type, decision.needs_tools, decision.routing_source, terms
+            )
+        if not outcome.triggered and not decision.preferred_tool:
+            # Explicit "research this / write a report" phrasing that the
+            # router did not catch (router off, or below threshold).
+            research = research_intent_guard(query)
+            if research.triggered:
+                outcome = research
+                decision.preferred_tool = "deep_research"
+                decision.complexity = "complex"
+        if not outcome.triggered:
+            return decision
+        await self._stream_guard(stream, outcome)
+        decision.action_type = outcome.action_type or decision.action_type
+        decision.needs_tools = outcome.needs_tools if outcome.needs_tools is not None else decision.needs_tools
+        decision.follow_up_question = None
+        if decision.needs_tools:
+            decision.response = self._ACK_RESPONSES[hash(query) % len(self._ACK_RESPONSES)]
+        decision.routing_source = f"{decision.routing_source}+{outcome.name}_guard"
+        return decision
+
+    # Deep research runs for minutes, not seconds, so the user is told up
+    # front. With DEEP_RESEARCH_CONFIRM (default) the turn stops at an offer
+    # and Yes/No buttons; otherwise it announces the wait and runs.
+    _RESEARCH_OFFER = (
+        "This looks like a research task. I can run a deep, multi-source research "
+        "pass and put together a cited report — it usually takes a few minutes. "
+        + DEEP_RESEARCH_OFFER_QUESTION
+    )
+    _RESEARCH_ACK = (
+        "This looks like a research task. I'll run a deep, multi-source research "
+        "pass and put together a cited report — that usually takes a few minutes. "
+        "I'll post it here when it's ready."
+    )
+    _RESEARCH_CONFIRMED_ACK = (
+        "Starting the deep research now — this usually takes a few minutes. "
+        "I'll post the cited report here when it's ready."
+    )
+
+    async def _confirm_deep_research(
+        self,
+        decision: FastAckDecision,
+        stream,
+        query: str = "",
+        confirmed: bool = False,
+    ) -> FastAckDecision:
+        """Gate deep research on availability and, by default, on the user's consent.
+
+        Without a Tavily key (or with the tool disabled) the request is
+        downgraded to a normal web search and the ack must not promise a
+        multi-minute report. When it is available, the turn either stops at
+        an offer the user answers next turn (``confirmed`` is then True via
+        ``deep_research_offer_guard``) or, with confirmation disabled, runs
+        immediately behind an announcement of the expected wait.
+        """
+        if decision.preferred_tool != "deep_research":
+            return decision
+        available = "deep_research" in self.config.tools and ToolRegistry.has("deep_research")
+        if available:
+            try:
+                from app.tools.tavily_tools import _tavily_api_key
+                available = bool(await _tavily_api_key())
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("deep_research availability check failed: %s", exc)
+                available = False
+        if not available:
+            logger.info("deep_research requested but unavailable (no Tavily key); using web search")
+            await stream(thought(
+                source=self.name,
+                message="Deep research isn't configured (no Tavily key) — running a standard web search instead.",
+                data={"phase": "escalation", "from": "deep_research", "to": "web_search"},
+            ))
+            decision.preferred_tool = None
+            decision.action_type = "research"
+            decision.needs_tools = True
+            decision.pending_research = None
+            if not decision.response.strip():
+                decision.response = self._ACK_RESPONSES[hash(query) % len(self._ACK_RESPONSES)]
+            return decision
+
+        from app.config.settings import get_settings
+        if getattr(get_settings(), "deep_research_confirm", True) and not confirmed:
+            # Offer only. The turn ends here with Yes/No buttons; the
+            # question is carried on the decision so the next turn can
+            # resume it without re-classifying the word "yes".
+            decision.needs_tools = False
+            decision.action_type = "direct"
+            decision.follow_up_question = None
+            decision.pending_research = (query or "").strip() or None
+            decision.response = self._RESEARCH_OFFER
+            decision.routing_source = f"{decision.routing_source}+research_offer"
+            return decision
+
+        decision.needs_tools = True
+        decision.action_type = "research"
+        decision.complexity = "complex"
+        decision.follow_up_question = None
+        decision.pending_research = None
+        decision.response = self._RESEARCH_CONFIRMED_ACK if confirmed else self._RESEARCH_ACK
+        return decision
+
+    @staticmethod
+    def _attachments_in_focus(query: str, context: AgentContext) -> List[Dict[str, Any]]:
+        """Return the attachments this message is about.
+
+        Files uploaded with the message always count. Files carried forward
+        from earlier turns count only when the message refers to them, so
+        "what's the weather" after a PDF upload is not treated as a document
+        question, while "what's the attached?" resolves to last turn's file.
+        """
+        current = [a for a in context.attachment_metadata if not a.get("carried_forward")]
+        if current:
+            return current
+        if _mentions_attachment(query):
+            return list(context.attachment_metadata)
+        return []
+
+    @staticmethod
+    def _default_attachment_objective(context: AgentContext) -> str:
+        """Objective used when the user sent files without a question."""
+        names = [a.get("filename", "attachment") for a in context.attachment_metadata]
+        noun = "document" if len(names) == 1 else "documents"
+        return (
+            f"Summarize the attached {noun} ({', '.join(names)}): what it is, who it is "
+            "from or for, key dates, amounts, decisions and any action items."
+        )
+
+    def _attachment_decision(self, query: str, context: AgentContext) -> FastAckDecision:
+        """Deterministic routing decision for messages about uploaded files."""
+        count = len(context.attachment_metadata)
+        return FastAckDecision(
+            action_type="analysis",
+            needs_tools=True,
+            response="Let me review that attachment." if count == 1 else "Let me review those attachments.",
+            confidence=1.0,
+            routing_source="attachment_rule",
+            complexity="moderate",
+        )
 
     # Neutral acknowledgments used whenever tools will run. Deterministic
     # per-query (hash-picked) so repeated questions get consistent wording.
@@ -603,6 +1052,12 @@ class ChatAgent(BaseStreamingAgent):
                     raw = raw[start:end + 1]
             parsed = FastAckDecision.model_validate(json.loads(raw))
             if not parsed.response.strip():
+                return default
+            if _looks_like_prompt_echo(parsed.response) or _looks_like_prompt_echo(parsed.follow_up_question):
+                logger.warning(
+                    "fast_ack: classifier echoed its own prompt; using heuristic decision | raw=%r",
+                    raw[:200],
+                )
                 return default
             parsed.action_type = self._normalize_action_type(parsed.action_type)
             if parsed.action_type == "clarify":
@@ -747,7 +1202,21 @@ class ChatAgent(BaseStreamingAgent):
             )
             parallel_step_ids.append("step_1")
 
-        if (
+        wants_deep_research = (
+            dispatch.preferred_tool == "deep_research" and "deep_research" in enabled_tools
+        )
+        if wants_deep_research:
+            # Tavily Research replaces the plain web search; it runs after the
+            # (fast) document search so company context is available too.
+            fallback_steps.append(
+                PlanStep(
+                    id=f"step_{len(fallback_steps) + 1}",
+                    tool="deep_research",
+                    objective="Run multi-source deep research and produce a cited report",
+                    args={"question": query, "model": "auto"},
+                )
+            )
+        elif (
             dispatch.action_type in {"research", "search"}
             and "web_search" in enabled_tools
         ):
@@ -766,7 +1235,11 @@ class ChatAgent(BaseStreamingAgent):
                     args={"limit": 50},
                 )
             )
-        if not fallback_steps and enabled_tools:
+        # A question about an uploaded file needs no tool at all: the content
+        # is injected into the prompt and the model answers from it. Without
+        # this guard the fallback ran an unrelated web_search just to have a
+        # step.
+        if not fallback_steps and enabled_tools and not attachment_only_query:
             fallback_steps.append(
                 PlanStep(id="step_1", tool=enabled_tools[0], objective="Collect supporting context", args={"query": query})
             )
@@ -775,7 +1248,11 @@ class ChatAgent(BaseStreamingAgent):
         parallel_groups = [parallel_step_ids] if len(parallel_step_ids) > 1 else [[]]
 
         fallback = ExecutionPlan(
-            summary="I'll gather the most relevant information first, then synthesize the final answer.",
+            summary=(
+                "I'll read the attached file(s) and answer from their content."
+                if attachment_only_query and not fallback_steps
+                else "I'll gather the most relevant information first, then synthesize the final answer."
+            ),
             steps=fallback_steps,
             parallel_groups=parallel_groups,
             feedback_points=[],
@@ -838,7 +1315,16 @@ class ChatAgent(BaseStreamingAgent):
             "- Do NOT include `memory_search` or `memory_save` unless the user asks about previous conversations or preferences.\n"
             + doc_search_rule +
             "- When `web_search` is also needed, run it IN PARALLEL with `document_search` by putting both step IDs in the same parallel_groups entry.\n"
-            "- Use `list_data_documents`, `get_data_document`, or `query_data` ONLY when the user explicitly asks about structured data tables/records.\n\n"
+            "- For news or time-sensitive questions pass `topic=\"news\"` and a `time_range` (day/week/month/year) to `web_search`.\n"
+            "- Use `web_extract` only when the user gives a URL or asks to read a specific page in full; use `web_map` only to discover pages on a named website.\n"
+            "- Use `deep_research` ONLY when the user explicitly asks for a report, deep dive, comprehensive comparison or market/company analysis "
+            "(it takes minutes and costs credits); it replaces `web_search` in that plan and runs after `document_search`.\n"
+            + (
+                "- REQUIRED: the user asked for deep research. Include a `deep_research` step with "
+                "question=<the user's request, with any context they gave> and do NOT include `web_search`.\n"
+                if wants_deep_research else ""
+            )
+            + "- Use `list_data_documents`, `get_data_document`, or `query_data` ONLY when the user explicitly asks about structured data tables/records.\n\n"
             f"Dispatch action type: {dispatch.action_type}\n"
             f"User query: {query}\n"
             f"{self._build_fast_ack_context(query, context)}"
@@ -874,6 +1360,9 @@ class ChatAgent(BaseStreamingAgent):
         except (json.JSONDecodeError, ValidationError, Exception) as exc:
             logger.warning("Plan generation fallback: %s", exc)
             planned = fallback
+            plan_source = "fallback"
+        else:
+            plan_source = "llm"
 
         seen_steps: List[PlanStep] = []
         used_ids: Set[str] = set()
@@ -901,6 +1390,20 @@ class ChatAgent(BaseStreamingAgent):
         if not seen_steps:
             seen_steps = fallback.steps
 
+        if wants_deep_research:
+            # The router/guard decided this turn is deep research; the small
+            # planner must not quietly drop it or double up with web_search.
+            seen_steps = [step for step in seen_steps if step.tool != "web_search"]
+            if not any(step.tool == "deep_research" for step in seen_steps):
+                seen_steps.append(
+                    PlanStep(
+                        id=f"step_{len(seen_steps) + 1}",
+                        tool="deep_research",
+                        objective="Run multi-source deep research and produce a cited report",
+                        args={"question": query, "model": "auto"},
+                    )
+                )
+
         valid_step_ids = {step.id for step in seen_steps}
         normalized_groups: List[List[str]] = []
         for group in planned.parallel_groups:
@@ -927,6 +1430,7 @@ class ChatAgent(BaseStreamingAgent):
             parallel_groups=normalized_groups,
             feedback_points=feedback_points,
             estimated_duration=planned.estimated_duration or fallback.estimated_duration,
+            source=plan_source,
         )
 
     def _format_plan_summary(self, execution_plan: ExecutionPlan) -> str:
@@ -938,6 +1442,54 @@ class ChatAgent(BaseStreamingAgent):
             f"Estimated duration: {execution_plan.estimated_duration}\n"
             "Planned steps:\n- " + "\n- ".join(bullets)
         )
+
+    # Tools whose failures are usually transient (search-api 500, provider
+    # timeout). Retried once before the answer is written without them.
+    _RETRYABLE_TOOLS = {"document_search", "web_search", "query_data"}
+    _RETRY_DELAY_SECONDS = 1.0
+
+    @staticmethod
+    def _step_failed(agent_context: AgentContext, tool: str) -> Optional[str]:
+        """Return a short failure reason if the tool produced no usable result."""
+        result = agent_context.tool_results.get(tool)
+        if result is None:
+            return "no result"
+        error = getattr(result, "error", None)
+        found = getattr(result, "found", None)
+        has_items = bool(getattr(result, "results", None))
+        if error and not has_items and found is not True:
+            return str(error)[:120]
+        return None
+
+    async def _retry_failed_search_steps(
+        self, steps: List[PlanStep], stream, cancel, agent_context: AgentContext
+    ) -> None:
+        for step in steps:
+            if cancel.is_set():
+                return
+            if step.tool not in self._RETRYABLE_TOOLS:
+                continue
+            reason = self._step_failed(agent_context, step.tool)
+            if not reason:
+                continue
+            logger.warning("Tool %s failed (%s); retrying once", step.tool, reason)
+            await stream(thought(
+                source=self.name,
+                message=f"{step.tool} failed ({reason}); retrying once.",
+                data={"phase": "retry", "tool": step.tool, "reason": reason},
+            ))
+            await asyncio.sleep(self._RETRY_DELAY_SECONDS)
+            await self._execute_step(PipelineStep(tool=step.tool, args=step.args), stream, cancel, agent_context)
+
+    def _turn_budget_exhausted(self, agent_context: AgentContext) -> bool:
+        if not agent_context.turn_started:
+            return False
+        try:
+            from app.config.settings import get_settings as _gs
+            budget = _gs().chat_turn_budget_seconds
+        except Exception:  # noqa: BLE001
+            budget = 120
+        return (time.monotonic() - agent_context.turn_started) > budget
 
     async def _execute_plan(
         self,
@@ -975,6 +1527,8 @@ class ChatAgent(BaseStreamingAgent):
                 for s in fast_steps
             ]
             await asyncio.gather(*fast_tasks, return_exceptions=True)
+
+            await self._retry_failed_search_steps(fast_steps, stream, cancel, agent_context)
 
             for step in fast_steps:
                 completed.add(step.id)
@@ -1041,6 +1595,38 @@ class ChatAgent(BaseStreamingAgent):
                 else:
                     runnable = [next_step]
 
+                # Turn time budget: stop starting new slow steps once the
+                # turn has run long, except deep_research, which the user
+                # asked for explicitly and which is slow by design.
+                if self._turn_budget_exhausted(agent_context):
+                    skipped = [s for s in runnable if s.tool != "deep_research"]
+                    runnable = [s for s in runnable if s.tool == "deep_research"]
+                    for step in skipped:
+                        completed.add(step.id)
+                        logger.warning("Skipping %s: turn time budget exhausted", step.tool)
+                        await stream(thought(
+                            source=self.name,
+                            message=f"Skipping {step.tool}: this turn has used its time budget.",
+                            data={"phase": "budget", "skipped_tool": step.tool},
+                        ))
+                    if not runnable:
+                        continue
+
+                if any(s.tool == "deep_research" for s in runnable):
+                    await stream(content(
+                        source=self.name,
+                        message=(
+                            "Deep research is running — searching and reading sources, then "
+                            "drafting a cited report. This usually takes a few minutes."
+                        ),
+                        data={"phase": "interim", "tool": "deep_research"},
+                    ))
+                    await stream(progress(
+                        source=self.name,
+                        message="Deep research in progress",
+                        data={"phase": "deep_research", "expected_minutes": "1-4"},
+                    ))
+
                 tasks = [
                     self._execute_step(
                         PipelineStep(tool=s.tool, args=s.args), stream, cancel, agent_context
@@ -1048,6 +1634,7 @@ class ChatAgent(BaseStreamingAgent):
                     for s in runnable
                 ]
                 await asyncio.gather(*tasks, return_exceptions=True)
+                await self._retry_failed_search_steps(runnable, stream, cancel, agent_context)
 
                 for step in runnable:
                     completed.add(step.id)
@@ -1099,8 +1686,75 @@ class ChatAgent(BaseStreamingAgent):
         if cancel.is_set():
             return ""
 
+        # Keep only the attachments this message is about, and give a file
+        # sent without a question a concrete objective so planning and
+        # synthesis have something to work from.
+        agent_context.attachment_metadata = self._attachments_in_focus(query, agent_context)
+        if _is_attachment_only_message(query, agent_context.attachment_metadata):
+            query = self._default_attachment_objective(agent_context)
+            logger.info("Chat attachment-only message; using default objective: %s", query[:80])
+        agent_context.current_query = query
+        agent_context.turn_started = t0
+
+        # Keep the purpose->model mapping current. TTL-guarded, so this is a
+        # dict check on almost every turn; it exists so a re-point from the
+        # admin UI takes effect without a restart, and so a LiteLLM outage at
+        # boot self-heals instead of pinning the agent to fallbacks forever.
+        try:
+            from app.services import model_capabilities
+            await model_capabilities.refresh()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("model capability refresh skipped: %s", exc)
+
+        # "yes" / "no" after an offer is resolved before routing: the offer
+        # becomes the query, or the turn closes politely — never a fresh
+        # classification of the word "yes".
+        # "yes" / "no" after an offer is resolved before routing: the offer
+        # becomes the query, or the turn closes politely — never a fresh
+        # classification of the word "yes".
+        history = agent_context.recent_messages or agent_context.conversation_history
+        # The deep-research offer is checked first: its closing question also
+        # matches the generic affirmation guard, which would otherwise turn
+        # "yes" into a search for the offer sentence itself.
+        research_answer = deep_research_offer_guard(query, history)
+        affirmation = research_answer if research_answer.triggered else affirmation_guard(
+            query, history, _ends_with_yes_no_question
+        )
+        if affirmation.triggered:
+            await self._stream_guard(stream, affirmation)
+            if affirmation.direct_reply:
+                await stream(content(source=self.name, message=affirmation.direct_reply, data={"phase": "direct"}))
+                return affirmation.direct_reply
+            query = affirmation.query or query
+            agent_context.current_query = query
+
         t_ack = time.monotonic()
-        decision = await self._route_intent(query, agent_context)
+        research_confirmed = research_answer.triggered
+        if research_confirmed:
+            decision = FastAckDecision(
+                action_type="research",
+                needs_tools=True,
+                response="",
+                confidence=1.0,
+                routing_source="deep_research_offer_guard",
+                complexity="complex",
+                preferred_tool="deep_research",
+            )
+        elif affirmation.triggered:
+            decision = FastAckDecision(
+                action_type="search",
+                needs_tools=True,
+                response=self._ACK_RESPONSES[hash(query) % len(self._ACK_RESPONSES)],
+                confidence=1.0,
+                routing_source="affirmation_guard",
+                complexity="moderate",
+            )
+        else:
+            decision = await self._route_intent(query, agent_context)
+            decision = await self._apply_routing_guards(query, decision, history, stream, agent_context)
+        decision = await self._confirm_deep_research(
+            decision, stream, query=query, confirmed=research_confirmed
+        )
         logger.info(
             "Chat fast_ack decision",
             extra={
@@ -1126,6 +1780,8 @@ class ChatAgent(BaseStreamingAgent):
                 "confidence": decision.confidence,
                 "routing_source": decision.routing_source,
                 "follow_up_question": decision.follow_up_question,
+                "preferred_tool": decision.preferred_tool,
+                "pending_research": decision.pending_research,
             },
         ))
         fast_response = decision.response.strip()
@@ -1175,8 +1831,7 @@ class ChatAgent(BaseStreamingAgent):
                     principal=agent_context.principal,
                     session=agent_context.session,
                     metadata=agent_context.metadata,
-                    conversation_id=agent_context.conversation_id,
-                    message_history=agent_context.message_history,
+                    conversation_history=agent_context.conversation_history,
                     relevant_insights=agent_context.relevant_insights,
                     compressed_history_summary=agent_context.compressed_history_summary,
                     recent_messages=agent_context.recent_messages,
@@ -1280,6 +1935,44 @@ class ChatAgent(BaseStreamingAgent):
         await self._resolve_attachments(query, stream, agent_context)
 
         execution_plan = await self._generate_plan(query, agent_context, decision)
+
+        # Escalation: a generic fallback plan is a poor fit for a complex
+        # request. Let the synthesis model drive the tools itself instead.
+        if (
+            execution_plan.source == "fallback"
+            and decision.complexity == "complex"
+            and self.config.tool_strategy == ToolStrategy.LLM_DRIVEN
+        ):
+            logger.info("Planner fallback on complex request; escalating to LLM-driven tool use")
+            await stream(thought(
+                source=self.name,
+                message="Planner unavailable for a complex request — letting the model choose tools directly.",
+                data={"phase": "escalation", "from": "plan_fallback", "to": "llm_driven"},
+            ))
+            execution_plan = ExecutionPlan(
+                summary="Letting the model choose tools directly.", steps=[], source="fallback",
+            )
+
+        # Budget: never run more than chat_max_tool_steps steps in one turn.
+        try:
+            from app.config.settings import get_settings as _gs
+            max_steps = _gs().chat_max_tool_steps
+        except Exception:  # noqa: BLE001
+            max_steps = 6
+        if len(execution_plan.steps) > max_steps:
+            dropped = [s.tool for s in execution_plan.steps]
+            execution_plan.steps = cap_plan_steps(execution_plan.steps, max_steps)
+            kept_ids = {s.id for s in execution_plan.steps}
+            execution_plan.parallel_groups = [
+                [sid for sid in g if sid in kept_ids] for g in execution_plan.parallel_groups
+            ]
+            logger.info("Plan capped to %d steps (planned %d: %s)", max_steps, len(dropped), dropped)
+            await stream(thought(
+                source=self.name,
+                message=f"Limiting this turn to {max_steps} tool steps.",
+                data={"phase": "budget", "max_steps": max_steps, "planned": len(dropped)},
+            ))
+
         await stream(plan(
             source=self.name,
             message=self._format_plan_summary(execution_plan),

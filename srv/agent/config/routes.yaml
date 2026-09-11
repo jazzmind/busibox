@@ -16,6 +16,10 @@
 #   SEMANTIC_ROUTER_THRESHOLD (settings, default 0.82).
 # - action_type must be one of: direct, research, search, analysis,
 #   clarify, multi_step (must match FastAckDecision).
+# - decision.preferred_tool (optional) names a tool the planner MUST include
+#   for this route, e.g. deep_research. Leave unset to let the planner decide.
+# - Utterances below marked "(real)" were taken from production queries in the
+#   messages table; prefer mining real phrasings over inventing them.
 
 routes:
   hr_policy:
@@ -35,6 +39,12 @@ routes:
       - "what does the employee handbook say about overtime"
       - "how do I enroll in health insurance"
       - "what is the employee referral process"
+      - "what are the holidays at Cashman"                                    # (real)
+      - "how many paid holidays does the company have"                        # (real)
+      - "which are the vacation days"                                         # (real)
+      - "what are the annual in-network deductibles for the health plan"      # (real)
+      - "what is the maximum annual contribution to the Health Care FSA"      # (real)
+      - "what is the 2 and 1 rotational schedule and who sets it"             # (real)
 
   document_lookup:
     decision:
@@ -51,6 +61,9 @@ routes:
       - "find the new job checklist form"
       - "where is the company overview document"
       - "look up the quality control report"
+      - "find the company letterhead"                                         # (real)
+      - "is there a word template for company documents"                      # (real)
+      - "do we have the holiday schedule document"
 
   company_info:
     decision:
@@ -65,6 +78,88 @@ routes:
       - "what equipment does the company own"
       - "what are the company's notable projects"
       - "how big is the company fleet"
+      - "what companies make up the Cashman Family of Companies"              # (real)
+      - "who founded Jay Cashman Inc and who leads the company today"         # (real)
+      - "what role does Sterling Equipment play within the Cashman companies" # (real)
+      - "what is Cashman Dredging and Marine Contracting's specialty"         # (real)
+      - "what renewable energy projects is the company involved in"           # (real)
+      - "what is C-SAFE and what is the company's safety vision"              # (real)
+
+  who_to_contact:
+    # "Who do I ask about X" is a company fact (org chart, contact list,
+    # handbook), not an ambiguous question — the 0.8B classifier used to
+    # answer it with "what specific question are you asking?".
+    decision:
+      action_type: search
+      needs_tools: true
+      response: "Let me find who handles that."
+      complexity: moderate
+    utterances:
+      - "who should I ask about IT questions"                                 # (real)
+      - "who do I contact for help desk support"
+      - "who handles payroll questions"
+      - "who is responsible for safety training"
+      - "who do I talk to about my laptop"
+      - "who should I email about expense reports"
+      - "who is the point of contact for new hires"
+      - "what is the Confidential Reporting Line phone number"                # (real)
+      - "who do I report a safety concern to"
+
+  company_news:
+    # Recent company or sector news: needs the web, not the document library.
+    decision:
+      action_type: research
+      needs_tools: true
+      response: "Checking the latest news now."
+      complexity: moderate
+    utterances:
+      - "what's the latest with dredging news"                                # (real)
+      - "what's the latest news with cashman dredging"                        # (real)
+      - "what recent news, project awards or contracts has the company had"   # (real)
+      - "research the latest news on maritime construction"                   # (real)
+      - "any recent announcements about the company"
+      - "what's happening in the dredging industry this week"
+
+  industry_research:
+    # Market and competitor questions. Deliberately kept distinct from the
+    # deep_research route: these want an answer now, not a multi-minute
+    # report, and the closer match here stops deep_research capturing them.
+    decision:
+      action_type: research
+      needs_tools: true
+      response: "Let me look into that."
+      complexity: moderate
+    utterances:
+      - "what is the current state of the US marine dredging market"          # (real)
+      - "how does the company compare to competitors like Great Lakes"        # (real)
+      - "what recent infrastructure funding could affect the company"         # (real)
+      - "what are current day rates for a typical deck barge"                 # (real)
+      - "who are the major players in the dredging business"
+      - "what is the outlook for offshore wind construction"
+
+  deep_research:
+    # Explicit requests for a report / deep dive. preferred_tool makes the
+    # planner include deep_research (Tavily Research), which takes minutes,
+    # so the acknowledgement sets that expectation up front. When Tavily is
+    # not configured the agent downgrades this to a normal web search.
+    decision:
+      action_type: research
+      needs_tools: true
+      preferred_tool: deep_research
+      response: "This looks like a research task. I'll run a deep, multi-source research pass and put together a cited report — that usually takes a few minutes. I'll post it here when it's ready."
+      complexity: complex
+    threshold: 0.84
+    utterances:
+      - "do a deep research on the US hopper dredge market"
+      - "write a comprehensive report on port infrastructure funding"
+      - "research the competitors in marine construction and write a report"
+      - "give me an in-depth analysis of offshore wind port projects"
+      - "prepare a market analysis of dredging contractors on the east coast"
+      - "deep dive into the Army Corps dredging budget for next year"
+      - "put together a research report on beach nourishment costs"
+      - "I need a detailed competitive analysis of Great Lakes Dredge and Dock"
+      - "compile a report with sources on environmental dredging regulations"
+      - "research this topic thoroughly and cite your sources"
 
   greeting:
     # Pure greetings are answered directly without tools. The response

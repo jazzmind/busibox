@@ -336,40 +336,81 @@ async def search_duckduckgo(query: str, max_results: int = 5) -> List[WebSearchR
     return results
 
 
-async def search_tavily(query: str, max_results: int = 5, api_key: str = "") -> List[WebSearchResult]:
-    """Search using Tavily API."""
+TAVILY_API_BASE = "https://api.tavily.com"
+TAVILY_TOPICS = {"general", "news", "finance"}
+TAVILY_TIME_RANGES = {"day", "week", "month", "year", "d", "w", "m", "y"}
+# Tavily "advanced" returns up to chunks_per_source ~500-char snippets per URL,
+# joined by " [...] ". Keep enough of it for the synthesis model to quote.
+TAVILY_SNIPPET_CHARS = 1500
+
+
+def _tavily_headers(api_key: str) -> Dict[str, str]:
+    return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+
+async def search_tavily(
+    query: str,
+    max_results: int = 5,
+    api_key: str = "",
+    *,
+    search_depth: str = "advanced",
+    topic: str = "general",
+    time_range: Optional[str] = None,
+    include_domains: Optional[List[str]] = None,
+    chunks_per_source: int = 3,
+) -> List[WebSearchResult]:
+    """Search using the Tavily API.
+
+    Defaults follow Tavily's agent guidance: ``search_depth="advanced"``
+    (2 credits, highest relevance, several snippets per source) with
+    ``chunks_per_source=3``. ``topic="news"`` and ``time_range`` narrow to
+    recent coverage; ``include_domains`` restricts to listed sites.
+    """
     if not api_key:
         return []
-    
-    results = []
-    
+
+    results: List[WebSearchResult] = []
+    payload: Dict[str, Any] = {
+        "query": query,
+        "search_depth": search_depth if search_depth in {"advanced", "basic", "fast", "ultra-fast"} else "advanced",
+        "max_results": max(1, min(int(max_results), 20)),
+        "include_answer": False,
+        "topic": topic if topic in TAVILY_TOPICS else "general",
+    }
+    if payload["search_depth"] != "ultra-fast":
+        payload["chunks_per_source"] = max(1, min(int(chunks_per_source), 3))
+    if time_range in TAVILY_TIME_RANGES:
+        payload["time_range"] = time_range
+    if include_domains:
+        payload["include_domains"] = [d for d in include_domains if d][:300]
+
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                "https://api.tavily.com/search",
-                json={
-                    "api_key": api_key,
-                    "query": query,
-                    "search_depth": "basic",
-                    "max_results": max_results,
-                    "include_answer": False,
-                },
+                f"{TAVILY_API_BASE}/search",
+                json=payload,
+                headers=_tavily_headers(api_key),
             )
             response.raise_for_status()
-            
             data = response.json()
-            
-            for result in data.get("results", [])[:max_results]:
+
+            for result in data.get("results", [])[:payload["max_results"]]:
+                snippet = (result.get("content") or "")[:TAVILY_SNIPPET_CHARS]
+                published = result.get("published_date")
+                if published:
+                    snippet = f"[published {published}] {snippet}"
                 results.append(WebSearchResult(
                     title=result.get("title", ""),
                     url=result.get("url", ""),
-                    snippet=result.get("content", "")[:200],
-                    source="tavily"
+                    snippet=snippet,
+                    source="tavily",
                 ))
-                
+
+    except httpx.HTTPStatusError as e:
+        logger.warning("Tavily search HTTP %s: %s", e.response.status_code, e.response.text[:200])
     except Exception as e:
-        print(f"Tavily search error: {e}")
-    
+        logger.warning("Tavily search error: %s", e)
+
     return results
 
 
@@ -483,25 +524,31 @@ async def search_brave(query: str, max_results: int = 5, api_key: str = "") -> L
 
 
 async def search_web(
-    query: str, 
+    query: str,
     max_results: int = 5,
     providers: Optional[Dict[str, Dict[str, Any]]] = None,
     optimize_query: bool = True,
+    topic: str = "general",
+    time_range: Optional[str] = None,
+    include_domains: Optional[List[str]] = None,
 ) -> WebSearchOutput:
     """
     Search the web using multiple providers in parallel.
-    
+
     Automatically optimizes queries for each provider type:
     - AI-powered providers (Tavily, Perplexity): receive the original natural language query
     - Keyword providers (DuckDuckGo, Brave): receive optimized keyword queries
-    
+
     Args:
         query: Search query string (can be natural language)
         max_results: Maximum number of results PER PROVIDER (default: 5).
                      When multiple providers are enabled, each returns up to this many results.
         providers: Optional provider configuration override
         optimize_query: Whether to optimize queries for keyword-based providers (default: True)
-        
+        topic: "general" (default), "news" for current events, or "finance". Tavily only.
+        time_range: Restrict to recent sources: "day", "week", "month" or "year". Tavily only.
+        include_domains: Restrict results to these domains (e.g. ["usace.army.mil"]). Tavily only.
+
     Returns:
         WebSearchOutput with merged, deduplicated results from all providers
     """
@@ -548,7 +595,10 @@ async def search_web(
     if config.get("tavily", {}).get("enabled", False):
         api_key = config.get("tavily", {}).get("api_key", "")
         if api_key:
-            tasks.append(search_tavily(query, max_results, api_key))
+            tasks.append(search_tavily(
+                query, max_results, api_key,
+                topic=topic, time_range=time_range, include_domains=include_domains,
+            ))
             task_names.append("tavily")
     
     if config.get("perplexity", {}).get("enabled", False):
@@ -644,6 +694,11 @@ Use this tool when:
 The tool supports multiple search providers (DuckDuckGo, Tavily, Perplexity, Brave).
 When multiple providers are enabled, searches run in parallel and each provider returns
 up to max_results results, which are then merged and deduplicated.
+
+For news or anything time-sensitive pass topic="news" and time_range="week" (or
+"day"/"month"/"year"). To restrict to specific sites pass include_domains.
+For a full report with citations across many sources use deep_research instead;
+to read a specific page use web_extract.
 
 Always cite the URLs when using information from search results.""",
 )

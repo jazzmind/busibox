@@ -20,6 +20,7 @@ available_models:
     provider: "bedrock"
     model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     model_name: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    context_window: 200000
     description: "Claude 4.5 Sonnet - Most capable, frontier model (Sept 2025)"
     multimodal: true
     tool_calling: true
@@ -34,6 +35,7 @@ available_models:
     # cross-region inference prefix is required (and is what we use).
     model: "us.anthropic.claude-sonnet-4-6"
     model_name: "us.anthropic.claude-sonnet-4-6"
+    context_window: 1000000
     description: "Claude 4.6 Sonnet - frontier model, 1M ctx, 64K out, native structured outputs (Feb 2026)"
     multimodal: true
     tool_calling: true
@@ -42,7 +44,40 @@ available_models:
     provider: "bedrock"
     model: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     model_name: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    context_window: 200000
     description: "Claude 4.5 Haiku - Fast, efficient, excellent for most tasks"
+    multimodal: true
+    tool_calling: true
+
+  # The 5-era IDs carry no -YYYYMMDD-v1:0 suffix either. Adding one by analogy
+  # with the 4.5-era IDs yields a dead ID, which surfaces as a *successful*
+  # agent run with empty output — see the claude-sonnet-4-6 note above.
+  "claude-sonnet-5":
+    provider: "bedrock"
+    model: "us.anthropic.claude-sonnet-5"
+    model_name: "us.anthropic.claude-sonnet-5"
+    context_window: 1000000
+    description: "Claude 5 Sonnet - general chat and research (Feb 2026), 1M ctx"
+    multimodal: true
+    tool_calling: true
+
+  # 'global.' rather than 'us.': the global cross-region inference profile has
+  # wider capacity, which is what a load-shedding fallback wants.
+  "claude-sonnet-5-global":
+    provider: "bedrock"
+    model: "global.anthropic.claude-sonnet-5"
+    model_name: "global.anthropic.claude-sonnet-5"
+    context_window: 1000000
+    description: "Claude 5 Sonnet on the global inference profile - fallback under load"
+    multimodal: true
+    tool_calling: true
+
+  "claude-opus-4-8":
+    provider: "bedrock"
+    model: "us.anthropic.claude-opus-4-8"
+    model_name: "us.anthropic.claude-opus-4-8"
+    context_window: 1000000
+    description: "Claude 4.8 Opus - frontier model for complex analysis, 1M ctx"
     multimodal: true
     tool_calling: true
   
@@ -66,6 +101,7 @@ available_models:
     tensor_parallel_size: 2
     gpu_memory_utilization: 0.9
     max_model_len: 65536          # Generous ctx for agentic coding; fits with KV-cache headroom on TP=2 / 48GB
+    context_window: 65536            # == max_model_len (input+output)
     max_num_seqs: 16              # MoE (3B active) handles concurrency well
     max_num_batched_tokens: 8192  # Balanced latency for chat
     enable_chunked_prefill: true
@@ -88,6 +124,7 @@ available_models:
     description: "Qwen3.5 MoE 35B/A3B AWQ-4bit (~22GB) — fits a single 24GB GPU. Fallback until Qwen3.6 AWQ ships."
     gpu_memory_utilization: 0.9
     max_model_len: 32768
+    context_window: 32768            # == max_model_len (input+output)
     max_num_seqs: 16
     max_num_batched_tokens: 8192
     enable_chunked_prefill: true
@@ -108,6 +145,7 @@ available_models:
     description: "Tiny dispatch/classification model (GPU 0, multimodal, 262K ctx)"
     gpu_memory_utilization: 0.15  # ~0.8B params, very small footprint
     max_model_len: 4096  # Routing/classification prompts are short
+    context_window: 4096            # == max_model_len (input+output)
     max_num_seqs: 32  # High concurrency for dispatch traffic
     cpu_offload_gb: 0
     tool_calling: true
@@ -121,6 +159,7 @@ available_models:
     description: "Compact agent model (4B, multimodal, 262K ctx, vision+tools)"
     gpu_memory_utilization: 0.4
     max_model_len: 16384
+    context_window: 16384            # == max_model_len (input+output)
     max_num_seqs: 16
     cpu_offload_gb: 0
     tool_calling: true
@@ -209,6 +248,7 @@ available_models:
     provider: "mlx"
     model: "qwen3.5-0.8b"
     model_name: "mlx-community/Qwen3.5-0.8B-4bit"
+    context_window: 4096
     description: "Tiny multimodal model (0.8B, 262K ctx, vision+tools+thinking) — dispatch/classify"
     tool_calling: true
     tool_call_parser: "qwen3_coder"
@@ -220,6 +260,7 @@ available_models:
     provider: "mlx"
     model: "qwen3.5-4b"
     model_name: "mlx-community/Qwen3.5-4B-4bit"
+    context_window: 16384
     description: "Compact dev agent — 262K ctx, vision+tools. Default for entry tier (24GB MacBooks)."
     tool_calling: true
     tool_call_parser: "qwen3_coder"
@@ -231,6 +272,7 @@ available_models:
     provider: "mlx"
     model: "qwen3.6-35b-a3b"
     model_name: "unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit"
+    context_window: 32768
     description: "Qwen3.6 MoE 35B/A3B at MLX dynamic 4-bit (~23GB) — best 4-bit quality, fits 48GB+ Macs."
     tool_calling: true
     tool_call_parser: "qwen3_coder"
@@ -243,6 +285,7 @@ available_models:
     provider: "mlx"
     model: "qwen3.6-35b-a3b"
     model_name: "unsloth/Qwen3.6-35B-A3B-UD-MLX-8bit"
+    context_window: 32768
     description: "Qwen3.6 MoE 35B/A3B at MLX dynamic 8-bit (~38GB) — near-lossless. Default for Mac Studio / 96GB+."
     tool_calling: true
     tool_call_parser: "qwen3_coder"
@@ -412,22 +455,43 @@ default_purposes:
 # Production overrides: default_purposes points to MLX keys, but production
 # runs vLLM. Override LLM roles here so generate_model_config.py resolves to
 # vLLM provider models that appear in model_config.yml.
+# Reconciled 2026-09-11 against what production actually serves, read from
+# LiteLLM /model/info on 10.96.200.207. These are seed values: once a purpose
+# has been set from the admin UI it lives in LiteLLM's database, the UI wins,
+# and the dedup step on deploy keeps it. They matter for a fresh install, for
+# disaster recovery, and for any purpose the UI has never touched — which is
+# how `research` came to be the odd one out (see below).
 model_purposes:
+  # Deliberately NOT reconciled: production currently serves fast/test/classify
+  # from the 35B, but these run on every turn ahead of the user's answer and
+  # the 0.8B is what the purpose is for. Left as the intent; the UI's entry
+  # overrides it on the existing box either way.
   fast: "qwen3.5-0.8b-vllm"
   test: "fast"
   classify: "fast"
   default: "qwen3.6-35b-a3b-vllm-fp8"
   agent: "qwen3.6-35b-a3b-vllm-fp8"
-  chat: "qwen3.6-35b-a3b-vllm-fp8"
-  research: "qwen3.6-35b-a3b-vllm-fp8"
+  # Cloud from here down. Chat is the model users talk to; research backs the
+  # default_model for other agents. Both were still mapped to the local 35B
+  # here while production ran them on Bedrock — and research had no UI entry
+  # to protect it, so a deploy would have silently moved it back to local.
+  chat: "claude-sonnet-5"
+  research: "claude-sonnet-5"
+  frontier: "claude-opus-4-8"
+  fallback: "claude-sonnet-5-global"
   tool_calling: "agent"
   vision: "agent"
-  parsing: "chat"
-  cleanup: "chat"
-  fallback: "claude-haiku-4-5"
+  parsing: "agent"
+  # Local, matching the UI. Cleanup runs on every document ingested; on
+  # Bedrock that was both a per-document bill and a source of intermittent
+  # 400s while it was split across a local and a cloud deployment.
+  cleanup: "agent"
   reranking: "bge-reranker-v2-m3-cpu"
   image: "flux2-klein-4b-gpu"
   transcribe: "whisper-large-v3-gpu"
+  # Also deliberately NOT reconciled: production has `voice` pointed at the
+  # 35B text model, which cannot synthesise speech. Kept correct here so a
+  # deploy repairs it rather than enshrining the mistake.
   voice: "kokoro-82m-gpu"
 
 # =============================================================================

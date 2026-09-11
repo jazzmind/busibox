@@ -1135,11 +1135,62 @@ async def send_chat_message_stream_agentic(
                 .order_by(Message.created_at.asc())
             )
             history_messages = history_result.scalars().all()
-            history_dicts = [
-                {"role": msg.role, "content": msg.content}
-                for msg in history_messages
-            ]
-            
+
+            # Attachments live on the message they were sent with, so a
+            # follow-up like "what's the attached?" used to arrive with no
+            # attachment at all and the agent would deny a file existed.
+            # Annotate the history with the filenames each turn carried, and
+            # when this message has no files of its own, carry the most recent
+            # turn's files forward (flagged so the agent can decide whether
+            # the new message is actually about them).
+            prior_files_by_message: Dict[uuid.UUID, List[ChatAttachment]] = {}
+            prior_user_ids = [msg.id for msg in history_messages if msg.role == "user"]
+            if prior_user_ids:
+                prior_result = await session.execute(
+                    select(ChatAttachment).where(ChatAttachment.message_id.in_(prior_user_ids))
+                )
+                for prior in prior_result.scalars().all():
+                    prior_files_by_message.setdefault(prior.message_id, []).append(prior)
+
+            history_dicts = []
+            for msg in history_messages:
+                content_text = msg.content or ""
+                prior_files = prior_files_by_message.get(msg.id)
+                if prior_files:
+                    names = ", ".join(p.filename for p in prior_files)
+                    content_text = f"{content_text}\n[Attached: {names}]".strip()
+                entry: Dict[str, Any] = {"role": msg.role, "content": content_text}
+                # Expose the routing action of earlier assistant turns so the
+                # clarify-loop guard can see that a question was already asked,
+                # and the question a deep-research offer is waiting on so
+                # "yes" on the next turn resumes it.
+                if msg.role == "assistant" and isinstance(msg.routing_decision, dict):
+                    for t in msg.routing_decision.get("thoughts") or []:
+                        data = t.get("data") if isinstance(t, dict) else None
+                        if isinstance(data, dict) and data.get("phase") == "intent_routing":
+                            entry["action_type"] = data.get("action_type")
+                            if data.get("pending_research"):
+                                entry["pending_research"] = data["pending_research"]
+                            break
+                history_dicts.append(entry)
+
+            if not attachment_metadata and prior_files_by_message:
+                for msg in reversed(history_messages):
+                    prior_files = prior_files_by_message.get(msg.id)
+                    if not prior_files:
+                        continue
+                    for prior in prior_files:
+                        attachment_metadata.append({
+                            "id": str(prior.id),
+                            "file_id": _extract_file_id_from_url(prior.file_url),
+                            "filename": prior.filename,
+                            "mime_type": prior.mime_type,
+                            "file_url": prior.file_url,
+                            "parsed_content": prior.parsed_content,
+                            "carried_forward": True,
+                        })
+                    break
+
             # Determine available agents
             # Default to chat agent only - it's the versatile general-purpose agent
             # that can use tools (web search, documents, etc.) when needed
@@ -1147,7 +1198,7 @@ async def send_chat_message_stream_agentic(
                 available_agents = payload.selected_agents
             else:
                 available_agents = ["chat"]
-            
+
             # Collect content for storing
             full_content = []
             # Fast-ack text is excluded from full_content (on tool-path turns it
@@ -1161,7 +1212,7 @@ async def send_chat_message_stream_agentic(
             # Citations gathered from document_search tool results, keyed by file_id.
             # Stored as a dict to deduplicate (keep highest score, earliest page).
             citations_by_file: Dict[str, Any] = {}
-            
+
             # Run agentic dispatcher
             dispatcher_metadata: Dict[str, Any] = dict(payload.metadata or {})
             dispatcher_metadata["conversation_id"] = str(conversation.id)
@@ -1207,6 +1258,8 @@ async def send_chat_message_stream_agentic(
                                 "confidence": event.data.get("confidence"),
                                 "routing_source": event.data.get("routing_source"),
                                 "follow_up_question": event.data.get("follow_up_question"),
+                                "preferred_tool": event.data.get("preferred_tool"),
+                                "pending_research": event.data.get("pending_research"),
                             }
                         elif phase:
                             # Preserve phase for all other thought types (e.g. model_reasoning)
@@ -1265,8 +1318,10 @@ async def send_chat_message_stream_agentic(
             if thoughts or available_agents:
                 routing_payload["thoughts"] = thoughts
                 routing_payload["selected_agents"] = available_agents
-            if collected_citations:
-                routing_payload["citations"] = collected_citations
+            # Always present, even when empty: a missing key reads as "not
+            # collected yet" and left the UI showing "Sources pending" forever
+            # on answers that had no document sources.
+            routing_payload["citations"] = collected_citations
 
             assistant_message = Message(
                 conversation_id=conversation.id,
@@ -1372,9 +1427,10 @@ async def send_chat_message_stream_agentic(
             completion_data = {
                 'message_id': str(assistant_message.id),
                 'conversation_id': str(conversation.id),
+                'citations': collected_citations,
             }
             yield f"event: message_complete\ndata: {json.dumps(completion_data)}\n\n"
-            
+
             logger.info(
                 "Agentic chat request complete",
                 extra={

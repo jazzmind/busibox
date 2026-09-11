@@ -91,6 +91,80 @@ class Settings(BaseSettings):
         description="Path to routes.yaml (defaults to <service root>/config/routes.yaml)",
     )
 
+    # Model aliases that route to cloud providers (Bedrock/OpenAI) via LiteLLM.
+    # Local-only params (vLLM/MLX extra_body like chat_template_kwargs) must not
+    # be sent to these — cloud providers reject unknown params with a 400.
+    # Keep in sync with model purpose mappings when re-pointing aliases.
+    cloud_routed_aliases: str = Field(
+        "agent,default,chat,research,frontier,frontier-fast,fallback",
+        description="Comma-separated model aliases served by cloud providers; vLLM/MLX-only request params are suppressed for these",
+    )
+
+    # Attachment context budget. Resolved per turn from the model that will
+    # actually synthesize the answer: a 1M-window cloud model can read a whole
+    # document where a local 4B model needs retrieved chunks.
+    #
+    # Deliberately empty here. The alias -> model binding lives in
+    # model_registry.yml and differs per backend — "chat" is a 16k MLX model in
+    # dev and a 65k vLLM model in production — so any value hardcoded in the
+    # service would be wrong somewhere. Ansible renders the real map into the
+    # env from the registry (roles/agent_api/templates/agent-api.env.j2).
+    # Unset means every alias falls back to `default_context_window_tokens`,
+    # which is the conservative pre-existing behaviour.
+    model_context_windows: str = Field(
+        "",
+        description="Fallback alias:token-window pairs used only when LiteLLM has not resolved the purpose",
+    )
+    model_capabilities_ttl_seconds: int = Field(
+        600,
+        description="How long the LiteLLM purpose->model resolution is cached before re-reading /model/info",
+    )
+    cloud_context_window_cap: int = Field(
+        800000,
+        description="Ceiling on a cloud model's usable window (0 disables). Local models use what they serve.",
+    )
+    default_context_window_tokens: int = Field(
+        12000,
+        description="Context window assumed for model aliases absent from MODEL_CONTEXT_WINDOWS",
+    )
+    attachment_inline_max_tokens: int = Field(
+        24000,
+        description="Ceiling on pre-parsed attachment text injected verbatim (no file_id, parsed_content only)",
+    )
+
+    # Grounding policy (synthesis): tier selection thresholds
+    grounding_strong_doc_score: float = Field(
+        0.65,
+        description="document_search score at/above which the answer is grounded in documents only (tier 'documents')",
+    )
+    grounding_stale_after_months: int = Field(
+        12,
+        description="Documents older than this are flagged as possibly outdated in the synthesis prompt",
+    )
+
+    # Clarify review: the fast-ack classifier (0.8B) decides whether a query is
+    # ambiguous, but it sees only the query text. When it says "clarify" the
+    # decision is re-checked by a larger model before the user is asked
+    # anything. Set to "" to disable the second opinion.
+    clarify_review_model: str = Field(
+        "tool_calling",
+        description="Model alias used to confirm or overturn a 'clarify' routing decision (empty disables)",
+    )
+    clarify_review_timeout_seconds: float = Field(
+        6.0,
+        description="Max seconds to wait for the clarify review before keeping the original decision",
+    )
+
+    # Chat turn budget (escalation guards)
+    chat_max_tool_steps: int = Field(
+        6,
+        description="Maximum planned tool steps executed per chat turn (deep_research is never dropped)",
+    )
+    chat_turn_budget_seconds: int = Field(
+        120,
+        description="After this many seconds in a turn, remaining slow tool steps are skipped (deep_research exempt)",
+    )
+
     # Milvus configuration (for insights)
     milvus_host: str = Field(
         "milvus",
@@ -147,6 +221,21 @@ class Settings(BaseSettings):
     search_duckduckgo_enabled: bool = Field(True, description="Enable DuckDuckGo search (free)")
     search_tavily_enabled: bool = Field(False, description="Enable Tavily search")
     tavily_api_key: Optional[str] = Field(None, description="Tavily API key")
+    tavily_research_timeout_seconds: int = Field(
+        240,
+        description="Max seconds to wait for a Tavily deep_research task before returning what is available",
+    )
+    tavily_research_default_model: str = Field(
+        "auto",
+        description="Tavily research agent model: mini (narrow questions), pro (multi-topic), auto",
+    )
+    deep_research_confirm: bool = Field(
+        True,
+        description=(
+            "Ask the user (Yes/No) before running a multi-minute deep_research pass. "
+            "False announces the expected wait and runs immediately."
+        ),
+    )
     search_perplexity_enabled: bool = Field(False, description="Enable Perplexity search")
     perplexity_api_key: Optional[str] = Field(None, description="Perplexity API key")
     search_brave_enabled: bool = Field(False, description="Enable Brave search")
@@ -227,6 +316,27 @@ class Settings(BaseSettings):
         False,
         description="Enable ClawHub integration hints for loaded skills",
     )
+
+    def get_model_context_window(self, alias: Optional[str]) -> int:
+        """Context window in tokens for a model alias.
+
+        Unknown or unparseable aliases fall back to
+        ``default_context_window_tokens`` so a misconfigured map can only make
+        the budget smaller, never wrongly large.
+        """
+        wanted = (alias or "").strip().lower()
+        if not wanted:
+            return self.default_context_window_tokens
+        for pair in (self.model_context_windows or "").split(","):
+            name, _, size = pair.partition(":")
+            if name.strip().lower() != wanted:
+                continue
+            try:
+                window = int(size.strip())
+            except ValueError:
+                return self.default_context_window_tokens
+            return window if window > 0 else self.default_context_window_tokens
+        return self.default_context_window_tokens
 
     def get_skill_dirs(self) -> List[str]:
         raw = self.skills_dirs or ""

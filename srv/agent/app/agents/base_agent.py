@@ -319,6 +319,9 @@ TOOL_SCOPES: Dict[str, List[str]] = {
     "document_search": ["search.read"],
     "web_search": [],  # No auth needed
     "web_scraper": [],  # No auth needed
+    "web_extract": [],  # No auth needed
+    "web_map": [],  # No auth needed
+    "deep_research": [],  # No auth needed
     "playwright_browser": [],  # No auth needed
     "data_document": ["data.write"],
     "list_data_documents": ["data.read"],
@@ -372,6 +375,9 @@ TOOL_CLASSES: Dict[str, Dict[str, Any]] = {
     "rag_query": {"class": "fast", "timeout": 15},
     "web_search": {"class": "slow", "timeout": 30},
     "web_scraper": {"class": "slow", "timeout": 180},
+    "web_extract": {"class": "slow", "timeout": 90},
+    "web_map": {"class": "slow", "timeout": 160},
+    "deep_research": {"class": "slow", "timeout": 300},
     "playwright_browser": {"class": "slow", "timeout": 120},
     "generate_image": {"class": "slow", "timeout": 120},
     "transcribe_audio": {"class": "slow", "timeout": 60},
@@ -520,6 +526,11 @@ def _register_builtin_tools():
     from app.tools.document_search_tool import search_documents, DocumentSearchOutput
     from app.tools.web_search_tool import search_web, WebSearchOutput
     from app.tools.web_scraper_tool import scrape_webpage, WebScraperOutput
+    from app.tools.tavily_tools import (
+        web_extract, WebExtractOutput,
+        web_map, WebMapOutput,
+        deep_research, DeepResearchOutput,
+    )
     from app.tools.weather_tool import get_weather, WeatherOutput
     from app.tools.image_tool import generate_image, ImageOutput
     from app.tools.transcription_tool import transcribe_audio, TranscriptionOutput
@@ -535,6 +546,9 @@ def _register_builtin_tools():
     ToolRegistry.register("document_search", search_documents, DocumentSearchOutput)
     ToolRegistry.register("web_search", search_web, WebSearchOutput)
     ToolRegistry.register("web_scraper", scrape_webpage, WebScraperOutput)
+    ToolRegistry.register("web_extract", web_extract, WebExtractOutput)
+    ToolRegistry.register("web_map", web_map, WebMapOutput)
+    ToolRegistry.register("deep_research", deep_research, DeepResearchOutput)
     
     try:
         from app.tools.playwright_tool import browse_webpage as playwright_browse, PlaywrightBrowserOutput
@@ -666,6 +680,10 @@ class AgentContext:
     # _build_user_content skips malformed entries from unvalidated paths.
     # Each item: {"media_type": "image/jpeg", "data": "<base64>"}
     images: List[Dict[str, str]] = field(default_factory=list)
+    # Grounding assessment computed before synthesis (services/grounding.py)
+    grounding: Optional[Dict[str, Any]] = None
+    # time.monotonic() when the turn started; read by the turn time budget
+    turn_started: float = 0.0
     # Deduplication cache for tool calls: maps (tool_name, args_json) -> result
     _tool_call_dedup: Dict[str, Any] = field(default_factory=dict)
 
@@ -705,12 +723,44 @@ class BaseStreamingAgent(StreamingAgent):
             model_settings["max_tokens"] = config.max_tokens
         self._inject_thinking_settings(model_settings)
         
-        # Create synthesis agent
+        # Create synthesis agent.
+        # The synthesizer has NO tool executor, but it inherits the agent's
+        # general instructions ("use tools proactively") when no dedicated
+        # synthesis prompt is configured — so models "call" tools in text
+        # (<tool_code> print(web_search(...))) when results feel thin.
+        # Always append the synthesis guard so the final answer never
+        # contains tool-call syntax.
+        _synth_base = config.synthesis_prompt or config.instructions or ""
         self.synthesis_agent = Agent(
             model=self.synthesis_model,
-            system_prompt=config.synthesis_prompt or config.instructions,
+            system_prompt=f"{_synth_base}\n\n{self._SYNTHESIS_GUARD}".strip(),
             model_settings=model_settings if model_settings else None,
         )
+
+    # Appended to every synthesis system prompt (see __init__).
+    _SYNTHESIS_GUARD = (
+        "## Final-answer rules (synthesis stage)\n"
+        "You are writing the final answer from the tool results already gathered "
+        "above. You have NO tools available in this step and cannot run searches. "
+        "Never write tool calls, function calls, code blocks, or tags such as "
+        "<tool_code>, <tool_call>, print(web_search(...)) or similar — they will "
+        "be shown to the user verbatim as broken output. If the gathered results "
+        "are insufficient, say plainly what could not be found (and, if a tool "
+        "reported an error, say that the search was unavailable), then answer as "
+        "best you can from the available context and general knowledge, clearly "
+        "labelling anything that is not from the provided sources."
+    )
+
+    # Detects tool-call syntax leaking into synthesized text.
+    _TOOL_SYNTAX_RE = re.compile(
+        r"<tool_code>|<tool_call>|<function_call>|<\|tool_call\|>"
+        r"|\bprint\(\s*[a-z_]+\("
+        r"|\b(?:web_search|document_search|query_data|get_weather|memory_search)"
+        r"\(\s*(?:query|queries|q)\s*=",
+        re.IGNORECASE,
+    )
+    # Characters held back from streaming so a leak can be caught before emit.
+    _SYNTHESIS_HOLDBACK = 48
     
     _THINKING_DISABLED_MODELS = {"fast", "test", "chat"}
     _FRONTIER_MODEL_PREFIXES = {"frontier", "claude", "gpt", "o1", "o3", "gemini"}
@@ -725,6 +775,7 @@ class BaseStreamingAgent(StreamingAgent):
 
     _FRONTIER_EFFORT_MAP: Dict[str, str] = {
         "default": "medium",
+        "agent": "medium",
         "chat": "medium",
         "complex": "high",
         "research": "high",
@@ -742,10 +793,42 @@ class BaseStreamingAgent(StreamingAgent):
             return True
         return False
 
+    @classmethod
+    def _routes_to_cloud(cls, model_name: str) -> bool:
+        """Whether *model_name* is served by a cloud provider (Bedrock/OpenAI).
+
+        Checks both the frontier prefixes and the settings-driven
+        ``cloud_routed_aliases`` list. Aliases like ``chat`` can be re-pointed
+        from local vLLM to Bedrock at runtime (LiteLLM model purposes), and
+        cloud providers reject vLLM-only params (e.g. ``chat_template_kwargs``
+        in ``extra_body``) with a 400 — so anything listed there must never
+        receive local-backend request params.
+        """
+        name = (model_name or "").lower()
+
+        # LiteLLM knows what this alias currently resolves to, including any
+        # re-pointing done from the admin UI since deploy. Settings are the
+        # fallback for a cold cache or an unreachable proxy.
+        try:
+            from app.services import model_capabilities
+            resolved = model_capabilities.routes_to_cloud(name)
+        except Exception:  # noqa: BLE001
+            resolved = None
+        if resolved is not None:
+            return resolved
+
+        aliases = {
+            a.strip().lower()
+            for a in get_settings().cloud_routed_aliases.split(",")
+            if a.strip()
+        }
+        return name in aliases or any(
+            name.startswith(p) for p in cls._FRONTIER_MODEL_PREFIXES
+        )
+
     def _is_frontier_model(self) -> bool:
         """Whether the model routes to a frontier API (Claude, OpenAI, etc.)."""
-        model_name = (self.config.model or "").lower()
-        return any(model_name.startswith(p) for p in self._FRONTIER_MODEL_PREFIXES)
+        return self._routes_to_cloud(self.config.model or "")
 
     def _inject_thinking_settings(self, model_settings: Dict[str, Any]) -> None:
         """Mutate *model_settings* to control thinking across all backends.
@@ -760,9 +843,16 @@ class BaseStreamingAgent(StreamingAgent):
         model_name = (self.config.model or "").lower()
 
         if self._is_frontier_model():
+            # LiteLLM maps reasoning_effort to the provider's native parameter
+            # (Anthropic extended thinking / OpenAI reasoning effort). Do not
+            # send Qwen/MLX-only knobs (max_thinking_tokens, chat_template_kwargs).
+            effort = self._FRONTIER_EFFORT_MAP.get(
+                model_name, self._DEFAULT_FRONTIER_EFFORT
+            )
+            model_settings["reasoning_effort"] = effort
             logger.info(
-                "Thinking settings [frontier]: model=%s — no thinking limits applied",
-                model_name,
+                "Thinking settings [frontier]: model=%s reasoning_effort=%s",
+                model_name, effort,
             )
             return
 
@@ -1271,6 +1361,28 @@ class BaseStreamingAgent(StreamingAgent):
                     self.name, server_config.name, e,
                 )
 
+    def _synthesis_context_window(self) -> Optional[int]:
+        """Context window of the model that will write this turn's answer.
+
+        Read at resolution time, not construction time: a complex request may
+        already have upgraded ``synthesis_model`` to the frontier alias, and
+        the attachment budget should follow that upgrade rather than the
+        agent's configured default.
+        """
+        alias = getattr(self.synthesis_model, "model_name", None) or self.config.model
+        try:
+            from app.services import model_capabilities
+            window = model_capabilities.context_window(alias)
+            if window:
+                return window
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("model_capabilities lookup failed for %s: %s", alias, exc)
+        try:
+            return get_settings().get_model_context_window(alias)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not resolve context window for %s: %s", alias, exc)
+            return None
+
     async def _resolve_attachments(
         self,
         query: str,
@@ -1302,6 +1414,7 @@ class BaseStreamingAgent(StreamingAgent):
                 session=agent_context.session,
                 stream=stream,
                 context_token_estimate=context_token_estimate,
+                context_window_tokens=self._synthesis_context_window(),
             )
         except Exception as exc:
             logger.warning("Attachment resolution failed entirely: %s", exc, exc_info=True)
@@ -1323,7 +1436,23 @@ class BaseStreamingAgent(StreamingAgent):
         for idx, attachment in enumerate(context.resolved_attachments, start=1):
             filename = attachment.get("filename", f"attachment-{idx}")
             source_kind = attachment.get("source_kind", "document")
-            parts.append(f"\n### Attachment {idx}: {filename} ({source_kind})")
+            origin = " — sent earlier in this conversation" if attachment.get("carried_forward") else ""
+            parts.append(f"\n### Attachment {idx}: {filename} ({source_kind}){origin}")
+
+            if source_kind == "no_text":
+                is_pdf = (
+                    str(attachment.get("mime_type", "")).lower() == "application/pdf"
+                    or filename.lower().endswith(".pdf")
+                )
+                parts.append(
+                    "No text could be extracted from this "
+                    + ("PDF. It is most likely a scanned or image-only document; OCR runs as a "
+                       "later processing pass and may still be in progress. "
+                       if is_pdf else "file. ")
+                    + "Tell the user this plainly, do not guess at the contents, and suggest "
+                    "asking again in a few minutes or uploading a text-based copy."
+                )
+                continue
 
             if source_kind == "image":
                 image_url = attachment.get("image_url")
@@ -2348,7 +2477,9 @@ class BaseStreamingAgent(StreamingAgent):
             },
         }
         _so_backend = get_settings().llm_backend.lower()
-        if _so_backend in ("mlx", "vllm"):
+        if _so_backend in ("mlx", "vllm") and not self._routes_to_cloud(model_name):
+            # chat_template_kwargs is a vLLM/MLX-only param; cloud providers
+            # (Bedrock/OpenAI) reject it with 400 "Extra inputs are not permitted".
             kwargs["extra_body"] = {
                 "chat_template_kwargs": {"enable_thinking": False},
             }
@@ -2449,6 +2580,15 @@ class BaseStreamingAgent(StreamingAgent):
         parts.append(f"## Current Date and Time")
         parts.append(f"Today is {now.strftime('%A, %B %d, %Y, %H:%M UTC')}.")
         parts.append("When the user refers to a month or time period without specifying a year, assume the current year unless context clearly indicates otherwise.")
+
+        # The model calls tools itself on this path, so the tier cannot be
+        # known up front; give it the policy in static form.
+        try:
+            from app.services.grounding import STATIC_GROUNDING_RULES
+            parts.append("")
+            parts.append(STATIC_GROUNDING_RULES)
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"grounding rules skipped: {e}")
 
         try:
             skills_prompt = get_skills_service().render_skills_prompt(context.principal)
@@ -2758,7 +2898,19 @@ class BaseStreamingAgent(StreamingAgent):
         # Build synthesis context
         SYNTHESIS_TIMEOUT_SECONDS = 90
         synthesis_context = self._build_synthesis_context(query, context)
-        
+
+        if context.grounding:
+            await stream(thought(
+                source=self.name,
+                message=(
+                    f"Grounding: {context.grounding.get('tier')} "
+                    f"(docs={context.grounding.get('doc_hits')}, "
+                    f"max_score={float(context.grounding.get('doc_max_score') or 0):.2f}, "
+                    f"web={context.grounding.get('web_hits')})"
+                ),
+                data={"phase": "grounding", **context.grounding},
+            ))
+
         await stream(progress(
             source=self.name,
             message="Generating response...",
@@ -2770,18 +2922,65 @@ class BaseStreamingAgent(StreamingAgent):
         ))
         
         try:
+            async def _emit(text: str) -> None:
+                if text:
+                    await stream(content(
+                        source=self.name,
+                        message=text,
+                        data={"streaming": True, "partial": True}
+                    ))
+
             async def _run_synthesis():
+                """Stream the synthesized answer with a tool-syntax leak guard.
+
+                Text is emitted with a small hold-back window so that a tool
+                call written as text (finding #8) is caught before it reaches
+                the user. On detection the stream is cut at the leak, and a
+                second, non-streaming pass with a stricter instruction produces
+                the replacement tail.
+                """
                 full_output = ""
+                emitted = 0
+                leaked = False
                 async with self.synthesis_agent.run_stream(synthesis_context) as result:
                     async for chunk in result.stream_text(delta=True):
                         if cancel.is_set():
                             break
                         full_output += chunk
-                        await stream(content(
-                            source=self.name,
-                            message=chunk,
-                            data={"streaming": True, "partial": True}
-                        ))
+                        m = self._TOOL_SYNTAX_RE.search(full_output, max(0, emitted - 16))
+                        if m:
+                            leaked = True
+                            full_output = full_output[:m.start()].rstrip()
+                            break
+                        safe_upto = len(full_output) - self._SYNTHESIS_HOLDBACK
+                        if safe_upto > emitted:
+                            await _emit(full_output[emitted:safe_upto])
+                            emitted = safe_upto
+
+                if leaked:
+                    logger.warning(
+                        f"{self.name} synthesis emitted tool-call syntax; regenerating tail",
+                        extra={"leaked_preview": full_output[-200:]},
+                    )
+                    retry_prompt = (
+                        f"{synthesis_context}\n\n"
+                        "IMPORTANT: You cannot run tools now. Do NOT write any tool call, "
+                        "function call, code block or tag. Write the final answer directly "
+                        "from the results above; if something could not be found, say so "
+                        "in one sentence and give your best answer from available context."
+                    )
+                    retry = await self.synthesis_agent.run(retry_prompt)
+                    retry_text = getattr(retry, "output", None) or getattr(retry, "data", None) or ""
+                    tail = self._TOOL_SYNTAX_RE.split(str(retry_text))[0].strip()
+                    if not tail:
+                        tail = (
+                            "I wasn't able to gather additional information for this "
+                            "request, so I can't give a complete answer here."
+                        )
+                    full_output = (full_output + ("\n\n" if full_output else "") + tail)
+
+                # Flush whatever is still held back (or the regenerated tail).
+                await _emit(full_output[emitted:])
                 return full_output
 
             full_output = await asyncio.wait_for(
@@ -2945,6 +3144,23 @@ class BaseStreamingAgent(StreamingAgent):
                             parts.append(f"\n{i}. {item.model_dump()}")
                         else:
                             parts.append(f"\n{i}. {item}")
+                elif hasattr(result, 'report'):
+                    # deep_research: cited markdown report plus its source list
+                    report = str(getattr(result, "report", "") or "")
+                    if report.strip():
+                        parts.append(f"\n### {tool_name} (cited research report)\n{report[:12000]}")
+                        sources = getattr(result, "sources", None) or []
+                        if sources:
+                            parts.append("\nSources used by the report:")
+                            for src in sources[:25]:
+                                title = getattr(src, "title", "") or ""
+                                url = getattr(src, "url", "") or ""
+                                parts.append(f"- {title} {url}".strip())
+                    else:
+                        parts.append(
+                            f"\n### {tool_name}\nNo report was produced "
+                            f"({getattr(result, 'status', 'unknown')}: {getattr(result, 'error', '') or 'no details'})."
+                        )
                 elif hasattr(result, 'content'):
                     # Web scraper style result
                     parts.append(f"\n### {tool_name}\n{result.content[:2000]}")
@@ -2953,7 +3169,25 @@ class BaseStreamingAgent(StreamingAgent):
                     parts.append(f"\n### {tool_name}\n{result}")
             parts.append("")
         
-        parts.append("Please answer the user's question based on all available context. Be conversational and reference relevant context when appropriate. If any tool results above are not relevant to the user's query, ignore them completely.")
+        # 7. Tiered grounding policy chosen from the evidence above.
+        try:
+            from app.services.grounding import assess_grounding, grounding_prompt_section
+            _settings = get_settings()
+            assessment = assess_grounding(
+                query,
+                context.tool_results,
+                context.resolved_attachments,
+                strong_doc_score=_settings.grounding_strong_doc_score,
+            )
+            context.grounding = assessment.as_dict()
+            parts.append(grounding_prompt_section(
+                assessment, today=_now.date(), stale_after_months=_settings.grounding_stale_after_months,
+            ))
+            parts.append("")
+        except Exception as e:  # noqa: BLE001 — policy must never break synthesis
+            logger.warning(f"grounding assessment skipped: {e}")
+
+        parts.append("Answer the user's question following the grounding policy above. Be conversational and reference relevant context when appropriate. If any tool results above are not relevant to the user's query, ignore them completely.")
         return "\n".join(parts)
     
     def _build_fallback_response(self, query: str, context: AgentContext) -> str:

@@ -61,6 +61,19 @@ def glossary_prompt_section() -> str:
     return "\n".join(lines)
 
 
+def mentioned_terms(text: str) -> list:
+    """Glossary terms that appear in *text* as whole words (case-insensitive)."""
+    terms = _load()
+    if not terms or not text:
+        return []
+    import re as _re
+    found = []
+    for term in terms:
+        if _re.search(r"(?<![\w-])" + _re.escape(term) + r"(?![\w-])", text, _re.IGNORECASE):
+            found.append(term)
+    return found
+
+
 def reload_glossary() -> int:
     """Re-read the YAML (for a future admin reload endpoint)."""
     global _terms

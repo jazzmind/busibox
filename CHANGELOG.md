@@ -26,6 +26,142 @@ changes — see release notes per version.
   `SEMANTIC_ROUTER_MODE` (`shadow`/`live`), `SEMANTIC_ROUTER_THRESHOLD`,
   `SEMANTIC_ROUTER_CONFIG_PATH`. See
   `docs/developers/guides/semantic-router.md`.
+- **Tavily deep research, extract and map tools for chat.** `web_search` now
+  calls Tavily with `search_depth=advanced` and three snippets per source,
+  and accepts `topic` (news/finance), `time_range` and `include_domains`.
+  New chat tools: `web_extract` (clean markdown for given URLs, scraper
+  fallback without a key), `web_map` (site URL discovery) and
+  `deep_research` (Tavily Research: multi-search cited report, polled up to
+  `TAVILY_RESEARCH_TIMEOUT_SECONDS`). The planner is told to reserve
+  `deep_research` for explicit report/deep-dive requests. A `deep_research`
+  semantic-router route (plus a regex fallback guard) detects "write a
+  report / deep dive / market analysis" phrasing, replies immediately that
+  a multi-source research pass will take a few minutes, forces the
+  `deep_research` step in the plan, and posts a progress note when the
+  step starts; without a Tavily key it downgrades to a normal web search.
+- **Tiered grounding policy for synthesis** (`app/services/grounding.py`).
+  The synthesis prompt now carries a tier chosen from the evidence —
+  attachment, documents, web, estimate, knowledge — plus absence, recency
+  (document age), conflict and tool-failure rules, so answers say where
+  they come from and never refuse a figure outright. `document_search`
+  hits carry `document_date` when the search API provides one. Settings:
+  `GROUNDING_STRONG_DOC_SCORE`, `GROUNDING_STALE_AFTER_MONTHS`.
+- **Clarify decisions get a second opinion from a larger model.** The 0.8B
+  fast-ack classifier judges ambiguity from the query text alone, so a
+  well-formed question it cannot answer itself ("who should I ask about IT
+  questions?") looked identical to a genuinely ambiguous one. Any `clarify`
+  from the classifier is now re-read by `CLARIFY_REVIEW_MODEL` (default
+  `tool_calling` — the local 35B, no marginal cost, `CLARIFY_REVIEW_TIMEOUT_SECONDS`
+  6 s) which either overturns it to a search or upholds it with a more
+  specific question. Any failure leaves the original decision untouched. The
+  factual guard now also covers `clarify`, not just `direct`, as a backstop
+  when the review is unavailable.
+- **The attachment context budget follows the synthesis model.**
+  `AttachmentResolver` assumed a 12,000-token window for every turn, so a
+  document that Claude Sonnet (200k) could have read whole was cut down to
+  RAG chunks — and on a "summarize this" objective the chunk ranker has
+  nothing meaningful to match against, so the answer came from a fraction of
+  the file. The window is now resolved per turn from the alias that will
+  actually write the answer, after any frontier upgrade. Attachments carrying
+  pre-parsed text with no `file_id` were injected verbatim at any size and are
+  now capped too. Settings: `MODEL_CONTEXT_WINDOWS`,
+  `DEFAULT_CONTEXT_WINDOW_TOKENS`, `ATTACHMENT_INLINE_MAX_TOKENS`. Unknown
+  aliases and malformed maps fall back to the old 12,000, so a
+  misconfiguration can only shrink the budget, never overrun the model.
+  `MODEL_CONTEXT_WINDOWS` is **derived from `model_registry.yml`**, not
+  hardcoded: a purpose means different windows on different backends — `chat`
+  is a 16k MLX model in dev and a 65k vLLM model (`max_model_len: 65536`) in
+  production — so `available_models` entries now carry `context_window`
+  (mirroring `max_model_len` where vLLM already pins it) and
+  `roles/agent_api/templates/agent-api.env.j2` resolves each purpose through
+  the registry, following purpose→purpose aliases. Local models use their
+  served window as-is; cloud models are capped by
+  `agent_cloud_context_window_cap` (800,000), since Sonnet 4.6 accepts 1M
+  tokens but Bedrock bills per input token. The service itself ships an empty
+  map, so a non-Ansible deployment keeps the conservative 12,000.
+  The Ansible-rendered map is now only a fallback (see below).
+- **Model purposes are resolved from LiteLLM at runtime**
+  (`app/services/model_capabilities.py`). The admin UI re-points purposes
+  through `POST /llm/purposes` → LiteLLM `/model/new`, which writes to
+  LiteLLM's database and never back to git, so `model_registry.yml` is a
+  bootstrap mapping and anything derived from it is stale as soon as a mapping
+  changes. Production showed the drift plainly: the registry maps `chat` and
+  `research` to a local Qwen 35B, while LiteLLM serves them from
+  `bedrock/claude-sonnet-4-5` and `bedrock/claude-sonnet-5`. The agent now
+  reads `/model/info` on startup (TTL-refreshed,
+  `MODEL_CAPABILITIES_TTL_SECONDS`) and resolves both the provider and the
+  context window from it, falling back to `CLOUD_ROUTED_ALIASES` /
+  `MODEL_CONTEXT_WINDOWS` when the cache is cold or LiteLLM is unreachable.
+  Cloud windows are clamped by `CLOUD_CONTEXT_WINDOW_CAP` (800,000); local
+  models use what they serve. Note that provider cannot be read from the model
+  prefix alone — LiteLLM drives local vLLM and MLX with its OpenAI-compatible
+  client, so every local model is named `openai/...` and only a private
+  `api_base` distinguishes it from the real thing.
+- **Deep research asks before it runs.** When a request is routed to
+  `deep_research`, the turn now stops at an offer — "…it usually takes a few
+  minutes. Would you like me to run it?" — rendered with Yes/No buttons. "Yes"
+  on the next turn resumes the *original* question (carried as
+  `pending_research` on the persisted routing decision, with a text-match
+  fallback) straight into a forced `deep_research` plan; "no" closes
+  politely; anything else is routed normally. `DEEP_RESEARCH_CONFIRM=false`
+  restores announce-and-run.
+- **Expanded `config/routes.yaml`.** New routes `who_to_contact`,
+  `company_news` and `industry_research`; `hr_policy`, `document_lookup` and
+  `company_info` gained utterances mined from real production queries.
+  `industry_research` deliberately sits between the two so a plain market
+  question cannot be captured by `deep_research` and spend credits.
+- **Anti-loop and escalation guards** (`app/services/routing_guards.py`):
+  a second clarifying question in a row is replaced by a search; "yes"/"no"
+  after an offer becomes the offer (or a polite close) instead of a fresh
+  classification; a no-tools answer to a company-fact question (policy,
+  rates, holidays, glossary terms) is forced through retrieval; failed
+  document/web searches are retried once; a generic fallback plan on a
+  complex request escalates to model-driven tool use; per-turn caps
+  `CHAT_MAX_TOOL_STEPS` (6) and `CHAT_TURN_BUDGET_SECONDS` (120,
+  `deep_research` exempt). Earlier assistant turns in the history now
+  carry their routing `action_type`, and every guard emits a `Guard: ...`
+  thought.
+
+### Fixed
+
+- **Chat attachments** (September 9 production incident): a message that
+  carries a file now always goes to the deep pass (`routing_source =
+  attachment_rule`) instead of asking the 0.8B classifier, which had
+  answered the last line of its own prompt ("What are the missing profile
+  fields you need me to gather?"); profile follow-ups and missing-field
+  hints were removed from the classifier prompt and any classifier output
+  that echoes prompt scaffolding is discarded; a file sent without a
+  question gets a default "summarize the attached document" objective;
+  attachments from the previous turn are carried forward and history is
+  annotated with `[Attached: ...]`, so "what's the attached?" resolves to
+  the file sent last turn; the attachment-only fallback plan no longer runs
+  an unrelated web search; a processed PDF with no extractable text
+  (scanned) is described as such instead of a bare `[Attachment]`
+  placeholder the model could invent contents for.
+- **`citations` is always present in `routing_decision`** (empty list when
+  no document sources), and is included in the `message_complete` event, so
+  the chat UI no longer shows "Sources pending" indefinitely.
+- **Agent-api JSON logs keep `extra={...}` fields.** `structlog.stdlib.ExtraAdder`
+  was missing from the formatter's `foreign_pre_chain`, so routing and
+  planner diagnostics (`action_type`, `needs_tools`, timings) were dropped
+  before reaching journald.
+- **Chat agent pipeline fixes** (September production review):
+  the planner now accepts loosely-typed model output instead of
+  discarding every plan (multi-step plans and web search run again);
+  synthesized answers can no longer contain tool-call syntax; vLLM-only
+  request parameters are suppressed for cloud-routed model aliases (new
+  setting `CLOUD_ROUTED_ALIASES`, default
+  `agent,default,chat,research,frontier,frontier-fast,fallback`); cloud
+  aliases also receive LiteLLM `reasoning_effort` (`medium` for agent/
+  default/chat, `high` for research/frontier); replying "yes" to an
+  offer no longer crashes the clarify path.
+- **Chat fast-path fixes** from the August production review:
+  short conversational turns ("hi", "yes") no longer persist
+  "No response generated."; the fast classifier no longer streams
+  speculative answers as acknowledgments when tools are about to run;
+  few-shot examples added to the intent classifier so policy questions
+  reach document retrieval. Full findings with evidence in
+  `docs/developers/chat-qa-findings-2026-08.md`.
 
 ## [0.1.0] — 2026-05-04
 
@@ -120,21 +256,3 @@ listed here so the first public changelog gives a complete picture.
 
 [Unreleased]: https://github.com/jazzmind/busibox/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/jazzmind/busibox/releases/tag/v0.1.0
-
-### Fixed
-
-- **Chat agent pipeline fixes** (September production review):
-  the planner now accepts loosely-typed model output instead of
-  discarding every plan (multi-step plans and web search run again);
-  synthesized answers can no longer contain tool-call syntax; vLLM-only
-  request parameters are suppressed for cloud-routed model aliases (new
-  setting `CLOUD_ROUTED_ALIASES`, default
-  `chat,research,frontier,frontier-fast,fallback`); replying "yes" to an
-  offer no longer crashes the clarify path.
-- **Chat fast-path fixes** from the August production review:
-  short conversational turns ("hi", "yes") no longer persist
-  "No response generated."; the fast classifier no longer streams
-  speculative answers as acknowledgments when tools are about to run;
-  few-shot examples added to the intent classifier so policy questions
-  reach document retrieval. Full findings with evidence in
-  `docs/developers/chat-qa-findings-2026-08.md`.
