@@ -309,6 +309,18 @@ class ChatAgent(BaseStreamingAgent):
             display_name="Chat Agent",
             instructions=CHAT_SYSTEM_PROMPT,
             model="chat",
+            # Must be set explicitly. `chat` resolves to an Anthropic model on
+            # Bedrock, whose API *requires* max_tokens — omitting it does not
+            # mean "unlimited", it means LiteLLM supplies a small default and
+            # long answers stop mid-sentence. Production, 2026-09-11: a research
+            # report was cut off at 11,334 characters with no error anywhere,
+            # because nothing in the request or in LiteLLM's config set a value.
+            #
+            # 32000 rather than the model's true ceiling: it is safe on either
+            # arm of a load-balanced `chat` purpose (Sonnet 4.5 caps at 64k,
+            # Sonnet 5 at 128k) and matches the limit ChatMessageRequest already
+            # enforces on per-request overrides (app/api/chat.py).
+            max_tokens=32000,
             tools=[
                 "web_search",
                 "web_extract",

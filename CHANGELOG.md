@@ -124,6 +124,20 @@ changes — see release notes per version.
 
 ### Fixed
 
+- **Long chat answers were truncated mid-sentence** with no error anywhere.
+  `ChatAgent` sent no `max_tokens`, relying on a comment in `base_agent` that
+  said omitting it lets the model use its natural limit. That holds for the
+  OpenAI-compatible endpoints (vLLM, MLX) it was written for, but the Anthropic
+  Messages API *requires* `max_tokens` — so once the `chat` purpose was
+  re-pointed at Bedrock, LiteLLM had to supply a default, and its default is
+  small. Production, 2026-09-11: a research report stopped at 11,334 characters
+  and was persisted as if complete. The chat agent now sets `max_tokens=32000`
+  — safe on either arm of a load-balanced `chat` purpose and matching the
+  ceiling `ChatMessageRequest` already enforces on per-request overrides.
+  Note: DB-defined agents cannot set `max_tokens` at all (`dynamic_loader`
+  has no field for it), so any of those pointed at a Bedrock model are still
+  exposed.
+
 - **Chat attachments** (September 9 production incident): a message that
   carries a file now always goes to the deep pass (`routing_source =
   attachment_rule`) instead of asking the 0.8B classifier, which had
