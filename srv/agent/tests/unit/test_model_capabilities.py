@@ -84,6 +84,72 @@ def test_a_cloud_prefix_beats_a_private_api_base():
                              "http://10.96.200.207:4000") is True
 
 
+def test_litellm_s_own_provider_label_is_trusted_first():
+    # No prefix, no api_base — only LiteLLM's label says what this is.
+    assert mc.is_cloud_model("us.anthropic.claude-sonnet-5", None, "bedrock") is True
+    assert mc.is_cloud_model("qwen3.6-35b", "http://10.96.200.211:8001/v1", "openai") is False
+
+
+# ---------------------------------------------------------------------------
+# the admin UI is the source of truth
+# ---------------------------------------------------------------------------
+
+
+def test_a_purpose_repointed_from_the_ui_beats_the_deployed_config():
+    """The UI writes to LiteLLM's DB; config.yaml keeps its stale entry.
+
+    Production showed both: config.yaml said chat -> sonnet-4-5 while the UI
+    showed chat -> sonnet-5. The DB entry is what LiteLLM serves.
+    """
+    caps = mc.parse_model_info([
+        {"model_name": "chat",
+         "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"},
+         "model_info": {"max_input_tokens": 200000}},                      # config file
+        {"model_name": "chat",
+         "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5"},
+         "model_info": {"db_model": True, "max_input_tokens": 1000000}},   # admin UI
+    ])
+    assert caps["chat"].model == "bedrock/us.anthropic.claude-sonnet-5"
+    assert caps["chat"].context_window == 1000000
+
+
+def test_order_within_the_payload_does_not_decide_it():
+    entries = [
+        {"model_name": "chat", "litellm_params": {"model": "bedrock/new"},
+         "model_info": {"db_model": True}},
+        {"model_name": "chat", "litellm_params": {"model": "bedrock/stale"}},
+    ]
+    assert mc.parse_model_info(entries)["chat"].model == "bedrock/new"
+    assert mc.parse_model_info(list(reversed(entries)))["chat"].model == "bedrock/new"
+
+
+def test_a_purpose_pointing_at_another_purpose_is_followed():
+    """'cleanup -> chat' in the UI means cleanup runs on whatever chat runs on.
+
+    This matters beyond display: cleanup is not in the CLOUD_ROUTED_ALIASES
+    default, so without following the chain it would be treated as local and
+    sent vLLM-only params to Bedrock.
+    """
+    caps = mc.parse_model_info([
+        {"model_name": "chat",
+         "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5"},
+         "model_info": {"max_input_tokens": 200000}},
+        {"model_name": "cleanup", "litellm_params": {"model": "chat"}},
+    ])
+    assert caps["cleanup"].is_cloud is True
+    assert caps["cleanup"].model == "bedrock/us.anthropic.claude-sonnet-5"
+    assert caps["cleanup"].context_window == 200000
+    assert caps["cleanup"].alias == "cleanup"   # keeps its own name
+
+
+def test_an_alias_cycle_terminates():
+    caps = mc.parse_model_info([
+        {"model_name": "a", "litellm_params": {"model": "b"}},
+        {"model_name": "b", "litellm_params": {"model": "a"}},
+    ])
+    assert set(caps) == {"a", "b"}   # resolved without hanging
+
+
 # ---------------------------------------------------------------------------
 # parsing
 # ---------------------------------------------------------------------------

@@ -35,12 +35,22 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Providers that are unambiguously an API call. `openai/` is deliberately
-# absent: it is also how every local vLLM and MLX model is registered.
-_CLOUD_PREFIXES = (
-    "bedrock/", "anthropic/", "vertex_ai/", "azure/", "azure_ai/",
-    "gemini/", "cohere/", "mistral/", "groq/", "together_ai/",
+# Providers that are unambiguously an API call, used only to override the
+# api_base test below (a Bedrock model reached through an internal gateway is
+# still an API call). `openai` is deliberately absent: it is also how every
+# local vLLM and MLX model is registered.
+#
+# This is the one hardcoded list in the file. It is additive — an unlisted
+# provider is not assumed local, it just falls through to the api_base test,
+# which is the more reliable signal anyway.
+_CLOUD_PROVIDERS = (
+    "bedrock", "anthropic", "vertex_ai", "azure", "azure_ai",
+    "gemini", "cohere", "mistral", "groq", "together_ai",
 )
+_CLOUD_PREFIXES = tuple(f"{p}/" for p in _CLOUD_PROVIDERS)
+
+# How many purpose -> purpose hops to follow (cleanup -> chat -> the model).
+_MAX_ALIAS_HOPS = 4
 
 # RFC1918, loopback, and bare/internal hostnames — an api_base pointing at one
 # of these is our own hardware however the model is prefixed.
@@ -79,17 +89,32 @@ def _host_of(api_base: str) -> str:
     return text.split("/", 1)[0].split(":", 1)[0]
 
 
-def is_cloud_model(model: str, api_base: Optional[str] = None) -> bool:
-    """Whether *model* is answered by an external API rather than our hardware."""
+def is_cloud_model(
+    model: str,
+    api_base: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> bool:
+    """Whether this model is answered by an external API rather than our hardware.
+
+    Order of evidence, most trustworthy first:
+
+    1. ``litellm_provider`` when LiteLLM reports one — its own answer, no
+       guessing on our side.
+    2. A known cloud provider prefix on the model string.
+    3. ``api_base``: a private, loopback or bare host is our own network,
+       whatever the model is called. This is what separates local vLLM and MLX
+       (registered as ``openai/...`` because LiteLLM drives them with the
+       OpenAI-compatible client) from real OpenAI.
+    """
+    label = (provider or "").strip().lower()
     name = (model or "").strip().lower()
-    if name.startswith(_CLOUD_PREFIXES):
+    if label in _CLOUD_PROVIDERS or name.startswith(_CLOUD_PREFIXES):
         return True
     host = _host_of(api_base or "")
     if host:
-        # openai/<something> pointed at our own network is vLLM or MLX.
         return not bool(_PRIVATE_HOST_RE.match(host))
-    # No api_base and not a known cloud prefix: real OpenAI if it says so.
-    return name.startswith("openai/")
+    # No api_base and no cloud marker: real OpenAI if it says openai.
+    return label == "openai" or name.startswith("openai/")
 
 
 def _window_of(entry: Dict[str, Any]) -> Optional[int]:
@@ -107,12 +132,35 @@ def _window_of(entry: Dict[str, Any]) -> Optional[int]:
     return None
 
 
+def _is_runtime_entry(entry: Dict[str, Any]) -> bool:
+    """True for a mapping written by the admin UI rather than the config file."""
+    info = entry.get("model_info")
+    return bool(isinstance(info, dict) and info.get("db_model"))
+
+
+def _strip_provider(model: str) -> str:
+    return (model or "").split("/", 1)[-1].strip().lower()
+
+
 def parse_model_info(entries: List[Dict[str, Any]]) -> Dict[str, ModelCapability]:
-    """Turn a LiteLLM ``/model/info`` payload into alias → capability."""
-    out: Dict[str, ModelCapability] = {}
-    for entry in entries or []:
-        if not isinstance(entry, dict):
-            continue
+    """Turn a LiteLLM ``/model/info`` payload into alias → capability.
+
+    Two details matter, and both mirror how the admin UI reads the same data
+    (``_merge_model_entries`` in ``app/api/llm.py``):
+
+    - A purpose re-pointed from the UI is persisted to LiteLLM's database and
+      can coexist with a stale entry of the same name from the deployed
+      config file. Runtime entries (``model_info.db_model``) win, so the agent
+      and the UI always agree on what a purpose means.
+    - A purpose may resolve to another purpose rather than to a model —
+      ``cleanup`` pointing at ``chat`` is how the UI shows it — so the chain is
+      followed to the model that actually answers.
+    """
+    ordered = [e for e in (entries or []) if isinstance(e, dict)]
+    ordered.sort(key=_is_runtime_entry)  # stable: config first, runtime last
+
+    raw: Dict[str, ModelCapability] = {}
+    for entry in ordered:
         alias = str(entry.get("model_name") or "").strip()
         if not alias:
             continue
@@ -121,13 +169,35 @@ def parse_model_info(entries: List[Dict[str, Any]]) -> Dict[str, ModelCapability
         model = str(params.get("model") or "")
         if not model:
             continue
-        out[alias.lower()] = ModelCapability(
+        info = entry.get("model_info") if isinstance(entry.get("model_info"), dict) else {}
+        raw[alias.lower()] = ModelCapability(
             alias=alias,
             model=model,
-            is_cloud=is_cloud_model(model, params.get("api_base")),
+            is_cloud=is_cloud_model(model, params.get("api_base"), info.get("litellm_provider")),
             context_window=_window_of(entry),
         )
-    return out
+
+    return {alias: _follow_aliases(alias, raw) for alias in raw}
+
+
+def _follow_aliases(alias: str, raw: Dict[str, ModelCapability]) -> ModelCapability:
+    """Resolve a purpose that points at another purpose to the real model."""
+    capability = raw[alias]
+    seen = {alias}
+    for _ in range(_MAX_ALIAS_HOPS):
+        target = _strip_provider(capability.model)
+        if target not in raw or target in seen:
+            break
+        seen.add(target)
+        nested = raw[target]
+        # Keep this purpose's own name, take the target's actual capabilities.
+        capability = ModelCapability(
+            alias=capability.alias,
+            model=nested.model,
+            is_cloud=nested.is_cloud,
+            context_window=capability.context_window or nested.context_window,
+        )
+    return capability
 
 
 async def _fetch_model_info() -> List[Dict[str, Any]]:
