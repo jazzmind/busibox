@@ -206,8 +206,24 @@ def _follow_aliases(alias: str, raw: Dict[str, ModelCapability]) -> ModelCapabil
     return capability
 
 
+# Endpoint, and how to get the model list out of its payload. `/model/info`
+# is richest — it carries `model_info.max_input_tokens` and the `db_model`
+# flag that tells us which entry the admin UI wrote. `/config/yaml` only has
+# the mapping, which is still enough to route correctly; windows then fall
+# back. Mirrors the chain in app/api/llm.py.
+_ENDPOINTS = (
+    ("/model/info", "data"),
+    ("/v1/model/info", "data"),
+    ("/config/yaml", "model_list"),
+)
+
+# Some LiteLLM versions reject a bodyless GET with a 422 and want an empty
+# JSON body, or only accept POST. Try each shape before giving up.
+_ATTEMPTS = (("GET", None), ("GET", {}), ("POST", {}))
+
+
 async def _fetch_model_info() -> List[Dict[str, Any]]:
-    """GET LiteLLM /model/info. Kept local to avoid importing app.api.llm."""
+    """Ask LiteLLM what it is serving. Kept local to avoid importing app.api.llm."""
     from app.config.settings import get_settings
     settings = get_settings()
 
@@ -218,12 +234,46 @@ async def _fetch_model_info() -> List[Dict[str, Any]]:
     if settings.litellm_api_key:
         headers["Authorization"] = f"Bearer {settings.litellm_api_key}"
 
+    # Every failure is recorded, not just the last one: when this raises, the
+    # log line is the only evidence an operator has about why LiteLLM would
+    # not answer, and "the last endpoint 404'd" hides the real cause.
+    failures: List[str] = []
+
     async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.get(f"{base}/model/info", headers=headers)
-        response.raise_for_status()
-        payload = response.json()
-    data = payload.get("data") if isinstance(payload, dict) else payload
-    return data if isinstance(data, list) else []
+        for path, key in _ENDPOINTS:
+            for method, payload in _ATTEMPTS:
+                kwargs: Dict[str, Any] = {"headers": headers}
+                if payload is not None:
+                    kwargs["json"] = payload
+                label = f"{method} {path}"
+                try:
+                    response = await client.request(method, f"{base}{path}", **kwargs)
+                except Exception as exc:  # noqa: BLE001 — try the next shape
+                    failures.append(f"{label}: {exc}")
+                    continue
+                if response.status_code != 200:
+                    failures.append(f"{label}: HTTP {response.status_code}")
+                    continue
+                try:
+                    body = response.json()
+                except Exception:  # noqa: BLE001 — /config/yaml can return YAML text
+                    failures.append(f"{label}: response was not JSON")
+                    continue
+                entries = body.get(key) if isinstance(body, dict) else body
+                if isinstance(entries, list) and entries:
+                    logger.debug("model_capabilities: resolved via %s", label)
+                    return entries
+                failures.append(f"{label}: no '{key}' in response")
+
+    # Collapse the three request shapes per endpoint into one line each.
+    seen: List[str] = []
+    for failure in failures:
+        reason = failure.split(": ", 1)[-1]
+        path = failure.split(" ", 1)[-1].split(":", 1)[0]
+        line = f"{path} ({reason})"
+        if line not in seen:
+            seen.append(line)
+    raise RuntimeError("; ".join(seen) or "no LiteLLM endpoint answered")
 
 
 async def refresh(force: bool = False) -> int:

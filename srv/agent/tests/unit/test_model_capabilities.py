@@ -337,6 +337,131 @@ async def test_the_ttl_suppresses_a_re_fetch(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# endpoint compatibility
+# ---------------------------------------------------------------------------
+
+
+class _FakeResponse:
+    def __init__(self, status=200, payload=None, text_only=False):
+        self.status_code = status
+        self._payload = payload
+        self._text_only = text_only
+
+    def json(self):
+        if self._text_only:
+            raise ValueError("not JSON")
+        return self._payload
+
+
+class _FakeClient:
+    """Records every (method, path) tried and replies from a routing table."""
+
+    def __init__(self, table):
+        self.table = table
+        self.tried = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def request(self, method, url, **kwargs):
+        path = url.split("4000", 1)[-1] if "4000" in url else url
+        self.tried.append((method, path))
+        handler = self.table.get(path)
+        if handler is None:
+            return _FakeResponse(status=404)
+        if isinstance(handler, Exception):
+            raise handler
+        return handler
+
+
+def _client(monkeypatch, table):
+    holder = {}
+
+    def factory(*args, **kwargs):
+        holder["client"] = _FakeClient(table)
+        return holder["client"]
+
+    monkeypatch.setattr(mc.httpx, "AsyncClient", factory)
+    monkeypatch.setattr("app.config.settings.get_settings", _settings_stub())
+    return holder
+
+
+@pytest.mark.asyncio
+async def test_a_422_on_bodyless_get_falls_through_to_the_next_shape(monkeypatch):
+    """Some LiteLLM builds reject GET with no body. Production hit exactly this."""
+    calls = {"n": 0}
+
+    class Endpoint(_FakeResponse):
+        def __init__(self):
+            super().__init__()
+
+        @property
+        def status_code(self):
+            calls["n"] += 1
+            return 422 if calls["n"] == 1 else 200
+
+        @status_code.setter
+        def status_code(self, v):
+            pass
+
+        def json(self):
+            return {"data": PROD}
+
+    holder = _client(monkeypatch, {"/model/info": Endpoint()})
+    entries = await mc._fetch_model_info()
+
+    assert len(entries) == 4
+    assert holder["client"].tried[0] == ("GET", "/model/info")
+
+
+@pytest.mark.asyncio
+async def test_config_yaml_is_used_when_model_info_is_unavailable(monkeypatch):
+    config_shaped = [{"model_name": "chat",
+                      "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5"}}]
+    holder = _client(monkeypatch, {
+        "/config/yaml": _FakeResponse(payload={"model_list": config_shaped}),
+    })
+
+    entries = await mc._fetch_model_info()
+
+    assert entries == config_shaped
+    tried = [p for _, p in holder["client"].tried]
+    assert "/model/info" in tried and "/config/yaml" in tried   # in that order
+    # Routing still works from the thinner payload; the window falls back.
+    caps = mc.parse_model_info(entries)
+    assert caps["chat"].is_cloud is True
+    assert caps["chat"].context_window is None
+
+
+@pytest.mark.asyncio
+async def test_every_endpoint_failing_reports_all_of_them(monkeypatch):
+    """The raised message is the only evidence in the log — it must name each
+    endpoint, not just whichever happened to be tried last."""
+    _client(monkeypatch, {})
+    with pytest.raises(RuntimeError) as err:
+        await mc._fetch_model_info()
+
+    message = str(err.value)
+    for path, _ in mc._ENDPOINTS:
+        assert path in message, message
+    assert "404" in message
+
+
+@pytest.mark.asyncio
+async def test_a_non_json_body_is_reported_alongside_the_rest(monkeypatch):
+    _client(monkeypatch, {"/model/info": _FakeResponse(text_only=True)})
+    with pytest.raises(RuntimeError) as err:
+        await mc._fetch_model_info()
+
+    message = str(err.value)
+    assert "not JSON" in message        # the real cause, previously hidden
+    assert "/config/yaml" in message    # and what was tried after it
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 
