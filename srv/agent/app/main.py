@@ -50,6 +50,17 @@ async def lifespan(app: FastAPI):
     init_insights_service(insights_config)
     logger.info("Insights service initialized")
     
+    # Resolve what each model purpose currently points at. The admin UI
+    # re-points purposes at runtime (POST /llm/purposes), so LiteLLM — not
+    # model_registry.yml — is the source of truth for provider and context
+    # window. Failure is non-fatal: callers fall back to settings.
+    try:
+        from app.services import model_capabilities
+        resolved = await model_capabilities.refresh(force=True)
+        logger.info("Model capabilities resolved for %d purposes", resolved)
+    except Exception as e:
+        logger.warning(f"Model capability resolution skipped: {e}")
+
     # Initialize platform config (reads feature flags from config-api)
     await init_platform_config(settings.config_api_url)
 

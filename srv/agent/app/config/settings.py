@@ -113,7 +113,15 @@ class Settings(BaseSettings):
     # which is the conservative pre-existing behaviour.
     model_context_windows: str = Field(
         "",
-        description="Comma-separated alias:token-window pairs sizing the attachment budget (rendered by Ansible from model_registry.yml)",
+        description="Fallback alias:token-window pairs used only when LiteLLM has not resolved the purpose",
+    )
+    model_capabilities_ttl_seconds: int = Field(
+        600,
+        description="How long the LiteLLM purpose->model resolution is cached before re-reading /model/info",
+    )
+    cloud_context_window_cap: int = Field(
+        800000,
+        description="Ceiling on a cloud model's usable window (0 disables). Local models use what they serve.",
     )
     default_context_window_tokens: int = Field(
         12000,

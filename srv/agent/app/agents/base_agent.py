@@ -805,6 +805,18 @@ class BaseStreamingAgent(StreamingAgent):
         receive local-backend request params.
         """
         name = (model_name or "").lower()
+
+        # LiteLLM knows what this alias currently resolves to, including any
+        # re-pointing done from the admin UI since deploy. Settings are the
+        # fallback for a cold cache or an unreachable proxy.
+        try:
+            from app.services import model_capabilities
+            resolved = model_capabilities.routes_to_cloud(name)
+        except Exception:  # noqa: BLE001
+            resolved = None
+        if resolved is not None:
+            return resolved
+
         aliases = {
             a.strip().lower()
             for a in get_settings().cloud_routed_aliases.split(",")
@@ -1358,6 +1370,13 @@ class BaseStreamingAgent(StreamingAgent):
         agent's configured default.
         """
         alias = getattr(self.synthesis_model, "model_name", None) or self.config.model
+        try:
+            from app.services import model_capabilities
+            window = model_capabilities.context_window(alias)
+            if window:
+                return window
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("model_capabilities lookup failed for %s: %s", alias, exc)
         try:
             return get_settings().get_model_context_window(alias)
         except Exception as exc:  # noqa: BLE001

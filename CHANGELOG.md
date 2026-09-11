@@ -79,15 +79,24 @@ changes — see release notes per version.
   `agent_cloud_context_window_cap` (800,000), since Sonnet 4.6 accepts 1M
   tokens but Bedrock bills per input token. The service itself ships an empty
   map, so a non-Ansible deployment keeps the conservative 12,000.
-  Known limitation: `model_registry.yml` is only the *bootstrap* mapping.
-  `POST /llm/purposes` lets an admin re-point any purpose at runtime, writing
-  straight into LiteLLM with nothing written back to git — production's
-  `chat` resolves to `bedrock/us.anthropic.claude-sonnet-4-5` while the
-  registry still says `qwen3.6-35b` on vLLM. The rendered windows are
-  therefore correct at deploy time and can drift afterwards; resolving them
-  from LiteLLM at runtime is the durable fix. `CLOUD_ROUTED_ALIASES` is
-  deliberately *not* rendered from the registry for this reason — doing so
-  would drop `chat` from the cloud list and send vLLM-only params to Bedrock.
+  The Ansible-rendered map is now only a fallback (see below).
+- **Model purposes are resolved from LiteLLM at runtime**
+  (`app/services/model_capabilities.py`). The admin UI re-points purposes
+  through `POST /llm/purposes` → LiteLLM `/model/new`, which writes to
+  LiteLLM's database and never back to git, so `model_registry.yml` is a
+  bootstrap mapping and anything derived from it is stale as soon as a mapping
+  changes. Production showed the drift plainly: the registry maps `chat` and
+  `research` to a local Qwen 35B, while LiteLLM serves them from
+  `bedrock/claude-sonnet-4-5` and `bedrock/claude-sonnet-5`. The agent now
+  reads `/model/info` on startup (TTL-refreshed,
+  `MODEL_CAPABILITIES_TTL_SECONDS`) and resolves both the provider and the
+  context window from it, falling back to `CLOUD_ROUTED_ALIASES` /
+  `MODEL_CONTEXT_WINDOWS` when the cache is cold or LiteLLM is unreachable.
+  Cloud windows are clamped by `CLOUD_CONTEXT_WINDOW_CAP` (800,000); local
+  models use what they serve. Note that provider cannot be read from the model
+  prefix alone — LiteLLM drives local vLLM and MLX with its OpenAI-compatible
+  client, so every local model is named `openai/...` and only a private
+  `api_base` distinguishes it from the real thing.
 - **Deep research asks before it runs.** When a request is routed to
   `deep_research`, the turn now stops at an offer — "…it usually takes a few
   minutes. Would you like me to run it?" — rendered with Yes/No buttons. "Yes"
