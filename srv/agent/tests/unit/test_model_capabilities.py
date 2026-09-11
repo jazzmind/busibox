@@ -113,6 +113,73 @@ def test_a_purpose_repointed_from_the_ui_beats_the_deployed_config():
     assert caps["chat"].context_window == 1000000
 
 
+def test_a_load_balanced_purpose_budgets_for_the_smaller_arm():
+    """Production had `chat` live twice: sonnet-4-5 (200k) and sonnet-5 (1M).
+
+    LiteLLM's router balances across both, so a turn budgeted at the 1M arm's
+    window would be rejected whenever it landed on the 200k one. Until the
+    duplicate is deduped, the safe budget is the smaller.
+    """
+    caps = mc.parse_model_info([
+        {"model_name": "chat",
+         "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"},
+         "model_info": {"max_input_tokens": 200000}},
+        {"model_name": "chat",
+         "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5"},
+         "model_info": {"db_model": True, "max_input_tokens": 1000000}},
+    ])
+    assert caps["chat"].context_window == 200000          # not 1_000_000
+    assert caps["chat"].model == "bedrock/us.anthropic.claude-sonnet-5"   # UI's intent
+
+
+def test_a_purpose_split_across_local_and_cloud_is_treated_as_cloud():
+    """Production had `cleanup` live as both a local Qwen and Bedrock Sonnet 5.
+
+    Whichever way it is called, one arm rejects the other's parameters. Cloud
+    is the safer read: sending vLLM-only params to Bedrock is the documented
+    400 this whole setting exists to prevent.
+    """
+    caps = mc.parse_model_info([
+        {"model_name": "cleanup",
+         "litellm_params": {"model": "openai/qwen3.6-35b-a3b-fp8",
+                            "api_base": "http://10.96.200.211:8001/v1"}},
+        {"model_name": "cleanup",
+         "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5"},
+         "model_info": {"db_model": True, "max_input_tokens": 1000000}},
+    ])
+    assert caps["cleanup"].is_cloud is True
+
+
+def test_identical_duplicates_are_not_warned_about(caplog):
+    """LiteLLM re-adds the config entry on every deploy; when it matches the
+    DB entry that is noise, not a problem."""
+    import logging
+    with caplog.at_level(logging.WARNING):
+        mc.parse_model_info([
+            {"model_name": "vision",
+             "litellm_params": {"model": "openai/qwen3.6-35b-a3b-fp8",
+                                "api_base": "http://10.96.200.211:8001/v1"}},
+            {"model_name": "vision",
+             "litellm_params": {"model": "openai/qwen3.6-35b-a3b-fp8",
+                                "api_base": "http://10.96.200.211:8001/v1"},
+             "model_info": {"db_model": True}},
+        ])
+    assert "vision" not in caplog.text
+
+
+def test_differing_duplicates_are_warned_about(caplog):
+    import logging
+    with caplog.at_level(logging.WARNING):
+        mc.parse_model_info([
+            {"model_name": "fast", "litellm_params": {"model": "openai/qwen3.5-0.8b",
+                                                      "api_base": "http://10.96.200.211:8000/v1"}},
+            {"model_name": "fast", "litellm_params": {"model": "openai/qwen3.6-35b-a3b-fp8",
+                                                      "api_base": "http://10.96.200.211:8001/v1"},
+             "model_info": {"db_model": True}},
+        ])
+    assert "fast" in caplog.text and "dedup" in caplog.text
+
+
 def test_order_within_the_payload_does_not_decide_it():
     entries = [
         {"model_name": "chat", "litellm_params": {"model": "bedrock/new"},

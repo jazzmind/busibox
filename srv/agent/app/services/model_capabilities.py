@@ -165,7 +165,12 @@ def parse_model_info(entries: List[Dict[str, Any]]) -> Dict[str, ModelCapability
     ordered = [e for e in (entries or []) if isinstance(e, dict)]
     ordered.sort(key=_is_runtime_entry)  # stable: config first, runtime last
 
-    raw: Dict[str, ModelCapability] = {}
+    # One purpose can have several live deployments — LiteLLM re-adds the
+    # config entry on every deploy alongside whatever the UI wrote — and its
+    # router load-balances across them. So the identity comes from the UI's
+    # entry, but the window must be the SMALLEST any arm can accept: a request
+    # budgeted for the big arm and routed to the small one is rejected.
+    arms: Dict[str, List[ModelCapability]] = {}
     for entry in ordered:
         alias = str(entry.get("model_name") or "").strip()
         if not alias:
@@ -176,14 +181,48 @@ def parse_model_info(entries: List[Dict[str, Any]]) -> Dict[str, ModelCapability
         if not model:
             continue
         info = entry.get("model_info") if isinstance(entry.get("model_info"), dict) else {}
-        raw[alias.lower()] = ModelCapability(
+        arms.setdefault(alias.lower(), []).append(ModelCapability(
             alias=alias,
             model=model,
             is_cloud=is_cloud_model(model, params.get("api_base"), info.get("litellm_provider")),
             context_window=_window_of(entry),
+        ))
+
+    raw: Dict[str, ModelCapability] = {}
+    for alias, deployments in arms.items():
+        primary = deployments[-1]          # runtime entry when there is one
+        windows = [d.context_window for d in deployments if d.context_window]
+        if len(deployments) > 1:
+            _warn_about_duplicates(alias, deployments)
+        raw[alias] = ModelCapability(
+            alias=primary.alias,
+            model=primary.model,
+            is_cloud=any(d.is_cloud for d in deployments) if len(deployments) > 1 else primary.is_cloud,
+            context_window=min(windows) if windows else None,
         )
 
     return {alias: _follow_aliases(alias, raw) for alias in raw}
+
+
+def _warn_about_duplicates(alias: str, deployments: List[ModelCapability]) -> None:
+    """Say something when a purpose has several live, differing deployments.
+
+    Identical duplicates are harmless. Differing ones mean the router is
+    load-balancing between two different models under one name, which makes
+    the answer non-deterministic; a mixed local/cloud pair additionally makes
+    the request parameters unserviceable, since neither backend accepts the
+    other's. The fix is `dedup_litellm_models.py`, run by a LiteLLM deploy.
+    """
+    models = {d.model for d in deployments}
+    if len(models) == 1:
+        return
+    providers = {d.is_cloud for d in deployments}
+    logger.warning(
+        "model_capabilities: purpose '%s' has %d differing deployments (%s)%s — "
+        "LiteLLM will load-balance across them; run the LiteLLM dedup",
+        alias, len(deployments), ", ".join(sorted(models)),
+        " and they mix local with cloud" if len(providers) > 1 else "",
+    )
 
 
 def _follow_aliases(alias: str, raw: Dict[str, ModelCapability]) -> ModelCapability:
