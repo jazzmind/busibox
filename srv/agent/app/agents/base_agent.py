@@ -1349,6 +1349,21 @@ class BaseStreamingAgent(StreamingAgent):
                     self.name, server_config.name, e,
                 )
 
+    def _synthesis_context_window(self) -> Optional[int]:
+        """Context window of the model that will write this turn's answer.
+
+        Read at resolution time, not construction time: a complex request may
+        already have upgraded ``synthesis_model`` to the frontier alias, and
+        the attachment budget should follow that upgrade rather than the
+        agent's configured default.
+        """
+        alias = getattr(self.synthesis_model, "model_name", None) or self.config.model
+        try:
+            return get_settings().get_model_context_window(alias)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not resolve context window for %s: %s", alias, exc)
+            return None
+
     async def _resolve_attachments(
         self,
         query: str,
@@ -1380,6 +1395,7 @@ class BaseStreamingAgent(StreamingAgent):
                 session=agent_context.session,
                 stream=stream,
                 context_token_estimate=context_token_estimate,
+                context_window_tokens=self._synthesis_context_window(),
             )
         except Exception as exc:
             logger.warning("Attachment resolution failed entirely: %s", exc, exc_info=True)

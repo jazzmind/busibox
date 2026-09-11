@@ -100,6 +100,24 @@ class Settings(BaseSettings):
         description="Comma-separated model aliases served by cloud providers; vLLM/MLX-only request params are suppressed for these",
     )
 
+    # Attachment context budget. Resolved per turn from the model that will
+    # actually synthesize the answer: a 200k-window cloud model can read a
+    # whole document where a local 8k model needs retrieved chunks. Aliases
+    # not listed fall back to `default_context_window_tokens`.
+    model_context_windows: str = Field(
+        "chat:200000,agent:200000,default:200000,frontier:200000,frontier-fast:200000,"
+        "fallback:128000,tool_calling:32768,fast:8192",
+        description="Comma-separated alias:token-window pairs used to size the attachment context budget",
+    )
+    default_context_window_tokens: int = Field(
+        12000,
+        description="Context window assumed for model aliases absent from MODEL_CONTEXT_WINDOWS",
+    )
+    attachment_inline_max_tokens: int = Field(
+        24000,
+        description="Ceiling on pre-parsed attachment text injected verbatim (no file_id, parsed_content only)",
+    )
+
     # Grounding policy (synthesis): tier selection thresholds
     grounding_strong_doc_score: float = Field(
         0.65,
@@ -284,6 +302,27 @@ class Settings(BaseSettings):
         False,
         description="Enable ClawHub integration hints for loaded skills",
     )
+
+    def get_model_context_window(self, alias: Optional[str]) -> int:
+        """Context window in tokens for a model alias.
+
+        Unknown or unparseable aliases fall back to
+        ``default_context_window_tokens`` so a misconfigured map can only make
+        the budget smaller, never wrongly large.
+        """
+        wanted = (alias or "").strip().lower()
+        if not wanted:
+            return self.default_context_window_tokens
+        for pair in (self.model_context_windows or "").split(","):
+            name, _, size = pair.partition(":")
+            if name.strip().lower() != wanted:
+                continue
+            try:
+                window = int(size.strip())
+            except ValueError:
+                return self.default_context_window_tokens
+            return window if window > 0 else self.default_context_window_tokens
+        return self.default_context_window_tokens
 
     def get_skill_dirs(self) -> List[str]:
         raw = self.skills_dirs or ""

@@ -112,6 +112,7 @@ class AttachmentResolver:
         session: Optional[AsyncSession] = None,
         stream: Optional[StreamFn] = None,
         context_token_estimate: int = 0,
+        context_window_tokens: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         if not attachment_metadata:
             return []
@@ -163,12 +164,17 @@ class AttachmentResolver:
         client = BusiboxClient(data_token)
 
         query_tokens = self._estimate_tokens(query)
+        window = context_window_tokens or self.default_context_window_tokens
         available_tokens = max(
             1000,
-            self.default_context_window_tokens
+            window
             - self.reserve_response_tokens
             - context_token_estimate
             - query_tokens,
+        )
+        logger.info(
+            "Attachment context budget: %d tokens (window %d, history %d, query %d)",
+            available_tokens, window, context_token_estimate, query_tokens,
         )
 
         for attachment in attachment_metadata:
@@ -192,12 +198,19 @@ class AttachmentResolver:
                 if not file_id:
                     parsed = attachment.get("parsed_content")
                     if parsed:
+                        # Nothing chunked this text, so it would otherwise go
+                        # into the prompt whole. Cap it against the turn's
+                        # budget and a hard inline ceiling.
+                        content_text, truncated = self._cap_inline_text(
+                            str(parsed), available_tokens
+                        )
                         resolved.append(
                             {
                                 "attachment_id": attachment.get("id"),
                                 "filename": filename,
                                 "source_kind": "parsed_content",
-                                "content": str(parsed),
+                                "content": content_text,
+                                "truncated": truncated,
                             }
                         )
                     else:
@@ -705,6 +718,27 @@ class AttachmentResolver:
 
     def _estimate_tokens(self, text: str) -> int:
         return max(1, len(text) // 4)
+
+    def _cap_inline_text(self, text: str, available_tokens: int) -> tuple:
+        """Trim verbatim attachment text to the turn budget.
+
+        Returns ``(text, truncated)``. Used for attachments with no ``file_id``
+        (nothing chunked them), which would otherwise enter the prompt whole
+        however large they are.
+        """
+        try:
+            from app.config.settings import get_settings
+            ceiling = get_settings().attachment_inline_max_tokens
+        except Exception:  # noqa: BLE001
+            ceiling = 24000
+        budget = max(1000, min(available_tokens, ceiling))
+        if self._estimate_tokens(text) <= budget:
+            return text, False
+        kept = text[: budget * 4]
+        return (
+            kept + "\n\n[... truncated: the rest of this text exceeded the context budget ...]",
+            True,
+        )
 
     def _fallback_attachment(self, attachment: Dict[str, Any]) -> Dict[str, Any]:
         filename = attachment.get("filename") or "attachment"

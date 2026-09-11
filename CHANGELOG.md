@@ -56,6 +56,18 @@ changes — see release notes per version.
   specific question. Any failure leaves the original decision untouched. The
   factual guard now also covers `clarify`, not just `direct`, as a backstop
   when the review is unavailable.
+- **The attachment context budget follows the synthesis model.**
+  `AttachmentResolver` assumed a 12,000-token window for every turn, so a
+  document that Claude Sonnet (200k) could have read whole was cut down to
+  RAG chunks — and on a "summarize this" objective the chunk ranker has
+  nothing meaningful to match against, so the answer came from a fraction of
+  the file. The window is now resolved per turn from the alias that will
+  actually write the answer, after any frontier upgrade. Attachments carrying
+  pre-parsed text with no `file_id` were injected verbatim at any size and are
+  now capped too. Settings: `MODEL_CONTEXT_WINDOWS`,
+  `DEFAULT_CONTEXT_WINDOW_TOKENS`, `ATTACHMENT_INLINE_MAX_TOKENS`. Unknown
+  aliases and malformed maps fall back to the old 12,000, so a
+  misconfiguration can only shrink the budget, never overrun the model.
 - **Deep research asks before it runs.** When a request is routed to
   `deep_research`, the turn now stops at an offer — "…it usually takes a few
   minutes. Would you like me to run it?" — rendered with Yes/No buttons. "Yes"
