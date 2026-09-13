@@ -39,6 +39,44 @@ RESEARCH_POLL_MAX_SECONDS = 10.0
 RESEARCH_MODELS = {"mini", "pro", "auto"}
 RESEARCH_LENGTHS = {"short", "standard", "long"}
 
+# Meta-instruction wrappers users put in front of the actual subject. They tell
+# *us* how to answer; sent on to Tavily they become part of the research brief,
+# so "deep dive into a topic on the state of the dredging market" is researched
+# as if "deep dive into a topic on" were a subject in its own right.
+#
+# Stripped only from the front, only when a substantial subject remains — see
+# _clean_research_question.
+_RESEARCH_META_PREFIXES = (
+    "deep dive into a topic on",
+    "deep dive into a topic about",
+    "deep dive into the topic of",
+    "deep dive into a topic",
+    "deep dive into",
+    "deep dive on",
+    "do a deep dive on",
+    "do a deep dive into",
+    "can you do a deep dive on",
+    "i want a deep dive on",
+    "deep research on",
+    "deep research into",
+    "do deep research on",
+    "run deep research on",
+    "research on",
+    "research into",
+    "please research",
+    "can you research",
+    "could you research",
+    "i want you to research",
+    "tell me about",
+    "give me a report on",
+    "write a report on",
+    "write me a report on",
+    "i need a report on",
+)
+_RESEARCH_LEAD_FILLER = ("the topic of", "the subject of", "a topic on", "the state of the topic of")
+# Below this, stripping has eaten the question rather than its wrapper.
+_RESEARCH_MIN_SUBJECT_WORDS = 3
+
 
 async def _tavily_api_key() -> str:
     """Tavily key from tool_configs/settings, or "" when not configured."""
@@ -260,6 +298,62 @@ async def web_map(
 # ---------------------------------------------------------------------------
 
 
+def _clean_research_question(question: str) -> str:
+    """Drop leading meta-instructions so Tavily researches the subject itself.
+
+    The deep-research offer guard restores the user's *original* message as the
+    query, which is right for consent (we run what they agreed to, not the word
+    "yes") but means phrasing like "deep dive into a topic on X" reaches the
+    research API verbatim. Tavily then spends part of its budget on the framing.
+
+    Conservative by design: front of the string only, one wrapper plus one
+    filler phrase, and only when at least ``_RESEARCH_MIN_SUBJECT_WORDS``
+    remain. A question that is *only* a wrapper is returned untouched — better
+    a vague brief than an empty one.
+    """
+    text = " ".join((question or "").split())
+    if not text:
+        return ""
+
+    def _strip_one(value: str, candidates: tuple) -> str:
+        lowered = value.lower()
+        for phrase in sorted(candidates, key=len, reverse=True):
+            if lowered.startswith(phrase):
+                remainder = value[len(phrase):].lstrip(" ,:;-—")
+                if len(remainder.split()) >= _RESEARCH_MIN_SUBJECT_WORDS:
+                    return remainder
+                return value
+        return value
+
+    cleaned = _strip_one(text, _RESEARCH_META_PREFIXES)
+    cleaned = _strip_one(cleaned, _RESEARCH_LEAD_FILLER)
+    return cleaned or text
+
+
+def _log_research_outcome(output: "DeepResearchOutput", question: str) -> "DeepResearchOutput":
+    """Log every exit from the polling loop, then return the output unchanged.
+
+    ``completed``, ``failed`` and ``timeout`` used to return silently — only the
+    two exception handlers logged. A 240s timeout therefore left an "Executing
+    tool deep_research" line with nothing after it, and diagnosing a turn meant
+    inferring the outcome from the absence of evidence. Production, 2026-09-11.
+    """
+    level = logging.INFO if output.success else logging.WARNING
+    logger.log(
+        level,
+        "deep_research %s after %.1fs (model=%s, request_id=%s, report_chars=%d, sources=%d) q=%r%s",
+        output.status,
+        output.elapsed_seconds,
+        output.model,
+        output.request_id or "-",
+        len(output.report or ""),
+        len(output.sources or []),
+        (question or "")[:120],
+        f" error={output.error!r}" if output.error else "",
+    )
+    return output
+
+
 class ResearchSource(BaseModel):
     title: str = Field(default="", description="Source title")
     url: str = Field(default="", description="Source URL")
@@ -281,7 +375,7 @@ class DeepResearchOutput(BaseModel):
 async def deep_research(
     question: str,
     model: Optional[str] = None,
-    output_length: str = "standard",
+    output_length: Optional[str] = None,
     include_domains: Optional[List[str]] = None,
     exclude_domains: Optional[List[str]] = None,
 ) -> DeepResearchOutput:
@@ -296,13 +390,20 @@ async def deep_research(
         question: The research task, with the context and output format wanted.
         model: "mini" for narrow questions, "pro" for multi-topic research,
             "auto" (default) to let Tavily choose.
-        output_length: "short", "standard" (default) or "long".
+        output_length: "short", "standard" or "long". Defaults to the
+            ``tavily_research_output_length`` setting ("long"), because a user
+            who agreed to wait several minutes wants depth, not a summary.
         include_domains: Preferred source domains (soft preference, max 20).
         exclude_domains: Domains to block (max 20).
     """
     question = (question or "").strip()
     if not question:
         return DeepResearchOutput(success=False, status="error", error="A research question is required.")
+    research_question = _clean_research_question(question)
+    if research_question != question:
+        logger.info(
+            "deep_research question normalised: %r -> %r", question[:120], research_question[:120]
+        )
 
     api_key = await _tavily_api_key()
     if not api_key:
@@ -315,10 +416,16 @@ async def deep_research(
     chosen_model = model if model in RESEARCH_MODELS else settings.tavily_research_default_model
     if chosen_model not in RESEARCH_MODELS:
         chosen_model = "auto"
+    # An explicit caller wins; otherwise the setting, which defaults to "long".
+    # Falling back to "standard" here is what made every report a summary.
+    chosen_length = output_length if output_length in RESEARCH_LENGTHS else None
+    if chosen_length is None:
+        configured = getattr(settings, "tavily_research_output_length", "long")
+        chosen_length = configured if configured in RESEARCH_LENGTHS else "long"
     payload: Dict[str, Any] = {
-        "input": question,
+        "input": research_question,
         "model": chosen_model,
-        "output_length": output_length if output_length in RESEARCH_LENGTHS else "standard",
+        "output_length": chosen_length,
         "citation_format": "numbered",
     }
     if include_domains:
@@ -357,26 +464,26 @@ async def deep_research(
                             ResearchSource(title=str(s.get("title", "")), url=str(s.get("url", "")))
                             for s in body.get("sources", []) if isinstance(s, dict)
                         ]
-                        return DeepResearchOutput(
+                        return _log_research_outcome(DeepResearchOutput(
                             success=True, status="completed", report=content, sources=sources,
                             request_id=request_id, model=chosen_model,
                             elapsed_seconds=round(time.monotonic() - started, 1),
-                        )
+                        ), research_question)
                     if status == "failed":
-                        return DeepResearchOutput(
+                        return _log_research_outcome(DeepResearchOutput(
                             success=False, status="failed", request_id=request_id, model=chosen_model,
                             elapsed_seconds=round(time.monotonic() - started, 1),
                             error="Tavily reported the research task as failed.",
-                        )
+                        ), research_question)
                 if time.monotonic() >= deadline:
-                    return DeepResearchOutput(
+                    return _log_research_outcome(DeepResearchOutput(
                         success=False, status="timeout", request_id=request_id, model=chosen_model,
                         elapsed_seconds=round(time.monotonic() - started, 1),
                         error=(
                             f"Research is still running after {int(settings.tavily_research_timeout_seconds)}s "
                             f"(task {request_id}). Answer from web_search results instead."
                         ),
-                    )
+                    ), research_question)
                 delay = min(delay * 1.5, RESEARCH_POLL_MAX_SECONDS)
     except httpx.HTTPStatusError as exc:
         detail = _error_detail(exc.response)

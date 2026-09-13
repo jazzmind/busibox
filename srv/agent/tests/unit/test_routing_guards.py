@@ -240,6 +240,15 @@ async def test_yes_after_offer_runs_tools_with_the_offer(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_plan_fallback_on_complex_request_escalates_to_llm_driven(monkeypatch):
+    """The escalation safety net on the planner path.
+
+    With chat_loop_first_tiers at its default, a complex turn never reaches
+    the planner — it goes loop-first up front (phase "loop_first"). This
+    escalation still matters when the loop is switched off, so that is the
+    configuration under test.
+    """
+    from app.config.settings import get_settings
+    monkeypatch.setattr(get_settings(), "chat_loop_first_tiers", [])
     agent = ChatAgent()
     stream = _Stream()
     context = AgentContext()

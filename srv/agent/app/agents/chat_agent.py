@@ -334,6 +334,7 @@ class ChatAgent(BaseStreamingAgent):
                 "create_task",
                 "send_notification",
                 "generate_image",
+                "render_chart",
                 "transcribe_audio",
                 "memory_search",
                 "memory_save",
@@ -500,8 +501,14 @@ class ChatAgent(BaseStreamingAgent):
 
         # Tavily tools: the planner sometimes names the intent but not the
         # required argument. Backfill from the user message where possible.
-        if tool_name == "deep_research" and not normalized.get("question"):
-            normalized["question"] = query
+        if tool_name == "deep_research":
+            if not normalized.get("question"):
+                normalized["question"] = query
+            # The planner never names output_length, so the tool used to fall
+            # through to "standard" and a four-minute pass returned a summary.
+            # Left unset here so deep_research resolves it from settings.
+            if normalized.get("output_length") not in {"short", "standard", "long"}:
+                normalized.pop("output_length", None)
         elif tool_name in {"web_extract", "web_map"}:
             urls_in_query = _URL_RE.findall(query or "")
             if tool_name == "web_extract":
@@ -1225,7 +1232,11 @@ class ChatAgent(BaseStreamingAgent):
                     id=f"step_{len(fallback_steps) + 1}",
                     tool="deep_research",
                     objective="Run multi-source deep research and produce a cited report",
-                    args={"question": query, "model": "auto"},
+                    # No model/output_length here: hard-coding "auto" bypassed
+                    # tavily_research_default_model, and omitting output_length
+                    # lets the tool apply tavily_research_output_length ("long")
+                    # rather than silently falling back to "standard".
+                    args={"question": query},
                 )
             )
         elif (
@@ -1412,7 +1423,10 @@ class ChatAgent(BaseStreamingAgent):
                         id=f"step_{len(seen_steps) + 1}",
                         tool="deep_research",
                         objective="Run multi-source deep research and produce a cited report",
-                        args={"question": query, "model": "auto"},
+                        # No model/output_length: let the tool apply
+                        # tavily_research_default_model and
+                        # tavily_research_output_length from settings.
+                        args={"question": query},
                     )
                 )
 
@@ -1447,6 +1461,12 @@ class ChatAgent(BaseStreamingAgent):
 
     def _format_plan_summary(self, execution_plan: ExecutionPlan) -> str:
         if not execution_plan.steps:
+            # An empty step list means "no tools" only for a planner plan. A
+            # loop-first or orchestrator turn is about to use plenty; saying
+            # "I'll respond directly" right before a five-minute research
+            # pass would be persisted in the thoughts as a lie.
+            if execution_plan.source in ("loop_first", "orchestrator"):
+                return execution_plan.summary or "Choosing tools as I go."
             return "No tools needed. I'll respond directly."
         bullets = [f"{idx}. {step.objective} (`{step.tool}`)" for idx, step in enumerate(execution_plan.steps, start=1)]
         return (
@@ -1491,7 +1511,56 @@ class ChatAgent(BaseStreamingAgent):
                 data={"phase": "retry", "tool": step.tool, "reason": reason},
             ))
             await asyncio.sleep(self._RETRY_DELAY_SECONDS)
-            await self._execute_step(PipelineStep(tool=step.tool, args=step.args), stream, cancel, agent_context)
+            await self._execute_step(PipelineStep(tool=step.tool, args=step.args, step_id=step.id), stream, cancel, agent_context)
+
+    def _use_research_orchestrator(self, decision: FastAckDecision) -> bool:
+        """A consented deep-research turn, with the orchestrator switched on.
+
+        ``_confirm_deep_research`` leaves ``preferred_tool == "deep_research"``
+        and sets ``needs_tools`` only once the user has said yes (or
+        confirmation is disabled), so this is exactly the set of turns that
+        used to become a one-step ``deep_research`` plan.
+        """
+        if decision.preferred_tool != "deep_research" or not decision.needs_tools:
+            return False
+        try:
+            from app.config.settings import get_settings as _gs
+            return bool(_gs().research_orchestrator_enabled)
+        except Exception:  # noqa: BLE001
+            # Fail closed: the orchestrator fans out several model loops and a
+            # paid Tavily pass. If settings cannot be read, the one-step plan
+            # is the safe default — never the expensive path.
+            return False
+
+    def _loop_first_tier(
+        self, decision: FastAckDecision, agent_context: AgentContext
+    ) -> Optional[str]:
+        """The loop-first tier for this turn, or None to use the planner.
+
+        "research" wins over the complexity tier when the fast-ack classified
+        the turn as research, so a `research` entry in ``chat_loop_first_tiers``
+        catches research turns regardless of how complex they were judged.
+
+        Excluded regardless of tier:
+        - a consented ``deep_research`` turn (owned by the orchestrator);
+        - structured-output runs (``response_schema``), which never use tools;
+        - agents whose strategy is not LLM_DRIVEN — the loop is theirs to run.
+        """
+        if self.config.tool_strategy != ToolStrategy.LLM_DRIVEN:
+            return None
+        if agent_context.response_schema is not None:
+            return None
+        if decision.preferred_tool == "deep_research":
+            return None
+        try:
+            from app.config.settings import get_settings as _gs
+            tiers = set(_gs().chat_loop_first_tiers or [])
+        except Exception:  # noqa: BLE001
+            tiers = {"complex", "research"}
+        if not tiers:
+            return None
+        tier = "research" if decision.action_type == "research" else (decision.complexity or "")
+        return tier if tier in tiers else None
 
     def _turn_budget_exhausted(self, agent_context: AgentContext) -> bool:
         if not agent_context.turn_started:
@@ -1534,7 +1603,7 @@ class ChatAgent(BaseStreamingAgent):
             )
             fast_tasks = [
                 self._execute_step(
-                    PipelineStep(tool=s.tool, args=s.args), stream, cancel, agent_context
+                    PipelineStep(tool=s.tool, args=s.args, step_id=s.id), stream, cancel, agent_context
                 )
                 for s in fast_steps
             ]
@@ -1641,7 +1710,7 @@ class ChatAgent(BaseStreamingAgent):
 
                 tasks = [
                     self._execute_step(
-                        PipelineStep(tool=s.tool, args=s.args), stream, cancel, agent_context
+                        PipelineStep(tool=s.tool, args=s.args, step_id=s.id), stream, cancel, agent_context
                     )
                     for s in runnable
                 ]
@@ -1946,7 +2015,46 @@ class ChatAgent(BaseStreamingAgent):
         logger.info("Chat resolving attachments")
         await self._resolve_attachments(query, stream, agent_context)
 
-        execution_plan = await self._generate_plan(query, agent_context, decision)
+        # Loop-first for hard turns. The static plan is right for a simple
+        # question and wrong for a hard one: nothing reads a tool's result and
+        # decides what to do next. For the configured tiers, skip the planner
+        # and let the model drive (_execute_llm_driven), with a wall-clock
+        # deadline the tool wrapper enforces.
+        #
+        # A consented deep_research turn is deliberately excluded: that is a
+        # multi-minute pass owned by the research orchestrator, not something
+        # the chat loop should run (or nest) itself.
+        loop_tier = self._loop_first_tier(decision, agent_context)
+        if self._use_research_orchestrator(decision):
+            # Consented deep research: lead + parallel workers instead of a
+            # single Tavily call. Runs in the deep pass below.
+            execution_plan = ExecutionPlan(
+                summary="Deep research: parallel workers, then a written report.",
+                steps=[], source="orchestrator",
+            )
+        elif loop_tier:
+            try:
+                from app.config.settings import get_settings as _gs
+                budget = int(_gs().chat_loop_budget_seconds)
+            except Exception:  # noqa: BLE001
+                budget = 300
+            agent_context.loop_mode = loop_tier
+            agent_context.loop_deadline = time.monotonic() + budget
+            logger.info(
+                "Loop-first turn: tier=%s budget=%ds (planner skipped)", loop_tier, budget,
+                extra={"routing_source": decision.routing_source},
+            )
+            await stream(thought(
+                source=self.name,
+                message="Working through this step by step, choosing tools as I go.",
+                data={"phase": "loop_first", "tier": loop_tier, "budget_seconds": budget},
+            ))
+            execution_plan = ExecutionPlan(
+                summary="Model-driven: tools chosen from each result in turn.",
+                steps=[], source="loop_first",
+            )
+        else:
+            execution_plan = await self._generate_plan(query, agent_context, decision)
 
         # Escalation: a generic fallback plan is a poor fit for a complex
         # request. Let the synthesis model drive the tools itself instead.
@@ -1998,7 +2106,10 @@ class ChatAgent(BaseStreamingAgent):
                 self.config.tool_strategy.value,
                 self.config.tools,
             )
-            if execution_plan.steps:
+            if execution_plan.source == "orchestrator":
+                from app.services.research_orchestrator import ResearchOrchestrator
+                await ResearchOrchestrator(self).run(query, agent_context, stream, cancel)
+            elif execution_plan.steps:
                 await self._execute_plan(query, stream, cancel, agent_context, execution_plan)
             elif self.config.tool_strategy == ToolStrategy.LLM_DRIVEN:
                 await self._execute_llm_driven(query, stream, cancel, agent_context)

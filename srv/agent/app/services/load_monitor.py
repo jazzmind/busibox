@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 _LLM_PURPOSES: Set[str] = {
     "agent", "chat", "research", "default", "tool_calling",
     "vision", "parsing", "cleanup", "fast", "test", "classify",
+    # Deep-research workers: up to research_max_workers loops at once.
+    "research_worker",
 }
 
 

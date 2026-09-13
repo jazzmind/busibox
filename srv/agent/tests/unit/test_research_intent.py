@@ -80,6 +80,12 @@ def _with_key(monkeypatch, *, confirm=True):
         deep_research_confirm = confirm
         clarify_review_model = ""
         clarify_review_timeout_seconds = 6.0
+        # Explicit, because both readers fail closed on a missing attribute:
+        # the consented turn must visibly route to the orchestrator here, not
+        # fall back to the one-step plan by accident of an incomplete stub.
+        research_orchestrator_enabled = True
+        chat_loop_first_tiers = ["complex", "research"]
+        chat_loop_budget_seconds = 300
 
     monkeypatch.setattr("app.config.settings.get_settings", lambda: S())
 
@@ -177,7 +183,14 @@ def test_other_replies_fall_through_to_normal_routing():
 
 @pytest.mark.asyncio
 async def test_yes_turn_runs_deep_research_on_the_original_question(monkeypatch):
-    """End to end through run_with_streaming: the plan targets the question, not 'yes'."""
+    """End to end through run_with_streaming: the research runs on the
+    question, not on 'yes'.
+
+    A consented turn now goes to the research orchestrator rather than a
+    one-step plan, so the capture point is ``ResearchOrchestrator.run``. The
+    planner must NOT be reached: if it is, the turn has silently fallen back
+    to the old path.
+    """
     agent = ChatAgent()
     stream = _Stream()
     _with_key(monkeypatch)
@@ -188,24 +201,30 @@ async def test_yes_turn_runs_deep_research_on_the_original_question(monkeypatch)
 
     captured = {}
 
-    async def stop_at_planner(query, ctx, decision):
-        captured["query"] = query
-        captured["decision"] = decision
+    async def stop_at_orchestrator(self, question, parent_ctx, s, cancel):
+        captured["query"] = question
         raise RuntimeError("stop here")
+
+    async def planner_must_not_run(query, ctx, decision):
+        raise AssertionError("consented research fell back to the planner")
 
     async def no_attachments(query, s, ctx):
         return None
 
+    from app.services.research_orchestrator import ResearchOrchestrator
+    monkeypatch.setattr(ResearchOrchestrator, "run", stop_at_orchestrator)
     monkeypatch.setattr(agent, "_setup_context", setup)
     monkeypatch.setattr(agent, "_resolve_attachments", no_attachments)
-    monkeypatch.setattr(agent, "_generate_plan", stop_at_planner)
+    monkeypatch.setattr(agent, "_generate_plan", planner_must_not_run)
 
-    with pytest.raises(RuntimeError, match="stop here"):
-        await agent.run_with_streaming("yes", stream, asyncio.Event(), {})
+    # The orchestrator's RuntimeError is caught by the deep-pass handler and
+    # turned into an error reply rather than propagating.
+    reply = await agent.run_with_streaming("yes", stream, asyncio.Event(), {})
 
     assert captured["query"] == QUESTION  # not "yes"
-    assert captured["decision"].preferred_tool == "deep_research"
-    assert captured["decision"].routing_source == "deep_research_offer_guard"
+    assert "error" in reply.lower()
+    plans = [e for e in stream.events if e.type == "plan"]
+    assert plans and "Deep research" in plans[0].message, "the plan event names the orchestrator"
     guards = [e.data.get("guard") for e in stream.events if getattr(e, "data", None)]
     assert "deep_research_offer" in guards
     acks = [e.message for e in stream.events if getattr(e, "data", None) and e.data.get("phase") == "fast_ack"]

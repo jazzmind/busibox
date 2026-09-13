@@ -198,10 +198,141 @@ def _ensure_openai_env():
 # when tools return large datasets (e.g. query_data with many records).
 MAX_TOOL_RESULT_CHARS = 12000
 
+# Per-tool overrides. The default exists to stop a runaway query flooding the
+# context; applied to a tool whose *whole output is the deliverable* it instead
+# throws away what the tool was run for. deep_research is the case: a paid,
+# multi-minute, user-consented pass returning a 30k-character cited report,
+# cut to 12k before the model read it. Production, 2026-09-11.
+TOOL_RESULT_CHAR_LIMITS: Dict[str, int] = {
+    "deep_research": 120000,
+}
 
-def _truncate_tool_result(result: Any) -> Any:
+
+def _tool_result_char_limit(tool_name: str) -> int:
+    """Truncation budget for *tool_name*, defaulting to MAX_TOOL_RESULT_CHARS."""
+    return TOOL_RESULT_CHAR_LIMITS.get(tool_name, MAX_TOOL_RESULT_CHARS)
+
+
+def _has_research_report(tool_results: Optional[Dict[str, Any]]) -> bool:
+    """True when this turn produced a non-empty deep-research report.
+
+    Attribute-based rather than keyed on "deep_research" so any future research
+    tool returning a ``report`` gets the same treatment.
     """
-    Truncate a tool result if its serialized form exceeds MAX_TOOL_RESULT_CHARS.
+    for result in (tool_results or {}).values():
+        if str(getattr(result, "report", "") or "").strip():
+            return True
+    return False
+
+
+# Applied only when _has_research_report is True. The chat agent's standing
+# instruction is "Mobile-Friendly Responses: prefer short paragraphs, avoid long
+# walls of text" — correct for a chat turn, and the reason a four-minute,
+# multi-source research pass came back as a page and a half. This says so
+# explicitly; a directive that merely asks for more detail loses to a specific
+# formatting rule sitting in the system prompt.
+RESEARCH_SYNTHESIS_DIRECTIVE = """## Research Report Mode
+
+This turn ran a deep research pass and the user waited several minutes for it.
+The "keep responses concise and mobile-friendly" guidance in your instructions
+does NOT apply to this answer — it is written for ordinary chat turns. Write a
+full report instead.
+
+- **Length**: go long. Cover every substantive finding in the research above
+  rather than summarising it. A short answer here wastes the research.
+- **Structure**: use `##` sections with descriptive headings. Lead with the
+  direct answer or bottom line, then the supporting detail, then open questions
+  and what would change the picture.
+- **Tables**: use a markdown table wherever the content is comparative or
+  parallel — competing claims and their status, options against criteria,
+  actors and their positions, figures over time. Tables carry this material
+  far better than prose does.
+- **Citations**: preserve the inline links and numbered citations from the
+  research report. Every substantive claim should be traceable.
+- **Honesty**: keep confirmed findings, contested claims, and unverified
+  rumour visibly separate. Say plainly when something is not yet settled."""
+
+# Appended only where the model can actually call tools — the loop path's
+# system prompt. The plain synthesis pass has no tools and a guard that
+# forbids tool-call syntax, so telling it to "call render_chart" would at
+# best be ignored and at worst leak a fake call into the answer.
+RESEARCH_CHART_DIRECTIVE = """- **Charts**: when the findings contain a numeric series — figures over
+  time, quantities across categories, shares of a whole — call `render_chart`
+  with the actual numbers and place the markdown image it returns where the
+  chart belongs, with one sentence on the takeaway. Keep the table too; the
+  chart shows the shape, the table carries the values. Never estimate numbers
+  to fill a chart."""
+
+# Tools a loop-first turn may never call on its own. deep_research is a paid,
+# multi-minute pass behind a Yes/No consent gate and is run by the research
+# orchestrator; a loop with it in reach is one model decision away from
+# spending it without asking.
+LOOP_EXCLUDED_TOOLS = frozenset({"deep_research"})
+
+# Appended to the directive only when settings.research_mermaid_enabled is
+# True. Verified 2026-09-12 against busibox-frontend: the chat renderer
+# (apps/chat/src/components/chat/themes/marine/Messages.tsx) mounts
+# ReactMarkdown with remark-gfm and a single `a` component override. It has no
+# `code` override, so a ```mermaid block is displayed as raw source in a
+# <pre>. The `mermaid` package is a dependency of the chat app and a working
+# MermaidDiagram component exists in apps/portal/src/components/docs — it is
+# just not wired into chat. Flip the setting once it is.
+RESEARCH_MERMAID_DIRECTIVE = """- **Diagrams**: when a sequence of events or a decision/process flow is
+  genuinely central, add ONE Mermaid diagram in a ```mermaid fenced block.
+  Use only `timeline` or `flowchart TD`. Keep node labels under ~40 characters
+  and wrap any label containing punctuation in double quotes. Skip the diagram
+  entirely rather than forcing one — a broken diagram is worse than none."""
+
+# Injected into the loop's system prompt when the turn runs loop-first. The
+# static planner never needed this: it chose tools up front from a one-shot
+# classification. In a loop the model chooses the next tool from what the last
+# one returned, so it needs to know what each tool is *for* and when to stop.
+LOOP_MODE_DIRECTIVE = """## Working in a loop
+
+You are driving the tools yourself. Call one, read what it returns, decide
+what that changes, and call the next — do not queue up everything you might
+want in one go.
+
+- Start from the result you have, not the plan you imagined. If a search
+  returns the answer, stop searching.
+- Prefer a second, differently-phrased call over re-running the same one.
+  Identical calls are deduplicated and return the cached result.
+- Stop when a new call returns only sources or facts you have already seen.
+- If a tool reports that the time budget is exhausted, finish with what you
+  have and say what you could not verify.
+- Answer from the evidence you gathered. Do not invent a source you did not
+  fetch."""
+
+RESEARCH_LOOP_DIRECTIVE = """## Research tools — what each is for
+
+- `web_search` — breadth. Run 2–4 searches with genuinely different angles
+  before reading anything in depth. `search_depth="advanced"` is the default
+  and returns ~3 short snippets per page; it is for finding sources, not
+  reading them. Use `topic="news"` with a `time_range` for anything recent,
+  and `topic="finance"` for companies, markets, or figures.
+- `web_extract` — depth. When a search hit is clearly a strong source, extract
+  it to get the full page as clean markdown. Snippets are ~500 characters;
+  the substance is usually further down. Extract the best 2–5 sources, not
+  everything.
+- `web_map` — navigation. When the answer lives on a specific site (a
+  regulator, a company, a standards body, a project's docs), map the site
+  first with instructions describing what you are looking for, then extract
+  the pages it finds. Do not map the open web.
+- `deep_research` — do NOT call this from inside a loop. It is a separate
+  multi-minute pass the user has to consent to, and it is run by the
+  orchestrator, not by you.
+- `render_chart` — when you have a numeric series worth showing (figures over
+  time, a comparison of quantities), render it. Pass the actual numbers; the
+  tool returns a markdown image line to include in the answer.
+
+Keep every substantive claim traceable to a URL you actually fetched."""
+
+
+def _truncate_tool_result(result: Any, limit: int = MAX_TOOL_RESULT_CHARS) -> Any:
+    """
+    Truncate a tool result if its serialized form exceeds *limit* —
+    MAX_TOOL_RESULT_CHARS unless the tool has an entry in
+    TOOL_RESULT_CHAR_LIMITS (see _tool_result_char_limit).
     
     For results with a 'records' list (e.g. QueryDataOutput), progressively
     removes records until the result fits. Adds a _truncated flag and guidance
@@ -212,7 +343,7 @@ def _truncate_tool_result(result: Any) -> Any:
     try:
         if isinstance(result, BaseModel):
             serialized = result.model_dump_json()
-            if len(serialized) <= MAX_TOOL_RESULT_CHARS:
+            if len(serialized) <= limit:
                 return result
             
             # Try to truncate records-based results
@@ -223,7 +354,7 @@ def _truncate_tool_result(result: Any) -> Any:
                 original_count = len(records)
                 
                 # Progressively remove records until under limit
-                while len(json.dumps(data, default=str)) > MAX_TOOL_RESULT_CHARS and records:
+                while len(json.dumps(data, default=str)) > limit and records:
                     records.pop()
                 
                 data['records'] = records
@@ -243,9 +374,9 @@ def _truncate_tool_result(result: Any) -> Any:
             # For non-records results, truncate the serialized string
             data = result.model_dump()
             serialized = json.dumps(data, default=str)
-            if len(serialized) > MAX_TOOL_RESULT_CHARS:
-                truncated_str = serialized[:MAX_TOOL_RESULT_CHARS]
-                logger.info(f"Tool result string-truncated: {len(serialized)} -> {MAX_TOOL_RESULT_CHARS} chars")
+            if len(serialized) > limit:
+                truncated_str = serialized[:limit]
+                logger.info(f"Tool result string-truncated: {len(serialized)} -> {limit} chars")
                 return {
                     '_truncated': True,
                     '_note': 'Result was too large and has been truncated.',
@@ -255,13 +386,13 @@ def _truncate_tool_result(result: Any) -> Any:
         # Handle dict results
         elif isinstance(result, dict):
             serialized = json.dumps(result, default=str)
-            if len(serialized) > MAX_TOOL_RESULT_CHARS:
+            if len(serialized) > limit:
                 if 'records' in result and isinstance(result.get('records'), list):
                     total = result.get('total', len(result['records']))
                     records = list(result['records'])
                     original_count = len(records)
                     data = dict(result)
-                    while len(json.dumps(data, default=str)) > MAX_TOOL_RESULT_CHARS and records:
+                    while len(json.dumps(data, default=str)) > limit and records:
                         records.pop()
                     data['records'] = records
                     data['_truncated'] = True
@@ -277,19 +408,21 @@ def _truncate_tool_result(result: Any) -> Any:
         return result
 
 
-def _wrap_tool_with_truncation(tool_func: Callable) -> Callable:
+def _wrap_tool_with_truncation(tool_func: Callable, tool_name: Optional[str] = None) -> Callable:
     """
     Wrap a pydantic-ai tool function so its return value is truncated
-    if it exceeds MAX_TOOL_RESULT_CHARS.
-    
+    if it exceeds that tool's budget (see _tool_result_char_limit).
+
     Preserves the original function's signature, annotations, and metadata
     so pydantic-ai can introspect it correctly.
     """
+    limit = _tool_result_char_limit(tool_name or getattr(tool_func, "__name__", ""))
+
     @functools.wraps(tool_func)
     async def wrapper(*args, **kwargs):
         result = await tool_func(*args, **kwargs)
-        return _truncate_tool_result(result)
-    
+        return _truncate_tool_result(result, limit)
+
     # Preserve the full signature for pydantic-ai's introspection.
     # functools.wraps copies __name__, __doc__, __module__, __qualname__,
     # __dict__, and __wrapped__, but pydantic-ai also reads __signature__
@@ -337,6 +470,7 @@ TOOL_SCOPES: Dict[str, List[str]] = {
     "trigger_task_run": ["task.execute"],  # Self-continuation: trigger own task run
     "send_notification": [],  # No special auth needed (uses configured providers)
     "generate_image": ["data.write"],
+    "render_chart": ["data.write"],  # stores the PNG through the same upload path
     "transcribe_audio": ["data.read"],
     "text_to_speech": ["data.write"],
     "memory_search": [],
@@ -377,9 +511,18 @@ TOOL_CLASSES: Dict[str, Dict[str, Any]] = {
     "web_scraper": {"class": "slow", "timeout": 180},
     "web_extract": {"class": "slow", "timeout": 90},
     "web_map": {"class": "slow", "timeout": 160},
-    "deep_research": {"class": "slow", "timeout": 300},
+    # Outer kill switch for the whole tool call. Must stay above
+    # settings.tavily_research_timeout_seconds (420) with headroom for the
+    # create POST and the final poll — otherwise asyncio.wait_for cancels the
+    # call and the tool's own timeout branch, which returns a useful message
+    # and logs the request_id, never runs. Pinned by
+    # tests/unit/test_research_report_depth.py.
+    "deep_research": {"class": "slow", "timeout": 480},
     "playwright_browser": {"class": "slow", "timeout": 120},
     "generate_image": {"class": "slow", "timeout": 120},
+    # matplotlib draw is ~200ms; the upload dominates. Fast so it runs in
+    # the first parallel wave on the plan path and never blocks synthesis.
+    "render_chart": {"class": "fast", "timeout": 15},
     "transcribe_audio": {"class": "slow", "timeout": 60},
     "text_to_speech": {"class": "slow", "timeout": 180},
     "send_notification": {"class": "slow", "timeout": 30},
@@ -396,6 +539,9 @@ class PipelineStep:
     tool: str
     args: Dict[str, Any] = field(default_factory=dict)
     condition: Optional[Callable[[Any], bool]] = None  # Optional condition to run step
+    # Planner step id, when this step came from an ExecutionPlan. Carried
+    # onto the ToolCallRecord so a call can be traced back to its plan step.
+    step_id: Optional[str] = None
 
 
 @dataclass
@@ -558,6 +704,14 @@ def _register_builtin_tools():
     
     ToolRegistry.register("get_weather", get_weather, WeatherOutput)
     ToolRegistry.register("generate_image", generate_image, ImageOutput)
+    # Charts from numbers the model already has. Registered even when
+    # matplotlib is absent: the tool then returns a clear error telling the
+    # model to use a table, which beats the tool silently not existing.
+    try:
+        from app.tools.chart_tool import render_chart, ChartOutput
+        ToolRegistry.register("render_chart", render_chart, ChartOutput)
+    except ImportError as e:
+        logger.warning(f"Could not register render_chart tool: {e}")
     ToolRegistry.register("transcribe_audio", transcribe_audio, TranscriptionOutput)
     ToolRegistry.register("text_to_speech", text_to_speech, TTSOutput)
     ToolRegistry.register("memory_search", memory_search, MemorySearchOutput)
@@ -641,6 +795,32 @@ except ImportError as e:
 
 
 @dataclass
+class ToolCallRecord:
+    """One tool invocation, in the order it happened.
+
+    ``AgentContext.tool_results`` is keyed by tool name, so a second call to
+    the same tool used to overwrite the first — which meant no execution path
+    could ever call ``document_search`` twice and keep both answers. That is
+    the one structural thing standing between a single static plan and an
+    agent loop, and it is why query fusion had to fan out *inside* one
+    ``document_search`` call instead of as separate steps.
+
+    This record is append-only. ``tool_results`` keeps its "latest result per
+    tool" meaning so the by-name readers (document_agent, weather_agent,
+    image_agent, chat_agent) and the ``.items()`` iterators are untouched.
+    """
+    tool: str
+    args: Dict[str, Any]
+    result: Any
+    elapsed_ms: int
+    ok: bool = True
+    step_id: Optional[str] = None
+    error: Optional[str] = None
+    # Which execution path produced it: "plan", "loop", "stream", or a worker id
+    source: str = "plan"
+
+
+@dataclass
 class AgentContext:
     """Runtime context for agent execution."""
     principal: Optional[Principal] = None
@@ -686,6 +866,43 @@ class AgentContext:
     turn_started: float = 0.0
     # Deduplication cache for tool calls: maps (tool_name, args_json) -> result
     _tool_call_dedup: Dict[str, Any] = field(default_factory=dict)
+    # Every tool invocation this turn, in order. See ToolCallRecord.
+    tool_calls: List[ToolCallRecord] = field(default_factory=list)
+    # Set when the turn is running loop-first ("complex" | "research"). Selects
+    # the loop-mode guidance in _build_enriched_system_prompt.
+    loop_mode: Optional[str] = None
+    # time.monotonic() after which the loop refuses to start new tool calls.
+    # 0.0 means no deadline.
+    loop_deadline: float = 0.0
+
+    def record_tool_call(
+        self,
+        tool: str,
+        args: Optional[Dict[str, Any]],
+        result: Any,
+        elapsed_ms: int,
+        *,
+        ok: bool = True,
+        step_id: Optional[str] = None,
+        error: Optional[str] = None,
+        source: str = "plan",
+    ) -> ToolCallRecord:
+        """Append to ``tool_calls`` and update ``tool_results`` (latest wins).
+
+        The single write path for both structures so they cannot drift.
+        """
+        record = ToolCallRecord(
+            tool=tool, args=dict(args or {}), result=result, elapsed_ms=elapsed_ms,
+            ok=ok, step_id=step_id, error=error, source=source,
+        )
+        self.tool_calls.append(record)
+        if ok:
+            self.tool_results[tool] = result
+        return record
+
+    def calls_for(self, tool: str) -> List[ToolCallRecord]:
+        """All successful invocations of *tool* this turn, oldest first."""
+        return [c for c in self.tool_calls if c.tool == tool and c.ok]
 
 
 class BaseStreamingAgent(StreamingAgent):
@@ -1700,25 +1917,36 @@ class BaseStreamingAgent(StreamingAgent):
                 else:
                     return await tool_func(**filtered_args)
 
+            t_call = time.monotonic()
             try:
                 result = await asyncio.wait_for(_run_tool(), timeout=tool_timeout_seconds)
             except asyncio.TimeoutError:
                 logger.error(f"Tool {step.tool} timed out after {tool_timeout_seconds}s")
+                context.record_tool_call(
+                    step.tool, filtered_args, None,
+                    round((time.monotonic() - t_call) * 1000),
+                    ok=False, step_id=step.step_id,
+                    error=f"timed out after {tool_timeout_seconds}s", source="plan",
+                )
                 await stream(error(
                     source=step.tool,
                     message=f"Tool {step.tool} timed out after {tool_timeout_seconds}s"
                 ))
                 return None
-            
+
             # Log result details for debugging
             result_count = getattr(result, 'result_count', None)
             if result_count is not None:
                 logger.info(f"Tool {step.tool} completed with {result_count} results")
             else:
                 logger.info(f"Tool {step.tool} completed, result type: {type(result).__name__}")
-            
-            # Store result
-            context.tool_results[step.tool] = result
+
+            # Store result: appends to tool_calls and sets tool_results[tool]
+            context.record_tool_call(
+                step.tool, filtered_args, result,
+                round((time.monotonic() - t_call) * 1000),
+                step_id=step.step_id, source="plan",
+            )
             
             # Stream tool result
             result_data = result.model_dump() if hasattr(result, 'model_dump') else str(result)
@@ -1732,6 +1960,12 @@ class BaseStreamingAgent(StreamingAgent):
             
         except Exception as e:
             logger.error(f"Tool execution error for {step.tool}: {e}", exc_info=True)
+            # `filtered_args` may not exist yet if we failed before argument
+            # filtering; record what we have so tool_calls stays complete.
+            context.record_tool_call(
+                step.tool, locals().get("filtered_args") or dict(step.args or {}), None, 0,
+                ok=False, step_id=getattr(step, "step_id", None), error=str(e), source="plan",
+            )
             await stream(error(
                 source=step.tool,
                 message=f"Tool error: {str(e)}"
@@ -1777,14 +2011,46 @@ class BaseStreamingAgent(StreamingAgent):
         tools = []
         if not force_structured_output:
             for tool_name in self.config.tools:
+                # A loop-first turn must never be able to start a paid,
+                # multi-minute deep_research pass on its own: that tool is
+                # gated behind the user's Yes/No and owned by the research
+                # orchestrator. Withholding it here (rather than relying on a
+                # prompt instruction) makes the consent gate structural.
+                if context.loop_mode and tool_name in LOOP_EXCLUDED_TOOLS:
+                    continue
                 tool_func = ToolRegistry.get(tool_name)
                 if tool_func:
-                    wrapped_tool = _wrap_tool_with_truncation(tool_func)
+                    wrapped_tool = _wrap_tool_with_truncation(tool_func, tool_name)
 
                     @functools.wraps(wrapped_tool)
                     async def monitored_tool(*args, _tool_name=tool_name, _tool=wrapped_tool, **kwargs):
                         if cancel.is_set():
                             return ""
+                        # Wall-clock budget for loop-first turns. Refusing the
+                        # *next* call — rather than cancelling the run — lets the
+                        # model see the refusal and write up what it has instead
+                        # of the user getting a cut-off stream.
+                        if context.loop_deadline and time.monotonic() > context.loop_deadline:
+                            over = round(time.monotonic() - context.loop_deadline)
+                            logger.warning(
+                                "Loop budget exhausted; refusing %s (%ds past deadline)",
+                                _tool_name, over,
+                            )
+                            context.record_tool_call(
+                                _tool_name, dict(kwargs) if kwargs else {}, None, 0,
+                                ok=False, error=f"refused: loop budget exhausted ({over}s over)",
+                                source="loop",
+                            )
+                            await stream(thought(
+                                source=self.name,
+                                message="Time budget reached — finishing with what has been gathered.",
+                                data={"phase": "budget", "skipped_tool": _tool_name},
+                            ))
+                            return (
+                                "TIME BUDGET EXHAUSTED: do not call more tools. "
+                                "Answer now from the evidence already gathered and "
+                                "state clearly what you were not able to verify."
+                            )
                         input_payload: Dict[str, Any]
                         if kwargs:
                             input_payload = dict(kwargs)
@@ -1819,7 +2085,9 @@ class BaseStreamingAgent(StreamingAgent):
                                 f"Tool {_tool_name} complete",
                                 extra={"elapsed_ms": tool_ms},
                             )
-                            context.tool_results[_tool_name] = result
+                            context.record_tool_call(
+                                _tool_name, input_payload, result, tool_ms, source="loop",
+                            )
                             context._tool_call_dedup[dedup_key] = result
                             result_data = (
                                 result.model_dump()
@@ -1839,14 +2107,21 @@ class BaseStreamingAgent(StreamingAgent):
                             logger.error(
                                 f"Tool {_tool_name} timed out after {timeout_s}s ({tool_ms}ms elapsed)"
                             )
+                            context.record_tool_call(
+                                _tool_name, input_payload, None, tool_ms, ok=False,
+                                error=f"timed out after {timeout_s}s", source="loop",
+                            )
                             await stream(error(
                                 source=_tool_name,
                                 message=f"{_tool_name} timed out after {timeout_s}s",
                             ))
                             raise RuntimeError(f"{_tool_name} timed out after {timeout_s}s")
                         except Exception as e:
-                            logger.error(
-                                f"Tool {_tool_name} failed after {round((time.monotonic() - t_tool) * 1000)}ms: {e}",
+                            tool_ms = round((time.monotonic() - t_tool) * 1000)
+                            logger.error(f"Tool {_tool_name} failed after {tool_ms}ms: {e}")
+                            context.record_tool_call(
+                                _tool_name, input_payload, None, tool_ms, ok=False,
+                                error=str(e), source="loop",
                             )
                             await stream(error(
                                 source=_tool_name,
@@ -2245,19 +2520,24 @@ class BaseStreamingAgent(StreamingAgent):
                     await _process_chunk(chunk)
 
             elif isinstance(event, FunctionToolResultEvent):
-                # PydanticAI event schema can vary by version; avoid hard
-                # dependence on tool_call_part to prevent runtime crashes.
-                tool_name = (
-                    getattr(event, "tool_name", None)
-                    or getattr(getattr(event, "tool_call_part", None), "tool_name", None)
-                    or getattr(getattr(event, "tool_call", None), "tool_name", None)
-                    or "tool"
-                )
-                result_str = str(event.result.content) if hasattr(event.result, "content") else str(event.result)
-                # monitored_tool() already emits tool_result; only fall back here
-                # if the tool wasn't captured in the wrapped callback path.
-                if tool_name not in context.tool_results:
-                    context.tool_results[tool_name] = result_str
+                # pydantic-ai ≥1.x: the payload is `event.part` (ToolReturnPart
+                # or RetryPromptPart), both carrying `tool_name`; `.result` is a
+                # deprecated alias. The previous lookups (`event.tool_name`,
+                # `.tool_call_part`, `.tool_call`) matched nothing on the
+                # installed version, so every fallback landed as "tool".
+                part = getattr(event, "part", None)
+                if part is None:
+                    part = getattr(event, "result", None)
+                tool_name = getattr(part, "tool_name", None) or "tool"
+                payload = getattr(part, "content", part)
+                result_str = str(payload)
+                # monitored_tool() records and emits every call it wraps; this
+                # is only for a call that somehow bypassed the wrapper. Guard
+                # on tool_calls, not tool_results, so a second call to the
+                # same tool is not mistaken for an uncaptured one.
+                already = any(c.tool == tool_name for c in context.tool_calls)
+                if not already and tool_name != "tool":
+                    context.record_tool_call(tool_name, {}, result_str, 0, source="stream")
                     await stream(tool_result(
                         source=tool_name,
                         message=result_str[:500],
@@ -2595,6 +2875,34 @@ class BaseStreamingAgent(StreamingAgent):
             parts.append(STATIC_GROUNDING_RULES)
         except Exception as e:  # noqa: BLE001
             logger.debug(f"grounding rules skipped: {e}")
+
+        # Loop-first turns: how to work iteratively, and for research turns
+        # what each Tavily-backed tool is for. Only tools the agent actually
+        # has are described, so a worker with a tool subset is not told about
+        # tools it cannot call.
+        if context.loop_mode:
+            parts.append("")
+            parts.append(LOOP_MODE_DIRECTIVE)
+            available = set(self.config.tools)
+            # Only an agent that can actually search is told how to search.
+            # The research lead has render_chart alone and has "not seen the
+            # web itself"; telling it to run searches would contradict that.
+            if context.loop_mode in ("research", "research_worker") and (
+                available & {"web_search", "web_extract", "web_map"}
+            ):
+                parts.append("")
+                parts.append(RESEARCH_LOOP_DIRECTIVE)
+            # The report format goes to whoever writes the *answer*: a
+            # loop-first research turn, or the orchestrator's lead. Workers
+            # return compact findings to the lead and must not be told to
+            # "go long" — their own instructions say the opposite.
+            if context.loop_mode == "research":
+                parts.append("")
+                parts.append(RESEARCH_SYNTHESIS_DIRECTIVE)
+                if "render_chart" in available:
+                    parts.append(RESEARCH_CHART_DIRECTIVE)
+                if getattr(get_settings(), "research_mermaid_enabled", False):
+                    parts.append(RESEARCH_MERMAID_DIRECTIVE)
 
         try:
             skills_prompt = get_skills_service().render_skills_prompt(context.principal)
@@ -3027,7 +3335,93 @@ class BaseStreamingAgent(StreamingAgent):
             fallback = self._build_fallback_response(query, context)
             await stream(content(source=self.name, message=fallback))
             return fallback
-    
+
+    @staticmethod
+    def _successful_invocations(context: AgentContext) -> List[tuple]:
+        """(heading, result) pairs for synthesis, one per successful tool call.
+
+        When a tool ran more than once the heading carries an ordinal
+        ("document_search #2") so the model can tell the answers apart.
+        ``llm_response`` is the loop's own final text, not evidence, and is
+        handled separately by the chat agent — it is never rendered here.
+        """
+        if context.tool_calls:
+            counts: Dict[str, int] = {}
+            for call in context.tool_calls:
+                if call.ok:
+                    counts[call.tool] = counts.get(call.tool, 0) + 1
+            seen: Dict[str, int] = {}
+            out: List[tuple] = []
+            for call in context.tool_calls:
+                if not call.ok or call.tool == "llm_response":
+                    continue
+                seen[call.tool] = seen.get(call.tool, 0) + 1
+                heading = (
+                    f"{call.tool} #{seen[call.tool]}" if counts[call.tool] > 1 else call.tool
+                )
+                out.append((heading, call.result))
+            return out
+        # Legacy: paths that write tool_results directly (status_agent etc.)
+        return [(name, r) for name, r in context.tool_results.items() if name != "llm_response"]
+
+    def _render_tool_result(self, heading: str, result: Any) -> List[str]:
+        """Markdown lines for one tool result, by result shape."""
+        parts: List[str] = []
+        if hasattr(result, 'context'):
+            # Document search style result
+            parts.append(f"\n### {heading}\n{result.context}")
+        elif hasattr(result, 'results') and isinstance(result.results, list):
+            # List of results
+            parts.append(f"\n### {heading} ({len(result.results)} items)")
+            for i, item in enumerate(result.results[:5], 1):
+                if hasattr(item, 'model_dump'):
+                    parts.append(f"\n{i}. {item.model_dump()}")
+                else:
+                    parts.append(f"\n{i}. {item}")
+        elif hasattr(result, 'report'):
+            # deep_research: cited markdown report plus its source list
+            report = str(getattr(result, "report", "") or "")
+            if report.strip():
+                # This cap, not the tool and not the model, is what made
+                # research answers read like summaries: a 30k-character
+                # report lost two thirds of itself here, silently, after
+                # the user had waited four minutes for it.
+                report_budget = getattr(
+                    get_settings(), "research_report_context_chars", 60000
+                )
+                if len(report) > report_budget:
+                    logger.info(
+                        "deep_research report trimmed for synthesis: %d -> %d chars",
+                        len(report), report_budget,
+                    )
+                parts.append(
+                    f"\n### {heading} (cited research report)\n{report[:report_budget]}"
+                )
+                sources = getattr(result, "sources", None) or []
+                if sources:
+                    parts.append("\nSources used by the report:")
+                    # DeepResearchOutput carries ResearchSource objects; the
+                    # orchestrator's ResearchBundle carries plain dicts.
+                    for src in sources[:40]:
+                        if isinstance(src, dict):
+                            title, url = src.get("title", "") or "", src.get("url", "") or ""
+                        else:
+                            title = getattr(src, "title", "") or ""
+                            url = getattr(src, "url", "") or ""
+                        parts.append(f"- {title} {url}".strip())
+            else:
+                parts.append(
+                    f"\n### {heading}\nNo report was produced "
+                    f"({getattr(result, 'status', 'unknown')}: {getattr(result, 'error', '') or 'no details'})."
+                )
+        elif hasattr(result, 'content'):
+            # Web scraper style result
+            parts.append(f"\n### {heading}\n{result.content[:2000]}")
+        else:
+            # Generic result
+            parts.append(f"\n### {heading}\n{result}")
+        return parts
+
     def _build_synthesis_context(self, query: str, context: AgentContext) -> str:
         """
         Build context string for synthesis.
@@ -3135,46 +3529,19 @@ class BaseStreamingAgent(StreamingAgent):
         parts.append(query)
         parts.append("")
         
-        # 6. Add tool results
-        if context.tool_results:
+        # 6. Add tool results.
+        #
+        # Rendered from ``tool_calls`` (every invocation, in order) rather than
+        # ``tool_results`` (latest per tool name), so that when a loop calls the
+        # same tool twice the model sees both answers. Falls back to
+        # ``tool_results`` for legacy paths that populate it directly.
+        invocations = self._successful_invocations(context)
+        if invocations:
             parts.append("## Tool Results")
-            for tool_name, result in context.tool_results.items():
-                if hasattr(result, 'context'):
-                    # Document search style result
-                    parts.append(f"\n### {tool_name}\n{result.context}")
-                elif hasattr(result, 'results') and isinstance(result.results, list):
-                    # List of results
-                    parts.append(f"\n### {tool_name} ({len(result.results)} items)")
-                    for i, item in enumerate(result.results[:5], 1):
-                        if hasattr(item, 'model_dump'):
-                            parts.append(f"\n{i}. {item.model_dump()}")
-                        else:
-                            parts.append(f"\n{i}. {item}")
-                elif hasattr(result, 'report'):
-                    # deep_research: cited markdown report plus its source list
-                    report = str(getattr(result, "report", "") or "")
-                    if report.strip():
-                        parts.append(f"\n### {tool_name} (cited research report)\n{report[:12000]}")
-                        sources = getattr(result, "sources", None) or []
-                        if sources:
-                            parts.append("\nSources used by the report:")
-                            for src in sources[:25]:
-                                title = getattr(src, "title", "") or ""
-                                url = getattr(src, "url", "") or ""
-                                parts.append(f"- {title} {url}".strip())
-                    else:
-                        parts.append(
-                            f"\n### {tool_name}\nNo report was produced "
-                            f"({getattr(result, 'status', 'unknown')}: {getattr(result, 'error', '') or 'no details'})."
-                        )
-                elif hasattr(result, 'content'):
-                    # Web scraper style result
-                    parts.append(f"\n### {tool_name}\n{result.content[:2000]}")
-                else:
-                    # Generic result
-                    parts.append(f"\n### {tool_name}\n{result}")
+            for heading, result in invocations:
+                parts.extend(self._render_tool_result(heading, result))
             parts.append("")
-        
+
         # 7. Tiered grounding policy chosen from the evidence above.
         try:
             from app.services.grounding import assess_grounding, grounding_prompt_section
@@ -3192,6 +3559,16 @@ class BaseStreamingAgent(StreamingAgent):
             parts.append("")
         except Exception as e:  # noqa: BLE001 — policy must never break synthesis
             logger.warning(f"grounding assessment skipped: {e}")
+
+        # A research pass the user waited minutes for is the one case where the
+        # agent's standing "keep it short, mobile-friendly" instruction is
+        # actively wrong. Injected last so it is the most recent thing the model
+        # reads, and only when there is a report to justify it.
+        if _has_research_report(context.tool_results):
+            parts.append(RESEARCH_SYNTHESIS_DIRECTIVE)
+            if getattr(get_settings(), "research_mermaid_enabled", False):
+                parts.append(RESEARCH_MERMAID_DIRECTIVE)
+            parts.append("")
 
         parts.append("Answer the user's question following the grounding policy above. Be conversational and reference relevant context when appropriate. If any tool results above are not relevant to the user's query, ignore them completely.")
         return "\n".join(parts)
