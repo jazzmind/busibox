@@ -299,3 +299,148 @@ def test_planner_backfills_tavily_args():
     assert agent._normalize_planned_step_args("web_map", {}, q)["url"] == "https://www.nae.usace.army.mil/Missions/"
     assert agent._resolve_planned_tool("deep_research") == "deep_research"
     assert agent._resolve_planned_tool("research") is None  # never upgrade a plain search by alias
+
+
+# ---------------------------------------------------------------------------
+# Research question normalisation
+#
+# The deep-research offer guard restores the user's original message as the
+# query so we run what they consented to. That is correct, but it means
+# "deep dive into a topic on X" reached Tavily verbatim and X competed with the
+# framing for the research budget. Production, 2026-09-11.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("deep dive into a topic on the state of the dredging market for 2027",
+         "the state of the dredging market for 2027"),
+        ("do a deep dive on US port deepening appropriations",
+         "US port deepening appropriations"),
+        ("research into offshore wind cable trenching demand",
+         "offshore wind cable trenching demand"),
+        ("tell me about the Jones Act dredging fleet", "the Jones Act dredging fleet"),
+        ("   Research on   Boskalis  and Van Oord  ", "Boskalis and Van Oord"),
+        # A real question is not a wrapper — leave it alone.
+        ("What is the state of the dredging market for 2027?",
+         "What is the state of the dredging market for 2027?"),
+        # Stripping these would leave nothing to research; a vague brief beats
+        # an empty one.
+        ("deep dive", "deep dive"),
+        ("deep dive into it", "deep dive into it"),
+        ("", ""),
+    ],
+)
+def test_research_question_normalisation(raw, expected):
+    assert tavily_tools._clean_research_question(raw) == expected
+
+
+@pytest.mark.asyncio
+async def test_normalised_question_is_what_reaches_tavily(fake_http, no_sleep):
+    fake_http.queue.extend([
+        _Resp(201, {"request_id": "req-5"}),
+        _Resp(200, {"status": "completed", "content": "ok", "sources": []}),
+    ])
+    await tavily_tools.deep_research("deep dive into a topic on the state of the dredging market for 2027")
+    assert fake_http.calls[0]["json"]["input"] == "the state of the dredging market for 2027"
+
+
+# ---------------------------------------------------------------------------
+# Outcome logging
+#
+# completed/failed/timeout all returned silently; only the two exception
+# handlers logged. A 240s timeout left "Executing tool deep_research" with
+# nothing after it, so a turn could only be diagnosed from missing evidence.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_completed_research_is_logged(fake_http, no_sleep, caplog):
+    fake_http.queue.extend([
+        _Resp(201, {"request_id": "req-6"}),
+        _Resp(200, {"status": "completed", "content": "x" * 500,
+                    "sources": [{"title": "S", "url": "https://s.example"}]}),
+    ])
+    with caplog.at_level("INFO", logger="app.tools.tavily_tools"):
+        out = await tavily_tools.deep_research("the dredging market in 2027")
+    assert out.success
+    record = next(r for r in caplog.records if "deep_research completed" in r.getMessage())
+    message = record.getMessage()
+    assert "req-6" in message
+    assert "report_chars=500" in message
+    assert "sources=1" in message
+
+
+@pytest.mark.asyncio
+async def test_failed_research_is_logged_as_a_warning(fake_http, no_sleep, caplog):
+    fake_http.queue.extend([_Resp(201, {"request_id": "req-7"}), _Resp(200, {"status": "failed"})])
+    with caplog.at_level("INFO", logger="app.tools.tavily_tools"):
+        await tavily_tools.deep_research("the dredging market in 2027")
+    record = next(r for r in caplog.records if "deep_research failed" in r.getMessage())
+    assert record.levelname == "WARNING"
+    assert "req-7" in record.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_timed_out_research_is_logged(fake_http, no_sleep, monkeypatch, caplog):
+    """The case that motivated this: 240s elapses and nothing is written down."""
+    class _S:
+        tavily_research_timeout_seconds = 30
+        tavily_research_default_model = "auto"
+    monkeypatch.setattr(tavily_tools, "get_settings", lambda: _S())
+    clock = iter([0.0, 100.0, 100.0, 100.0, 100.0])
+    monkeypatch.setattr(tavily_tools.time, "monotonic", lambda: next(clock))
+    fake_http.queue.extend([_Resp(201, {"request_id": "req-8"}), _Resp(202, {"status": "in_progress"})])
+
+    with caplog.at_level("INFO", logger="app.tools.tavily_tools"):
+        out = await tavily_tools.deep_research("the dredging market in 2027")
+
+    assert out.status == "timeout"
+    record = next(r for r in caplog.records if "deep_research timeout" in r.getMessage())
+    assert record.levelname == "WARNING"
+    assert "req-8" in record.getMessage()
+    assert "report_chars=0" in record.getMessage()
+
+
+# ---------------------------------------------------------------------------
+# Report length
+#
+# output_length defaulted to "standard" in the signature and the planner never
+# overrode it, so every multi-minute research pass returned a summary-sized
+# report. See tests/unit/test_research_report_depth.py for the other two caps.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_output_length_defaults_to_the_configured_length(fake_http, no_sleep):
+    fake_http.queue.extend([
+        _Resp(201, {"request_id": "req-9"}),
+        _Resp(200, {"status": "completed", "content": "report", "sources": []}),
+    ])
+    await tavily_tools.deep_research("the dredging market in 2027")
+    from app.config.settings import get_settings
+    assert fake_http.calls[0]["json"]["output_length"] == get_settings().tavily_research_output_length
+    assert fake_http.calls[0]["json"]["output_length"] == "long"
+
+
+@pytest.mark.asyncio
+async def test_explicit_output_length_still_wins(fake_http, no_sleep):
+    fake_http.queue.extend([
+        _Resp(201, {"request_id": "req-10"}),
+        _Resp(200, {"status": "completed", "content": "report", "sources": []}),
+    ])
+    await tavily_tools.deep_research("a narrow question", output_length="short")
+    assert fake_http.calls[0]["json"]["output_length"] == "short"
+
+
+@pytest.mark.asyncio
+async def test_a_bogus_output_length_falls_back_to_long_not_standard(fake_http, no_sleep):
+    """The old code sent "standard" for anything unrecognised, which is how a
+    typo or a hallucinated planner argument silently shortened a report."""
+    fake_http.queue.extend([
+        _Resp(201, {"request_id": "req-11"}),
+        _Resp(200, {"status": "completed", "content": "report", "sources": []}),
+    ])
+    await tavily_tools.deep_research("a question", output_length="enormous")
+    assert fake_http.calls[0]["json"]["output_length"] == "long"

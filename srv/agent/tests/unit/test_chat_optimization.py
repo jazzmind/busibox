@@ -89,7 +89,15 @@ async def test_generate_plan_fallback_prioritizes_document_library_search(monkey
 
 @pytest.mark.asyncio
 async def test_chat_agent_streams_plan_progress_and_interim(monkeypatch):
-    """The two-phase flow should emit plan/progress/interim events before final content."""
+    """The two-phase flow should emit plan/progress/interim events before final content.
+
+    This exercises the *planner* path. A research-tier turn now runs
+    loop-first by default (chat_loop_first_tiers), which skips the planner
+    entirely — so pin the tiers empty here; the plan path must keep working
+    when the loop is switched off.
+    """
+    from app.config.settings import get_settings
+    monkeypatch.setattr(get_settings(), "chat_loop_first_tiers", [])
     agent = ChatAgent()
     collector = StreamCollector()
     cancel = asyncio.Event()

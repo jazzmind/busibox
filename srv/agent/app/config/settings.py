@@ -155,6 +155,32 @@ class Settings(BaseSettings):
         description="Max seconds to wait for the clarify review before keeping the original decision",
     )
 
+    # Loop-first execution for hard turns.
+    #
+    # The chat agent plans once and executes a static list of tool steps. That
+    # is cheap and predictable for simple questions and wrong for hard ones:
+    # nothing looks at a tool's result and decides what to do next. The
+    # LLM-driven loop (_execute_llm_driven) already exists — the model calls
+    # a tool, reads the result, reasons, calls the next — but was wired as the
+    # fallback. These settings make it the default for the tiers where it
+    # pays for itself, and leave the planner in charge everywhere else.
+    chat_loop_first_tiers: List[str] = Field(
+        default_factory=lambda: ["complex", "research"],
+        description=(
+            "Fast-ack complexity/action tiers that skip the planner and let the model "
+            "drive tools in a loop. Empty list restores plan-once everywhere."
+        ),
+    )
+    chat_loop_budget_seconds: int = Field(
+        300,
+        description=(
+            "Wall-clock budget for one loop-driven turn. Past the deadline the loop "
+            "refuses to start new tool calls and tells the model to finish with what "
+            "it has, rather than cancelling mid-answer. deep_research inside a loop is "
+            "not exempt — the orchestrator owns long research, not the chat loop."
+        ),
+    )
+
     # Chat turn budget (escalation guards)
     chat_max_tool_steps: int = Field(
         6,
@@ -222,12 +248,88 @@ class Settings(BaseSettings):
     search_tavily_enabled: bool = Field(False, description="Enable Tavily search")
     tavily_api_key: Optional[str] = Field(None, description="Tavily API key")
     tavily_research_timeout_seconds: int = Field(
-        240,
-        description="Max seconds to wait for a Tavily deep_research task before returning what is available",
+        420,
+        description=(
+            "Max seconds to wait for a Tavily deep_research task before returning what is "
+            "available. Was 240, and a successful production run finished at 236.6s — under "
+            "the wire by three seconds. Asking for 'long' reports makes them slower still, so "
+            "the old value would have converted successes into timeouts. Must stay comfortably "
+            "below TOOL_CLASSES['deep_research']['timeout'], which kills the call outright."
+        ),
     )
     tavily_research_default_model: str = Field(
         "auto",
         description="Tavily research agent model: mini (narrow questions), pro (multi-topic), auto",
+    )
+    tavily_research_output_length: str = Field(
+        "long",
+        description=(
+            "Tavily research report length: short, standard or long. The planner never "
+            "set this, so every multi-minute research pass returned a 'standard' report "
+            "and the answer read like a summary. Deep research is opt-in and slow — when "
+            "a user waits four minutes for it, depth is the point."
+        ),
+    )
+    # Deep-research orchestrator: lead agent + parallel workers.
+    #
+    # A consented deep-research turn used to be one Tavily /research call.
+    # Now the lead decomposes the question, runs Tavily /research as a breadth
+    # worker alongside N search→extract→map workers (each an isolated loop on
+    # the research_worker purpose), then writes the report on `chat` with
+    # render_chart available. Gated behind the same Yes/No consent.
+    research_orchestrator_enabled: bool = Field(
+        True,
+        description="Run consented deep research through the lead+workers orchestrator. "
+                    "False restores the single Tavily /research call.",
+    )
+    research_max_workers: int = Field(
+        4,
+        description="Parallel search→extract→map workers per research pass, in addition "
+                    "to the Tavily /research breadth worker. Each is a full model loop.",
+    )
+    research_worker_budget_seconds: int = Field(
+        180,
+        description="Wall-clock budget per worker loop. Workers run in parallel, so the "
+                    "fan-out phase lasts about as long as the slowest worker.",
+    )
+    research_lead_budget_seconds: int = Field(
+        300,
+        description="Wall-clock budget for the lead to write the report (its only tool "
+                    "is render_chart, so this is mostly generation time).",
+    )
+    research_bundle_context_chars: int = Field(
+        200000,
+        description="Characters of combined worker findings handed to the research lead. "
+                    "Separate from research_report_context_chars (one Tavily report): the "
+                    "bundle is that report plus every worker. ~50k tokens; the lead runs "
+                    "on `chat`, so this must fit the smaller arm of that purpose.",
+    )
+    research_worker_purpose: str = Field(
+        "research_worker",
+        description="LiteLLM purpose alias workers run on. Map it in the admin UI.",
+    )
+    research_worker_fallback_purpose: str = Field(
+        "agent",
+        description="Used when research_worker_purpose is not a known alias yet "
+                    "(e.g. before the next LiteLLM deploy creates it).",
+    )
+
+    research_mermaid_enabled: bool = Field(
+        False,
+        description=(
+            "Ask research synthesis for Mermaid diagrams. Off until the chat UI renders "
+            "```mermaid blocks — verified 2026-09-12 that the marine Messages.tsx "
+            "renderer has no code-block override, so a diagram shows as raw source. "
+            "Tables and PNG images render today and are always used."
+        ),
+    )
+    research_report_context_chars: int = Field(
+        60000,
+        description=(
+            "Characters of a deep_research report passed to synthesis. Was hard-coded at "
+            "12000, which discarded most of a long report before the model ever saw it. "
+            "~15k tokens: safe even on the 200k-window arm of a load-balanced `chat`."
+        ),
     )
     deep_research_confirm: bool = Field(
         True,
