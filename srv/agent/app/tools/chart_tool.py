@@ -29,7 +29,7 @@ from typing import Any, List, Literal, Optional
 from pydantic import BaseModel, Field
 from pydantic_ai import RunContext
 
-from app.tools.image_tool import _upload_image_via_data_api
+from app.tools.image_tool import _data_api_token, _upload_image_via_data_api
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +205,7 @@ async def render_chart(
         return ChartOutput(success=False, error=error)
 
     # Check we can store the result before spending CPU drawing it.
-    token = getattr(getattr(ctx.deps, "busibox_client", None), "_token", None)
+    token = _data_api_token(getattr(ctx, "deps", None))
     if not token:
         return ChartOutput(success=False, error="No authenticated token available to store the chart.")
 

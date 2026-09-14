@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.middleware.jwt_auth import JWTAuthMiddleware
 from api.middleware.logging import LoggingMiddleware
-from api.routes import content, data, embeddings, extract, files, graph, graph_admin, health, libraries, markdown, provenance, roles, status, upload, authz, test_docs
+from api.routes import content, data, embeddings, extract, files, generate, graph, graph_admin, health, libraries, markdown, provenance, roles, status, upload, authz, test_docs
 from api.services.redis_service import RedisService
 from api.services.postgres import PostgresService
 from shared.config import Config
@@ -165,6 +165,7 @@ app.include_router(upload.router, prefix="/upload", tags=["Upload"])
 app.include_router(content.router, prefix="/data", tags=["Content Data"])
 app.include_router(embeddings.router, prefix="/api", tags=["Embeddings"])
 app.include_router(status.router, prefix="/status", tags=["Status"])
+app.include_router(generate.router, prefix="/files", tags=["Generate"])  # Before files router (has /{fileId} routes)
 app.include_router(files.router, prefix="/files", tags=["Files"])
 app.include_router(provenance.router, prefix="/files", tags=["Provenance"])
 app.include_router(markdown.router, prefix="/files", tags=["Markdown"])

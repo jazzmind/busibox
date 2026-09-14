@@ -11,6 +11,39 @@ changes — see release notes per version.
 
 ### Added
 
+- **Excel and Word files from AI Chat.** Two new agent tools,
+  `create_spreadsheet` and `create_document`, take a typed spec
+  (`busibox_common.document_specs.WorkbookSpec` / `DocumentSpec`) and hand
+  it to a new document engine in the data-api
+  (`POST /files/generate/xlsx`, `POST /files/generate/docx`,
+  `GET /files/generate/capabilities`; `srv/data/src/services/document_engine/`).
+  Workbooks are built with openpyxl (typed columns, per-row formulas,
+  totals, validations, conditional formats, named ranges, native charts),
+  recalculated with LibreOffice, scanned for every Excel error value and
+  checked against the spec's assertions; the recalculated copy is
+  delivered when it preserved the structure so previews and the indexer
+  see values. Documents are assembled as Markdown, rendered with pandoc
+  against a neutral `reference.docx` template, post-processed with
+  python-docx (table widths, repeating header rows, properties), verified
+  (headings, tables, figures) and rendered to PDF for a page count and a
+  first-page thumbnail. Files are stored through the normal upload path
+  (encrypted, indexed, in the user's Documents library); chat gets a
+  `?download=1` link. Consented deep-research turns export the report to
+  Word automatically (`RESEARCH_EXPORT_DOCX`, default on). Requests for a
+  file take the loop-first path via a `document_generation` semantic route
+  and a `document_intent_guard`. The data container now installs
+  `libreoffice-calc-nogui`, `libreoffice-writer-nogui`, `pandoc` and
+  Carlito/Caladea fonts; `.xlsx` is an accepted upload type. New agent
+  settings: `DOCUMENT_GENERATION_TIMEOUT_SECONDS`, `RESEARCH_EXPORT_DOCX`.
+  See `docs/users/09-chat-files.md` and
+  `docs/developers/chat-document-generation-plan.md`.
+- **Media proxy `?download=1` and restored portal route (busibox-frontend).**
+  `apps/portal/src/app/api/media/[fileId]` is back — the agent's image,
+  chart, audio and file links all point at `/portal/api/media/{id}` and
+  the route had been removed in Feb 2026 — and all three media proxies
+  (portal, media, documents) honour `?download=1` by passing through
+  data-api's `attachment; filename=` header.
+
 - **`skip_indexing` PDF upload option for data-api** (off by default).
   `POST /upload`'s `processing_config` now accepts `"skip_indexing": true`
   for PDFs: Pass 1 still extracts text and reaches stage `available` with

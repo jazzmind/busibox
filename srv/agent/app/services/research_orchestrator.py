@@ -43,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -296,6 +297,107 @@ def _sources_from_calls(calls: List[ToolCallRecord]) -> List[Dict[str, str]]:
     return list(seen.values())
 
 
+# ---------------------------------------------------------------------------
+# Report → DocumentSpec
+# ---------------------------------------------------------------------------
+
+_H1_RE = re.compile(r"^#\s+(.+?)\s*#*\s*$")
+_H2_RE = re.compile(r"^##\s+(.+?)\s*#*\s*$")
+_FENCE_RE = re.compile(r"^(```|~~~)")
+_SOURCES_HEADING_RE = re.compile(r"^#{1,3}\s+(?:sources|references|citations|bibliography)\b", re.IGNORECASE)
+_MAX_TITLE_WORDS = 14
+
+
+def _title_from_question(question: str) -> str:
+    words = re.sub(r"\s+", " ", question or "").strip().rstrip("?.!").split(" ")
+    title = " ".join(words[:_MAX_TITLE_WORDS])
+    if len(words) > _MAX_TITLE_WORDS:
+        title += "…"
+    return title[:1].upper() + title[1:] if title else "Research report"
+
+
+def _split_report(text: str):
+    """Split a Markdown report into (title, sections).
+
+    A leading H1 becomes the document title. H2 headings become document
+    sections (so the Word contents list reflects the report's structure);
+    text before the first H2 becomes a heading-less lead section. Fenced code
+    blocks are never split. Returns (title_or_None, [(heading_or_None, body)]).
+    """
+    lines = (text or "").splitlines()
+    title = None
+    sections: List[tuple] = []
+    current_heading: Optional[str] = None
+    buf: List[str] = []
+    in_fence = False
+    for line in lines:
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            buf.append(line)
+            continue
+        if not in_fence:
+            if title is None and not sections and not any(b.strip() for b in buf):
+                m1 = _H1_RE.match(line)
+                if m1:
+                    title = m1.group(1).strip()
+                    continue
+            m2 = _H2_RE.match(line)
+            if m2:
+                if any(b.strip() for b in buf) or current_heading:
+                    sections.append((current_heading, "\n".join(buf).strip()))
+                current_heading = m2.group(1).strip()
+                buf = []
+                continue
+        buf.append(line)
+    if any(b.strip() for b in buf) or current_heading:
+        sections.append((current_heading, "\n".join(buf).strip()))
+    if len(sections) < 2:
+        # Not enough structure to be worth splitting; keep the report whole.
+        body = "\n".join(l for l in lines if not (title and _H1_RE.match(l) and _H1_RE.match(l).group(1).strip() == title)).strip()
+        sections = [(None, body)]
+    return title, sections
+
+
+def build_report_spec(question: str, text: str, bundle: ResearchBundle):
+    """Turn the lead's Markdown report into a ``DocumentSpec`` for export.
+
+    Charts the lead placed with ``render_chart`` are ordinary image links in
+    the text; the data-api embeds them. Worker sources are appended as a
+    Sources section unless the report already has one.
+    """
+    from busibox_common.document_specs import DocumentSpec, SectionSpec, SourceSpec, safe_filename
+
+    title, parts = _split_report(text)
+    title = (title or _title_from_question(question))[:300]
+    sections = [
+        SectionSpec(heading=(h[:200] if h else None), level=1, markdown=body)
+        for h, body in parts
+        if body or h
+    ]
+    has_sources_section = any(
+        _SOURCES_HEADING_RE.match(line) for line in (text or "").splitlines()
+    )
+    sources = []
+    if not has_sources_section:
+        seen = set()
+        for src in bundle.sources[:200]:
+            url = (src.get("url") or "").strip()
+            name = (src.get("title") or url or "").strip()
+            if not name or url in seen:
+                continue
+            seen.add(url)
+            sources.append(SourceSpec(title=name[:300], url=url[:2000] or None))
+    return DocumentSpec(
+        filename=safe_filename(title, ".docx"),
+        title=title,
+        subtitle="Deep research report",
+        author="Busibox AI Chat",
+        toc=True,
+        sections=sections or [SectionSpec(markdown=text)],
+        sources=sources,
+    )
+
+
 class ResearchOrchestrator:
     def __init__(self, parent_agent: BaseStreamingAgent):
         self.parent = parent_agent
@@ -537,6 +639,56 @@ class ResearchOrchestrator:
             parent_ctx.tool_calls.append(call)
         return text
 
+    # -- export -------------------------------------------------------------
+
+    async def _export_report(
+        self, question: str, text: str, bundle: ResearchBundle,
+        parent_ctx: AgentContext, stream: StreamCallback,
+    ) -> str:
+        """Export the finished report as a Word document and return the
+        markdown to append under the answer ('' when export is off or failed).
+
+        Non-fatal by design: the report is already on screen; a failed export
+        costs the user a link, never the research.
+        """
+        if not getattr(self.settings, "research_export_docx", True):
+            return ""
+        deps = getattr(parent_ctx, "deps", None)
+        if deps is None:
+            logger.info("research export skipped: no deps on context")
+            return ""
+        try:
+            from app.tools.document_tools import export_document
+            spec = build_report_spec(question, text, bundle)
+            await stream(thought(
+                source="research", message="Exporting the report as a Word document…",
+                data={"phase": "export", "sections": len(spec.sections)},
+            ))
+            t0 = time.monotonic()
+            out = await export_document(deps, spec)
+            elapsed_ms = round((time.monotonic() - t0) * 1000)
+            parent_ctx.record_tool_call(
+                "create_document", {"filename": spec.filename, "sections": len(spec.sections)},
+                out, elapsed_ms, source="lead",
+            )
+            if not out.success or not out.markdown:
+                logger.warning("research export failed: %s | %s", out.error, "; ".join(out.issues[:3]))
+                await stream(thought(
+                    source="research",
+                    message=f"Word export skipped: {out.error or 'verification failed'}",
+                    data={"phase": "export", "ok": False, "issues": out.issues[:5]},
+                ))
+                return ""
+            await stream(thought(
+                source="research",
+                message=f"Report exported: {out.summary}",
+                data={"phase": "export", "ok": True, "file_id": out.file_id, "pages": out.pages, "ms": elapsed_ms},
+            ))
+            return out.markdown
+        except Exception as exc:  # noqa: BLE001 — never lose the report over the export
+            logger.warning("research export raised: %s", exc, exc_info=True)
+            return ""
+
     # -- run ----------------------------------------------------------------
 
     async def run(
@@ -627,6 +779,15 @@ class ResearchOrchestrator:
                     "deep_research", {"question": question}, bundle, fan_out_ms, source="lead",
                 )
                 return ""
+
+        if ok_count and text and not cancel.is_set():
+            export_md = await self._export_report(question, text, bundle, parent_ctx, stream)
+            if export_md:
+                # Stream the link as a final content chunk (the lead's text
+                # already streamed) and persist it as part of the answer.
+                tail = f"\n\n---\n\n{export_md}"
+                await stream(content(source="research", message=tail, data={"streaming": True, "partial": True}))
+                text = f"{text}{tail}"
 
         parent_ctx.tool_results["deep_research"] = bundle
         parent_ctx.tool_results["llm_response"] = text

@@ -21,13 +21,22 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install system dependencies
-# - poppler-utils: for PDF page image extraction (pdftoppm for ColPali)
+# - poppler-utils: for PDF page image extraction (pdftoppm for ColPali) and
+#   first-page thumbnails of generated Word documents
 # - libmagic1: for file type detection
 # - tesseract-ocr: fallback OCR when Surya is unavailable
+# - libreoffice-*-nogui, pandoc, fonts: document generation for AI Chat
+#   (see docs/developers/chat-document-generation-plan.md)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
     libmagic1 \
     tesseract-ocr \
+    libreoffice-calc-nogui \
+    libreoffice-writer-nogui \
+    pandoc \
+    fonts-crosextra-carlito \
+    fonts-crosextra-caladea \
+    fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first (for caching)

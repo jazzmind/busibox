@@ -34,6 +34,7 @@ from app.services.routing_guards import (
     cap_plan_steps,
     clarify_loop_guard,
     deep_research_offer_guard,
+    document_intent_guard,
     factual_guard,
     research_intent_guard,
 )
@@ -335,6 +336,8 @@ class ChatAgent(BaseStreamingAgent):
                 "send_notification",
                 "generate_image",
                 "render_chart",
+                "create_spreadsheet",
+                "create_document",
                 "transcribe_audio",
                 "memory_search",
                 "memory_save",
@@ -456,6 +459,13 @@ class ChatAgent(BaseStreamingAgent):
             "send_notification": "send_notification",
             "image": "generate_image",
             "generate_image": "generate_image",
+            "spreadsheet": "create_spreadsheet",
+            "excel": "create_spreadsheet",
+            "xlsx": "create_spreadsheet",
+            "create_spreadsheet": "create_spreadsheet",
+            "word_document": "create_document",
+            "docx": "create_document",
+            "create_document": "create_document",
             "transcription": "transcribe_audio",
             "transcribe_audio": "transcribe_audio",
             "tts": "text_to_speech",
@@ -843,6 +853,18 @@ class ChatAgent(BaseStreamingAgent):
                 outcome = research
                 decision.preferred_tool = "deep_research"
                 decision.complexity = "complex"
+        if not decision.preferred_tool:
+            # "make me a spreadsheet" / "as a Word document": the file tools
+            # take a typed spec, which only the loop path (full tool schemas)
+            # can fill reliably, so lift the turn to the complex tier. This
+            # applies even when the factual guard already fired (a request
+            # for a holidays spreadsheet is both), so it is checked
+            # independently of `outcome`.
+            document = document_intent_guard(query)
+            if document.triggered:
+                decision.complexity = "complex"
+                if not outcome.triggered:
+                    outcome = document
         if not outcome.triggered:
             return decision
         await self._stream_guard(stream, outcome)
@@ -1026,6 +1048,9 @@ class ChatAgent(BaseStreamingAgent):
             "- 'hi' -> action_type=direct, needs_tools=false\n"
             "- 'thanks, that helped' -> action_type=direct, needs_tools=false\n"
             "- 'can you help me with something' -> action_type=clarify, needs_tools=false\n"
+            "- 'make me a spreadsheet of the crew hours by week' -> action_type=analysis, needs_tools=true, complexity=complex\n"
+            "- 'put that in an excel file' -> action_type=analysis, needs_tools=true, complexity=complex\n"
+            "- 'write this up as a word document I can send' -> action_type=analysis, needs_tools=true, complexity=complex\n"
             + (
                 "- User has uploaded attachments. If the question is about the attachments, "
                 "set needs_tools=true and respond with something like 'Let me review that attachment.' "
@@ -1333,6 +1358,8 @@ class ChatAgent(BaseStreamingAgent):
             f"- Do NOT include `transcribe_audio` unless the user provided an audio file.{' Audio attachment detected.' if has_audio else ' No audio attachment present.'}\n"
             f"- Do NOT include `generate_image` unless the user explicitly asked for image generation.{' Image generation requested.' if has_image_request else ' No image request detected.'}\n"
             "- Do NOT include `text_to_speech` unless the user asked for voice/audio output.\n"
+            "- Do NOT include `create_spreadsheet` or `create_document` unless the user asked for a spreadsheet/Excel file or a Word document/.docx; "
+            "when they did, gather the data first (document_search / query_data / web_search) and pass the values in `spec`.\n"
             "- Do NOT include `create_task` unless the user explicitly asked to create a scheduled task.\n"
             "- Do NOT include `send_notification` unless the user explicitly asked to send a notification.\n"
             "- Do NOT include `memory_search` or `memory_save` unless the user asks about previous conversations or preferences.\n"

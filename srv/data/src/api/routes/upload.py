@@ -111,6 +111,7 @@ require_data_write = ScopeChecker("data.write")
 SUPPORTED_MIME_TYPES = {
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # DOCX
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",  # XLSX (extractor: openpyxl)
     "text/plain",
     "text/html",
     "text/markdown",

@@ -263,6 +263,25 @@ RESEARCH_CHART_DIRECTIVE = """- **Charts**: when the findings contain a numeric 
   chart shows the shape, the table carries the values. Never estimate numbers
   to fill a chart."""
 
+# Appended to the loop prompt when create_spreadsheet / create_document are
+# available. The tool docstrings carry the how; this carries the when — a
+# file is something the user asked for, not a default output format.
+DOCUMENT_TOOLS_DIRECTIVE = """## Files — spreadsheets and documents
+
+- `create_spreadsheet` — only when the user asks for a spreadsheet, Excel
+  file, workbook, or an editable/sortable table. Gather the numbers first
+  (search, documents, data queries), then build the spec from real values.
+  Put formulas in `column_formulas`/`totals`, not typed-out results, and add
+  an assertion for any figure you already know.
+- `create_document` — only when the user asks for a Word document, .docx,
+  or a report/memo "as a file". Write the content as Markdown sections; put
+  the `render_chart` image lines in the body so the charts embed.
+- Both return `markdown` with the download link: paste it into your answer
+  and describe the file in one sentence. If `success` is false, fix what
+  `issues` says and retry once or twice; if it still fails, say so plainly
+  and give the content inline instead. Never claim a file exists when the
+  tool did not return a link."""
+
 # Tools a loop-first turn may never call on its own. deep_research is a paid,
 # multi-minute pass behind a Yes/No consent gate and is run by the research
 # orchestrator; a loop with it in reach is one model decision away from
@@ -471,6 +490,8 @@ TOOL_SCOPES: Dict[str, List[str]] = {
     "send_notification": [],  # No special auth needed (uses configured providers)
     "generate_image": ["data.write"],
     "render_chart": ["data.write"],  # stores the PNG through the same upload path
+    "create_spreadsheet": ["data.write"],  # data-api document engine stores the file as the user
+    "create_document": ["data.write"],
     "transcribe_audio": ["data.read"],
     "text_to_speech": ["data.write"],
     "memory_search": [],
@@ -523,6 +544,11 @@ TOOL_CLASSES: Dict[str, Dict[str, Any]] = {
     # matplotlib draw is ~200ms; the upload dominates. Fast so it runs in
     # the first parallel wave on the plan path and never blocks synthesis.
     "render_chart": {"class": "fast", "timeout": 15},
+    # LibreOffice recalculation / PDF render inside the data-api; the tool's
+    # own HTTP timeout (settings.document_generation_timeout_seconds) is the
+    # inner limit, this is the outer kill switch.
+    "create_spreadsheet": {"class": "slow", "timeout": 240},
+    "create_document": {"class": "slow", "timeout": 240},
     "transcribe_audio": {"class": "slow", "timeout": 60},
     "text_to_speech": {"class": "slow", "timeout": 180},
     "send_notification": {"class": "slow", "timeout": 30},
@@ -712,6 +738,15 @@ def _register_builtin_tools():
         ToolRegistry.register("render_chart", render_chart, ChartOutput)
     except ImportError as e:
         logger.warning(f"Could not register render_chart tool: {e}")
+    # Excel / Word files via the data-api document engine. The spec models
+    # come from busibox_common so the schema the model sees is the one the
+    # engine validates.
+    try:
+        from app.tools.document_tools import create_document, create_spreadsheet, DocumentFileOutput
+        ToolRegistry.register("create_spreadsheet", create_spreadsheet, DocumentFileOutput)
+        ToolRegistry.register("create_document", create_document, DocumentFileOutput)
+    except ImportError as e:
+        logger.warning(f"Could not register document generation tools: {e}")
     ToolRegistry.register("transcribe_audio", transcribe_audio, TranscriptionOutput)
     ToolRegistry.register("text_to_speech", text_to_speech, TTSOutput)
     ToolRegistry.register("memory_search", memory_search, MemorySearchOutput)
@@ -2903,6 +2938,9 @@ class BaseStreamingAgent(StreamingAgent):
                     parts.append(RESEARCH_CHART_DIRECTIVE)
                 if getattr(get_settings(), "research_mermaid_enabled", False):
                     parts.append(RESEARCH_MERMAID_DIRECTIVE)
+            if available & {"create_spreadsheet", "create_document"}:
+                parts.append("")
+                parts.append(DOCUMENT_TOOLS_DIRECTIVE)
 
         try:
             skills_prompt = get_skills_service().render_skills_prompt(context.principal)

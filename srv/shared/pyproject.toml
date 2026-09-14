@@ -17,6 +17,8 @@ dependencies = [
     "httpx>=0.24",
     "structlog>=23.0",
     "cachetools>=5.3",
+    # Document generation specs shared by agent tools and the data-api engine
+    "pydantic>=2.5",
 ]
 
 [project.optional-dependencies]

@@ -91,16 +91,32 @@ async def _tavily_api_key() -> str:
     return ""
 
 
+# Tavily's non-standard status codes. The model reads these strings, and on
+# the first production research turn it described a 432 as "a rate limit
+# that will reset" — it will not. Say which kind of limit it is and whether
+# retrying can help, so the report tells the user the truth.
+_TAVILY_STATUS_NOTES = {
+    429: "rate limit (requests per minute) — retrying shortly will work",
+    432: "ACCOUNT USAGE LIMIT: the Tavily plan or API-key credit cap is exhausted — "
+         "retrying will not help; the Tavily plan or key limit must be raised",
+    433: "ACCOUNT USAGE LIMIT: the Tavily pay-as-you-go spending cap is exhausted — "
+         "retrying will not help; the cap must be raised on the Tavily dashboard",
+}
+
+
 def _error_detail(response: httpx.Response) -> str:
+    detail = ""
     try:
-        detail = response.json().get("detail")
-        if isinstance(detail, dict):
-            return str(detail.get("error") or detail)
-        if detail:
-            return str(detail)
+        raw = response.json().get("detail")
+        if isinstance(raw, dict):
+            detail = str(raw.get("error") or raw)
+        elif raw:
+            detail = str(raw)
     except Exception:  # noqa: BLE001
         pass
-    return response.text[:200]
+    detail = detail or response.text[:200]
+    note = _TAVILY_STATUS_NOTES.get(response.status_code)
+    return f"{detail} [{note}]" if note else detail
 
 
 # ---------------------------------------------------------------------------

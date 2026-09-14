@@ -32,6 +32,24 @@
     update_cache: yes
   tags: [data, data_install]
 
+# Document generation (AI Chat → Excel/Word): LibreOffice recalculates and
+# renders, pandoc writes .docx, poppler makes thumbnails. The *-nogui packages
+# pull no desktop stack; Carlito/Caladea are metric-compatible with Calibri/
+# Cambria so the neutral template renders with the intended layout.
+# See docs/developers/chat-document-generation-plan.md
+- name: Install document generation tooling
+  apt:
+    name:
+      - libreoffice-calc-nogui
+      - libreoffice-writer-nogui
+      - pandoc
+      - fonts-crosextra-carlito
+      - fonts-crosextra-caladea
+      - fonts-liberation
+    state: present
+    install_recommends: no
+  tags: [data, data_install, data_docgen]
+
 # Ensure Redis is running (for full data role deployment)
 # NOTE: Redis installation/configuration is in a separate play in site.yml (--tags redis)
 # This task only ensures it's started when deploying the full data stack
