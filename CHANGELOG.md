@@ -174,6 +174,12 @@ changes — see release notes per version.
 
 ### Fixed
 
+- **Word export failed on Debian 12 with "pandoc failed: Could not find data
+  file data/data/docx/[Content_Types].xml".** The engine passed `--sandbox`
+  to pandoc ≥ 2.15; Debian's pandoc is built without embedded data files, so
+  in sandbox mode the docx writer cannot read its own template pieces. The
+  flag is dropped — input isolation is already done by the engine, which
+  rewrites every image link to a file it fetched itself.
 - **Long chat answers were truncated mid-sentence** with no error anywhere.
   `ChatAgent` sent no `max_tokens`, relying on a comment in `base_agent` that
   said omitting it lets the model use its natural limit. That holds for the
