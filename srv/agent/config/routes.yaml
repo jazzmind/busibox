@@ -161,6 +161,33 @@ routes:
       - "compile a report with sources on environmental dredging regulations"
       - "research this topic thoroughly and cite your sources"
 
+  document_generation:
+    # Requests for a file the user can open in Excel or Word. complexity:
+    # complex sends the turn down the loop-first path, where the
+    # create_spreadsheet / create_document tools carry their full typed
+    # schemas; the static planner only sees one-line signatures and cannot
+    # fill a spec. Backed by document_intent_guard for phrasings not here.
+    decision:
+      action_type: analysis
+      needs_tools: true
+      response: "Sure — I'll gather the details and put the file together for you."
+      complexity: complex
+    threshold: 0.84
+    utterances:
+      - "make me a spreadsheet of the crew hours by week"
+      - "create an excel file with the equipment list and daily rates"
+      - "put that in an excel spreadsheet I can download"
+      - "export those numbers to excel"
+      - "build a budget workbook with totals and a chart"
+      - "write this up as a word document I can send"
+      - "turn that answer into a word doc"
+      - "give me a docx version of the summary"
+      - "create a memo in word summarizing the safety plan"
+      - "I need this as a downloadable document"
+      - "turn that into a short slide deck for the ops meeting"
+      - "make a powerpoint presentation on the bid results"
+      - "give me 10 slides summarizing the research"
+
   greeting:
     # Pure greetings are answered directly without tools. The response
     # here is final only until "Phi never answers alone" lands; greetings

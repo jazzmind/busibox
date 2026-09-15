@@ -11,7 +11,7 @@ personal MEDIA library) and served through the portal's media proxy route
 import base64
 import json
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 from pydantic import BaseModel, Field
@@ -36,6 +36,27 @@ class ImageOutput(BaseModel):
     file_id: Optional[str] = Field(default=None, description="File ID in the data store")
     revised_prompt: Optional[str] = Field(default=None, description="Model-revised prompt if provided")
     error: Optional[str] = Field(default=None, description="Error message when generation fails")
+
+
+def _data_api_token(deps: Any) -> Optional[str]:
+    """The caller's JWT for data-api, from the tool context's BusiboxClient.
+
+    The client keeps a default token plus per-audience exchanged tokens and
+    exposes them through ``token_for``; it has never had a ``_token``
+    attribute, which is what this function used to look for — so every
+    upload failed with "no authenticated token". Test doubles may still
+    provide a bare ``_token``; accept that last.
+    """
+    client = getattr(deps, "busibox_client", None)
+    if client is None:
+        return None
+    token_for = getattr(client, "token_for", None)
+    if callable(token_for):
+        try:
+            return token_for("data-api") or None
+        except Exception:  # noqa: BLE001 — fall through to the attribute probes
+            pass
+    return getattr(client, "_default_token", None) or getattr(client, "_token", None)
 
 
 async def _upload_image_via_data_api(
@@ -147,7 +168,7 @@ async def generate_image(
             )
         
         # Upload to MinIO via data-api
-        token = getattr(ctx.deps.busibox_client, "_token", None)
+        token = _data_api_token(ctx.deps)
         if not token:
             return ImageOutput(
                 success=False,

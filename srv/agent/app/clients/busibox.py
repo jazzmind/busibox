@@ -61,10 +61,18 @@ class BusiboxClient:
         self._tokens: Dict[str, str] = tokens_by_audience or {}
         self._default_headers = {"Authorization": f"Bearer {self._default_token}"}
 
+    def token_for(self, audience: str) -> str:
+        """The JWT to present to *audience* (e.g. ``"data-api"``): the
+        audience-scoped exchanged token when one exists, else the default.
+
+        Tools that call a Busibox API directly (rather than through this
+        client's methods) must use this instead of reaching for a private
+        attribute — there is no ``_token`` on this class."""
+        return self._tokens.get(audience, self._default_token)
+
     def _headers_for(self, audience: str) -> Dict[str, str]:
         """Return auth headers using the audience-specific token if available."""
-        token = self._tokens.get(audience, self._default_token)
-        return {"Authorization": f"Bearer {token}"}
+        return {"Authorization": f"Bearer {self.token_for(audience)}"}
 
     async def request(
         self,

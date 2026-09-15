@@ -223,3 +223,34 @@ async def test_plan_path_dict_series_is_coerced(monkeypatch):
 async def test_malformed_series_dict_is_a_clear_error():
     out = await render_chart(_Ctx(), "bar", "t", ["a"], [{"nope": 1}])  # type: ignore[list-item]
     assert out.success is False and "name, values" in out.error
+
+
+# ---------------------------------------------------------------------------
+# The token: BusiboxClient never had a `_token`
+# ---------------------------------------------------------------------------
+
+
+def test_data_api_token_comes_from_the_real_client():
+    """First production research turn: every render_chart call failed with
+    "No authenticated token available". BusiboxClient holds a default token
+    plus per-audience exchanged tokens — no `_token` attribute — so the
+    lookup (copied from generate_image, which had the same bug) was always
+    None. The helper must prefer the data-api-scoped token, fall back to the
+    default, and only then accept a test double's bare `_token`."""
+    from app.clients.busibox import BusiboxClient
+    from app.tools.image_tool import _data_api_token
+
+    class Scoped:
+        busibox_client = BusiboxClient("default", tokens_by_audience={"data-api": "scoped"})
+
+    class DefaultOnly:
+        busibox_client = BusiboxClient("default")
+
+    class NoClient:
+        busibox_client = None
+
+    assert _data_api_token(Scoped()) == "scoped"
+    assert _data_api_token(DefaultOnly()) == "default"
+    assert _data_api_token(NoClient()) is None
+    assert _data_api_token(_Ctx.deps) == "tok", "test doubles with a bare _token still work"
+    assert _data_api_token(None) is None

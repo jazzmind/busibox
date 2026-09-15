@@ -314,6 +314,32 @@ class Settings(BaseSettings):
                     "(e.g. before the next LiteLLM deploy creates it).",
     )
 
+    # Document generation (create_spreadsheet / create_document tools and the
+    # research auto-export) is done by the data-api's document engine; the
+    # agent only sends a spec and relays the link.
+    document_generation_timeout_seconds: int = Field(
+        180,
+        description="HTTP timeout for POST /files/generate/* on the data-api. LibreOffice "
+                    "recalculation and PDF rendering happen inside that call.",
+    )
+    research_export_docx: bool = Field(
+        True,
+        description="After a consented deep-research turn, export the report (with its "
+                    "charts and sources) as a Word document and post the link under the "
+                    "answer. Non-fatal: an export failure never loses the report.",
+    )
+    research_export_pptx: bool = Field(
+        False,
+        description="Also distil the research report into a slide deck (one extra "
+                    "structured-output model call on `chat`, ~30-60 s) and post the link. "
+                    "Off by default; the create_presentation tool covers 'make slides' "
+                    "requests on demand.",
+    )
+    research_deck_max_slides: int = Field(
+        12,
+        description="Upper bound on content slides in the automatic research deck.",
+    )
+
     research_mermaid_enabled: bool = Field(
         False,
         description=(

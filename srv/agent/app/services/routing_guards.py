@@ -270,6 +270,43 @@ def cap_plan_steps(steps: List[Any], max_steps: int, protected: Sequence[str] = 
     return kept
 
 
+# Explicit asks for a file the user can open in Excel or Word. These turns
+# need the create_spreadsheet / create_document tools with their full typed
+# schemas, which only the loop-first path provides.
+_DOCUMENT_RE = re.compile(
+    r"\b(?:spreadsheet|excel(?: file| sheet| workbook)?|xlsx|workbook|"
+    r"word (?:doc|document|file)|docx|"
+    r"powerpoint|pptx|slide ?deck|slides|(?:a |the )?deck\b|presentation|"
+    r"(?:export|save|download|turn|put|write|convert|give)(?: \w+){0,5} (?:as|to|into|in) (?:an? )?(?:excel|spreadsheet|word|docx|xlsx|powerpoint|pptx|slides|deck|presentation)(?: (?:file|document|doc|workbook|deck))?|"
+    r"(?:downloadable|editable|printable) (?:file|document|report|version|deck))\b",
+    re.IGNORECASE,
+)
+# Mentions that are *about* an existing file rather than asking for one.
+_DOCUMENT_QUESTION_RE = re.compile(
+    r"^\s*(?:what|where|who|when|why|how|which|does|do|is|are|can you (?:find|open|read|summari[sz]e|explain))\b",
+    re.IGNORECASE,
+)
+
+
+def document_intent_guard(query: str) -> GuardOutcome:
+    """Detect a request to produce a spreadsheet or Word document."""
+    text = (query or "").strip()
+    if len(text.split()) < 3:
+        return GuardOutcome()
+    hit = _DOCUMENT_RE.search(text)
+    if not hit:
+        return GuardOutcome()
+    if _DOCUMENT_QUESTION_RE.match(text) and not re.search(r"\b(?:make|create|build|generate|export|produce|turn|put|save|write|give)\b", text, re.IGNORECASE):
+        return GuardOutcome()  # asking about a file, not for one
+    return GuardOutcome(
+        triggered=True,
+        name="document_intent",
+        reason=f"file requested ('{hit.group(0)}')",
+        action_type="analysis",
+        needs_tools=True,
+    )
+
+
 def research_intent_guard(query: str) -> GuardOutcome:
     """Detect an explicit request for deep, multi-source research."""
     text = (query or "").strip()

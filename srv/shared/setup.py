@@ -15,6 +15,7 @@ setup(
         "structlog>=24.4.0",
         "cachetools>=5.5.0",
         "fastapi>=0.115.0",
+        "pydantic>=2.5",  # busibox_common.document_specs
     ],
     python_requires=">=3.11",
 )

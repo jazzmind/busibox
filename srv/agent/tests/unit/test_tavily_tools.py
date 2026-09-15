@@ -444,3 +444,36 @@ async def test_a_bogus_output_length_falls_back_to_long_not_standard(fake_http, 
     ])
     await tavily_tools.deep_research("a question", output_length="enormous")
     assert fake_http.calls[0]["json"]["output_length"] == "long"
+
+
+# ---------------------------------------------------------------------------
+# Tavily's limit codes are told apart — 432 is not a rate limit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "status,body,needle",
+    [
+        (429, {"detail": {"error": "Your request has been blocked due to excessive requests."}},
+         "retrying shortly will work"),
+        (432, {"detail": {"error": "This request exceeds your plan's set usage limit."}},
+         "ACCOUNT USAGE LIMIT"),
+        (433, {"detail": {"error": "This request exceeds the pay-as-you-go limit."}},
+         "pay-as-you-go spending cap"),
+        (500, {"detail": {"error": "Error when executing research task"}}, None),
+    ],
+)
+def test_error_detail_classifies_tavily_limit_codes(status, body, needle):
+    """First production research turn: Tavily returned 432 (plan/key credit
+    cap) and the report told the user to wait for "the rate limit to reset".
+    The tool now says which limit it is and whether retrying can help."""
+    import httpx
+
+    resp = httpx.Response(status, json=body, request=httpx.Request("POST", "https://api.tavily.com/research"))
+    text = tavily_tools._error_detail(resp)
+    assert body["detail"]["error"] in text
+    if needle:
+        assert needle in text
+        assert "retrying will not help" in text or status == 429
+    else:
+        assert "[" not in text, "unknown codes carry no note"
