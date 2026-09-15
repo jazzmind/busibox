@@ -33,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     libreoffice-calc-nogui \
     libreoffice-writer-nogui \
+    libreoffice-impress-nogui \
     pandoc \
     fonts-crosextra-carlito \
     fonts-crosextra-caladea \

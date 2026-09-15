@@ -27,6 +27,7 @@ Formulas are ordinary Excel formulas. In ``column_formulas`` the placeholder
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -44,6 +45,18 @@ MAX_MARKDOWN_CHARS = 400_000
 MAX_IMAGES = 40
 
 _FILENAME_RE = re.compile(r"[^A-Za-z0-9._ -]+")
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+MAX_FILENAME_STEM = 120
+
+# Names that say nothing about the content. A generated file must be findable
+# in the Documents library a month later, so these are rejected in favour of
+# the document's title (or the model is told to supply a real name).
+GENERIC_FILE_STEMS = frozenset({
+    "document", "doc", "docx", "file", "report", "spreadsheet", "workbook", "sheet",
+    "book", "data", "output", "untitled", "new", "presentation", "deck", "slides",
+    "slide", "memo", "export", "result", "results", "summary", "table", "notes",
+    "analysis", "final", "draft", "test", "example", "sample", "generated",
+})
 _CELL_RE = re.compile(r"^[A-Z]{1,3}[1-9][0-9]{0,6}$")
 _RANGE_RE = re.compile(r"^[A-Z]{1,3}[1-9][0-9]{0,6}:[A-Z]{1,3}[1-9][0-9]{0,6}$")
 _SHEET_NAME_BAD = re.compile(r"[\[\]:*?/\\]")
@@ -70,13 +83,65 @@ _DENY_RE = re.compile(
 _EXTERNAL_REF_RE = re.compile(r"\[\d+\]|'[^']*\.xls[xm]?'!|\.xls[xm]?\]", re.IGNORECASE)
 
 
+def _clean_stem(name: Optional[str], ext: str) -> str:
+    """A filesystem-safe stem: unsafe characters become spaces, whitespace collapses."""
+    stem = (name or "").strip()
+    if ext and stem.lower().endswith(ext):
+        stem = stem[: -len(ext)]
+    stem = _FILENAME_RE.sub(" ", stem)
+    stem = re.sub(r"\s+", " ", stem).strip(" .-")
+    return stem[:MAX_FILENAME_STEM].rstrip(" .-")
+
+
+def is_generic_stem(stem: str) -> bool:
+    """True for names like 'document', 'report 2', 'Book1', 'untitled-final' or anything under 3 letters."""
+    words = [w for w in re.split(r"[\s_\-.]+", (stem or "").lower()) if w]
+    letters = [re.sub(r"[^a-z]", "", w) for w in words]
+    letters = [w for w in letters if w]
+    if not letters or sum(len(w) for w in letters) < 3:
+        return True
+    return all(w in GENERIC_FILE_STEMS or w in ("the", "a", "an", "of", "for", "my", "our", "v", "ver", "version", "copy") for w in letters)
+
+
 def safe_filename(name: str, ext: str) -> str:
     """Normalise a user/LLM supplied filename to ``stem.ext`` with a safe stem."""
-    stem = (name or "").strip()
-    if stem.lower().endswith(ext):
-        stem = stem[: -len(ext)]
-    stem = _FILENAME_RE.sub("", stem).strip(" .")[:80]
+    stem = _clean_stem(name, ext)
     return f"{stem or 'document'}{ext}"
+
+
+def descriptive_filename(
+    *,
+    subject: Optional[str],
+    kind: Optional[str],
+    ext: str,
+    explicit: Optional[str] = None,
+    today: Optional[dt.date] = None,
+) -> str:
+    """Build ``Subject - Kind - YYYY-MM-DD.ext``.
+
+    ``explicit`` (a filename the model or caller chose) wins when it is
+    descriptive; otherwise the ``subject`` (usually the document title) is
+    used. The kind is appended unless the name already says it, the date is
+    appended unless the name already carries one, so the function is
+    idempotent — the data-api re-validates a spec the agent already filled.
+
+    Raises ``ValueError`` when neither name says what the file is about.
+    """
+    stem = _clean_stem(explicit, ext) if explicit else ""
+    if not stem or is_generic_stem(stem):
+        stem = _clean_stem(subject, ext)
+    if not stem or is_generic_stem(stem):
+        offered = explicit or subject or ""
+        raise ValueError(
+            f"'{offered}' is not a descriptive name — give the file a title that says what it is about "
+            "(e.g. 'Q3 Crew Hours by Week', 'Harbor Dredging Bid Comparison')"
+        )
+    kind_clean = _clean_stem(kind, "") if kind else ""
+    if kind_clean and kind_clean.lower() not in stem.lower():
+        stem = f"{stem} - {kind_clean}"
+    if not _DATE_RE.search(stem):
+        stem = f"{stem} - {(today or dt.date.today()).isoformat()}"
+    return f"{stem[:MAX_FILENAME_STEM].rstrip(' .-')}{ext}"
 
 
 def check_formula(formula: str) -> Optional[str]:
@@ -306,21 +371,18 @@ class AssertionSpec(BaseModel):
 
 
 class WorkbookSpec(BaseModel):
-    filename: str = Field(min_length=1, max_length=120, description="Download name; '.xlsx' is added if missing")
-    title: Optional[str] = Field(default=None, max_length=200, description="Stored as the workbook title property")
+    title: str = Field(min_length=3, max_length=200, description="What the workbook is about, e.g. 'Q3 Crew Hours by Week'. Names the file and is stored as the workbook title.")
+    kind: str = Field(default="Spreadsheet", max_length=40, description="Short noun for the file name, e.g. 'Budget', 'Bid Comparison', 'Tracker'")
+    filename: Optional[str] = Field(default=None, max_length=160, description="Optional. Derived from title as 'Title - Kind - YYYY-MM-DD.xlsx' when omitted or generic.")
     sheets: List[SheetSpec] = Field(min_length=1, max_length=MAX_SHEETS)
     assertions: List[AssertionSpec] = Field(default_factory=list, max_length=100)
 
-    @field_validator("filename")
-    @classmethod
-    def _filename_ok(cls, v: str) -> str:
-        return safe_filename(v, ".xlsx")
-
     @model_validator(mode="after")
-    def _unique_sheets(self) -> "WorkbookSpec":
+    def _finish(self) -> "WorkbookSpec":
         names = [s.name.lower() for s in self.sheets]
         if len(set(names)) != len(names):
             raise ValueError("sheet names must be unique")
+        self.filename = descriptive_filename(subject=self.title, kind=self.kind, ext=".xlsx", explicit=self.filename)
         return self
 
 
@@ -351,8 +413,9 @@ class SourceSpec(BaseModel):
 
 
 class DocumentSpec(BaseModel):
-    filename: str = Field(min_length=1, max_length=120, description="Download name; '.docx' is added if missing")
-    title: str = Field(min_length=1, max_length=300)
+    title: str = Field(min_length=3, max_length=300, description="What the document is about; names the file and heads the title page")
+    kind: str = Field(default="Document", max_length=40, description="Short noun for the file name, e.g. 'Memo', 'Research Report', 'Briefing'")
+    filename: Optional[str] = Field(default=None, max_length=160, description="Optional. Derived from title as 'Title - Kind - YYYY-MM-DD.docx' when omitted or generic.")
     subtitle: Optional[str] = Field(default=None, max_length=300)
     author: Optional[str] = Field(default=None, max_length=120)
     date: Optional[str] = Field(default=None, max_length=40, description="Printed under the title; default is today")
@@ -361,10 +424,129 @@ class DocumentSpec(BaseModel):
     sources: List[SourceSpec] = Field(default_factory=list, max_length=200, description="Rendered as a numbered 'Sources' section at the end")
     template: Literal["neutral"] = "neutral"
 
-    @field_validator("filename")
+    @model_validator(mode="after")
+    def _finish(self) -> "DocumentSpec":
+        self.filename = descriptive_filename(subject=self.title, kind=self.kind, ext=".docx", explicit=self.filename)
+        return self
+
+
+# ---------------------------------------------------------------------------
+# Presentation (PowerPoint)
+# ---------------------------------------------------------------------------
+
+MAX_SLIDES = 60
+MAX_BULLETS = 12
+MAX_TABLE_ROWS = 15
+MAX_TABLE_COLS = 8
+MAX_CHART_POINTS = 24
+
+SlideLayout = Literal["title", "section", "bullets", "two_column", "image", "table", "chart"]
+
+
+class SlideTable(BaseModel):
+    headers: List[str] = Field(min_length=1, max_length=MAX_TABLE_COLS)
+    rows: List[List[Any]] = Field(min_length=1, max_length=MAX_TABLE_ROWS, description="Cell values in header order; numbers are right-aligned")
+
+    @model_validator(mode="after")
+    def _shape(self) -> "SlideTable":
+        for i, row in enumerate(self.rows):
+            if len(row) > len(self.headers):
+                raise ValueError(f"table row {i + 1} has {len(row)} cells but there are {len(self.headers)} headers")
+        return self
+
+
+class SlideChartSeries(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    values: List[float] = Field(min_length=1, max_length=MAX_CHART_POINTS)
+
+
+class SlideChart(BaseModel):
+    """A native, editable PowerPoint chart."""
+
+    type: Literal["column", "bar", "line", "pie"] = "column"
+    categories: List[str] = Field(min_length=1, max_length=MAX_CHART_POINTS)
+    series: List[SlideChartSeries] = Field(min_length=1, max_length=6)
+    number_format: Optional[str] = Field(default=None, max_length=40, description="Excel-style, e.g. '#,##0', '0.0%', '\"$\"#,##0'")
+    source: Optional[str] = Field(default=None, max_length=200, description="Printed small under the chart")
+
+    @model_validator(mode="after")
+    def _shape(self) -> "SlideChart":
+        n = len(self.categories)
+        for srs in self.series:
+            if len(srs.values) != n:
+                raise ValueError(f"series '{srs.name}' has {len(srs.values)} values but there are {n} categories")
+        if self.type == "pie" and len(self.series) != 1:
+            raise ValueError("a pie chart takes exactly one series")
+        return self
+
+
+class SlideSpec(BaseModel):
+    """One slide. Pick the layout, fill only the fields it uses:
+
+    - ``title``: deck title slide (title/subtitle); usually auto-added, use for a closing slide
+    - ``section``: a divider (title, optional subtitle)
+    - ``bullets``: title + bullets, optionally with an ``image`` on the right
+    - ``two_column``: title + ``bullets`` (left) and ``right_bullets`` (right), optional column headings
+    - ``image``: title + one large ``image`` with a caption
+    - ``table``: title + ``table``
+    - ``chart``: title + ``chart``, optional ``bullets`` (takeaways) on the right
+    Prefix a bullet with "- " to make it a sub-bullet.
+    """
+
+    layout: SlideLayout = "bullets"
+    title: Optional[str] = Field(default=None, max_length=160, description="Slide title; required for every layout except 'title'")
+    subtitle: Optional[str] = Field(default=None, max_length=200, description="'title' and 'section' layouts")
+    bullets: List[str] = Field(default_factory=list, max_length=MAX_BULLETS, description="Short lines, ~12 words each; '- ' prefix for a sub-bullet")
+    right_bullets: List[str] = Field(default_factory=list, max_length=MAX_BULLETS, description="'two_column' layout: the right column")
+    left_heading: Optional[str] = Field(default=None, max_length=80)
+    right_heading: Optional[str] = Field(default=None, max_length=80)
+    image: Optional[ImageRef] = Field(default=None, description="A Busibox media file id (e.g. from render_chart)")
+    table: Optional[SlideTable] = None
+    chart: Optional[SlideChart] = None
+    notes: Optional[str] = Field(default=None, max_length=4000, description="Speaker notes — the narration for this slide")
+
+    @field_validator("bullets", "right_bullets")
     @classmethod
-    def _filename_ok(cls, v: str) -> str:
-        return safe_filename(v, ".docx")
+    def _bullets_ok(cls, v: List[str]) -> List[str]:
+        cleaned = [b.strip() for b in v if b and b.strip()]
+        for b in cleaned:
+            if len(b) > 300:
+                raise ValueError("a bullet must be under 300 characters — split it or move detail to notes")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _layout_ok(self) -> "SlideSpec":
+        if self.layout != "title" and not (self.title or "").strip():
+            raise ValueError(f"a '{self.layout}' slide needs a title")
+        if self.layout == "table" and self.table is None:
+            raise ValueError("a 'table' slide needs 'table'")
+        if self.layout == "chart" and self.chart is None:
+            raise ValueError("a 'chart' slide needs 'chart'")
+        if self.layout == "image" and self.image is None:
+            raise ValueError("an 'image' slide needs 'image'")
+        if self.layout == "two_column" and not (self.bullets and self.right_bullets):
+            raise ValueError("a 'two_column' slide needs 'bullets' and 'right_bullets'")
+        if self.layout == "bullets" and not self.bullets and self.image is None:
+            raise ValueError("a 'bullets' slide needs bullets")
+        return self
+
+
+class PresentationSpec(BaseModel):
+    title: str = Field(min_length=3, max_length=200, description="What the deck is about; names the file and the title slide")
+    kind: str = Field(default="Presentation", max_length=40, description="Short noun for the file name, e.g. 'Briefing', 'Bid Review', 'Kickoff'")
+    filename: Optional[str] = Field(default=None, max_length=160, description="Optional. Derived from title as 'Title - Kind - YYYY-MM-DD.pptx' when omitted or generic.")
+    subtitle: Optional[str] = Field(default=None, max_length=200)
+    author: Optional[str] = Field(default=None, max_length=120)
+    date: Optional[str] = Field(default=None, max_length=40, description="Printed on the title slide; default is today")
+    slides: List[SlideSpec] = Field(min_length=1, max_length=MAX_SLIDES)
+    title_slide: bool = Field(default=True, description="Add a title slide from title/subtitle/author/date unless the first slide already is one")
+    sources: List[SourceSpec] = Field(default_factory=list, max_length=60, description="Rendered as closing 'Sources' slide(s)")
+    template: Literal["neutral"] = "neutral"
+
+    @model_validator(mode="after")
+    def _finish(self) -> "PresentationSpec":
+        self.filename = descriptive_filename(subject=self.title, kind=self.kind, ext=".pptx", explicit=self.filename)
+        return self
 
 
 # ---------------------------------------------------------------------------

@@ -16,8 +16,11 @@ published: true
 > `document_intent_guard`, media proxy `?download=1` in busibox-frontend.
 > Decisions taken: Excel + Word + research export; neutral built-in template;
 > export on every consented research turn (`RESEARCH_EXPORT_DOCX`); generated
-> files are indexed like uploads. Phase 3 (templates, `rows_from` data
-> documents, PowerPoint) remains open. User guide: `docs/users/09-chat-files.md`.
+> files are indexed like uploads. PowerPoint (`PresentationSpec`, `pptx.py`,
+> `create_presentation`, optional research deck behind `RESEARCH_EXPORT_PPTX`)
+> and descriptive "Subject - Kind - Date" file names were added 2026-09-15.
+> Still open: custom templates, `rows_from` data documents.
+> User guide: `docs/users/09-chat-files.md`.
 
 # Chat Document Generation — Excel and Word from the AI Chat
 

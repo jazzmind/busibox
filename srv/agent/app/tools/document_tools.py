@@ -28,12 +28,16 @@ from pydantic_ai import RunContext
 
 from app.config.settings import get_settings
 from app.tools.image_tool import _data_api_token
-from busibox_common.document_specs import DocumentSpec, WorkbookSpec
+from busibox_common.document_specs import DocumentSpec, PresentationSpec, WorkbookSpec
 
 logger = logging.getLogger(__name__)
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+_LABELS = {"xlsx": "Download the spreadsheet", "docx": "Download the document", "pptx": "Download the slides"}
+_PREVIEW = {"docx": "First page of", "pptx": "First slide of"}
 
 MAX_ISSUES_RELAYED = 12
 
@@ -69,10 +73,9 @@ def _conversation_id(ctx: RunContext[Any]) -> Optional[str]:
 
 
 def _link_markdown(kind: str, filename: str, download_url: str, thumbnail_url: Optional[str]) -> str:
-    label = "Download the spreadsheet" if kind == "xlsx" else "Download the document"
-    lines = [f"[{label}: {filename}]({download_url})"]
+    lines = [f"[{_LABELS.get(kind, 'Download the file')}: {filename}]({download_url})"]
     if thumbnail_url:
-        lines.append(f"![First page of {filename}]({thumbnail_url})")
+        lines.append(f"![{_PREVIEW.get(kind, 'Preview of')} {filename}]({thumbnail_url})")
     return "\n\n".join(lines)
 
 
@@ -125,7 +128,7 @@ async def _post_generate(ctx: RunContext[Any], kind: str, body: Dict[str, Any]) 
 
     validation = payload.get("validation") or {}
     issues = _relay_issues(validation)
-    filename = payload.get("filename") or ("file.xlsx" if kind == "xlsx" else "file.docx")
+    filename = payload.get("filename") or f"file.{kind}"
     download_url = payload.get("download_url")
     thumbnail_url = payload.get("thumbnail_url")
     ok = bool(payload.get("success")) and bool(download_url)
@@ -168,6 +171,10 @@ async def create_spreadsheet(ctx: RunContext[Any], spec: WorkbookSpec) -> Docume
     for a quick in-chat table — a markdown table is faster for that.
 
     How to fill the spec:
+    - `title` says what the workbook is about ("Q3 Crew Hours by Week"); it
+      names the file as "Title - Kind - date.xlsx". `kind` is a short noun
+      ("Budget", "Bid Comparison"). Generic titles ("Report", "Data") are
+      rejected.
     - One sheet per logical table. Give every column a header and a type
       (text, number, integer, currency, percent, date, bool) — types drive
       the number formats. Percent values are fractions (0.125 = 12.5%).
@@ -203,8 +210,11 @@ async def create_document(ctx: RunContext[Any], spec: DocumentSpec) -> DocumentF
     Do not use it for an ordinary chat answer.
 
     How to fill the spec:
-    - `title` (and optional `subtitle`, `author`, `date`) make the title
-      block. `toc=true` adds a contents list when there are 2+ sections.
+    - `title` says what the document is about and names the file as
+      "Title - Kind - date.docx"; `kind` is a short noun ("Memo", "Briefing",
+      "Research Report"). Generic titles are rejected. `subtitle`, `author`,
+      `date` fill the title block; `toc=true` adds a contents list when
+      there are 2+ sections.
     - `sections`: each has an optional `heading` (with `level` 1–3) and a
       `markdown` body. Use real Markdown: paragraphs, **bold**, bullet and
       numbered lists, pipe tables (`| a | b |` with a `|---|---|` row) and
@@ -226,6 +236,46 @@ async def create_document(ctx: RunContext[Any], spec: DocumentSpec) -> DocumentF
     if isinstance(coerced, DocumentFileOutput):
         return coerced
     return await _post_generate(ctx, "docx", {"spec": coerced.model_dump(mode="json"), "thumbnail": True})
+
+
+async def create_presentation(ctx: RunContext[Any], spec: PresentationSpec) -> DocumentFileOutput:
+    """Create a PowerPoint deck (.pptx) and return a download link and first-slide preview.
+
+    Use this when the user asks for slides, a deck, a presentation or a
+    PowerPoint. Do not use it for an ordinary answer.
+
+    How to fill the spec:
+    - `title` says what the deck is about and names the file as
+      "Title - Kind - date.pptx"; `kind` is a short noun ("Briefing",
+      "Kickoff", "Bid Review"). A title slide is added automatically.
+    - `slides`: 6–15 slides, one idea each. Choose a `layout` per slide:
+      `bullets` (3–6 short bullets, ~12 words each; "- " prefix for a
+      sub-bullet; optional `image` on the right), `two_column` (bullets +
+      right_bullets with headings — comparisons), `chart` (native chart from
+      real numbers: categories + series; optional takeaway bullets),
+      `table` (≤15 rows × 8 columns), `image` (a `render_chart` file id with
+      a caption), `section` (divider). Put the narration in `notes`.
+    - Lead with the bottom line, then the evidence, then next steps. Numbers
+      come from your sources — never estimate to fill a chart.
+    - `sources`: title + URL pairs become closing Sources slide(s).
+
+    The deck is rendered and checked (every slide titled, charts/tables/
+    images present, slide count matches). The result carries `markdown` —
+    the download link and a first-slide preview — paste it into your answer.
+    If `success` is false, read `issues`/`error`, fix the spec and call again
+    (at most twice). Dense-slide warnings mean: split the slide.
+    """
+    coerced = _coerce(PresentationSpec, spec)
+    if isinstance(coerced, DocumentFileOutput):
+        return coerced
+    return await _post_generate(ctx, "pptx", {"spec": coerced.model_dump(mode="json"), "thumbnail": True})
+
+
+async def export_presentation(ctx_or_deps: Any, spec: PresentationSpec, *, thumbnail: bool = True) -> DocumentFileOutput:
+    """Programmatic entry point: build a deck from a ready ``PresentationSpec``
+    (used by the research orchestrator's optional deck export)."""
+    ctx = ctx_or_deps if hasattr(ctx_or_deps, "deps") else _DepsCtx(ctx_or_deps)
+    return await _post_generate(ctx, "pptx", {"spec": spec.model_dump(mode="json"), "thumbnail": thumbnail})
 
 
 async def export_document(

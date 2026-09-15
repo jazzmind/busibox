@@ -276,8 +276,9 @@ def cap_plan_steps(steps: List[Any], max_steps: int, protected: Sequence[str] = 
 _DOCUMENT_RE = re.compile(
     r"\b(?:spreadsheet|excel(?: file| sheet| workbook)?|xlsx|workbook|"
     r"word (?:doc|document|file)|docx|"
-    r"(?:export|save|download|turn|put|write|convert|give)(?: \w+){0,5} (?:as|to|into|in) (?:an? )?(?:excel|spreadsheet|word|docx|xlsx)(?: (?:file|document|doc|workbook))?|"
-    r"(?:downloadable|editable|printable) (?:file|document|report|version))\b",
+    r"powerpoint|pptx|slide ?deck|slides|(?:a |the )?deck\b|presentation|"
+    r"(?:export|save|download|turn|put|write|convert|give)(?: \w+){0,5} (?:as|to|into|in) (?:an? )?(?:excel|spreadsheet|word|docx|xlsx|powerpoint|pptx|slides|deck|presentation)(?: (?:file|document|doc|workbook|deck))?|"
+    r"(?:downloadable|editable|printable) (?:file|document|report|version|deck))\b",
     re.IGNORECASE,
 )
 # Mentions that are *about* an existing file rather than asking for one.

@@ -6,6 +6,9 @@ typed spec and store them in the caller's library like any upload.
   recalculated with LibreOffice, every formula checked, assertions run)
 - POST /files/generate/docx — DocumentSpec → .docx (pandoc + neutral
   template, structure verified, PDF page count and first-page thumbnail)
+- POST /files/generate/pptx — PresentationSpec → .pptx (python-pptx, 16:9
+  neutral styling, native charts/tables, LibreOffice render check and
+  first-slide thumbnail)
 - GET  /files/generate/capabilities — which tools this server has
 
 Both POST routes return a ``GenerateResult``: file id, portal download URL,
@@ -39,7 +42,8 @@ from api.routes.files import download_file
 from api.routes.upload import upload_file
 from services.document_engine.docx import DOCX_MIME, build_document, collect_image_ids
 from services.document_engine.office import OfficeToolError, tool_availability
-from services.document_engine.specs import DocumentSpec, GenerateResult, WorkbookSpec
+from services.document_engine.pptx import PPTX_MIME, build_presentation, collect_deck_image_ids
+from services.document_engine.specs import DocumentSpec, GenerateResult, PresentationSpec, WorkbookSpec
 from services.document_engine.xlsx import XLSX_MIME, SpecError, build_workbook
 
 logger = structlog.get_logger()
@@ -68,6 +72,13 @@ class DocumentRequest(BaseModel):
     library_id: Optional[str] = None
     conversation_id: Optional[str] = Field(default=None, max_length=64)
     thumbnail: bool = Field(default=True, description="Also store a first-page PNG and return its URL")
+
+
+class PresentationRequest(BaseModel):
+    spec: PresentationSpec
+    library_id: Optional[str] = None
+    conversation_id: Optional[str] = Field(default=None, max_length=64)
+    thumbnail: bool = Field(default=True, description="Also store a first-slide PNG and return its URL")
 
 
 def _download_url(file_id: str) -> str:
@@ -138,6 +149,8 @@ async def generate_capabilities():
         "xlsx_recalculation": tools.soffice,
         "docx": tools.pandoc,
         "docx_thumbnail": tools.thumbnail_ok,
+        "pptx": True,
+        "pptx_render_check": tools.soffice,
         "tools": tools.__dict__,
         "max_concurrent": _MAX_CONCURRENT,
     }
@@ -252,7 +265,7 @@ async def generate_docx(request: Request):
     if out.thumbnail:
         try:
             thumb_meta = {"source": "generated", "generator": "document_engine", "kind": "thumbnail", "of_file_id": file_id}
-            thumb_stored = await _store(request, f"{spec.filename[:-5]}-page1.png", "image/png", out.thumbnail, thumb_meta, None)
+            thumb_stored = await _store(request, f"{spec.filename.rsplit('.', 1)[0]} - page 1.png", "image/png", out.thumbnail, thumb_meta, None)
             thumb_id = thumb_stored["fileId"]
         except Exception as exc:  # noqa: BLE001
             logger.warning("generate_docx: thumbnail store failed", user_id=user_id, error=str(exc))
@@ -271,4 +284,76 @@ async def generate_docx(request: Request):
         error=None if out.report.ok else "The document rendered with structural problems; see validation.issues.",
     )
     logger.info("generate_docx: stored", user_id=user_id, file_id=file_id, ok=out.report.ok, pages=out.report.pages, thumbnail=bool(thumb_id))
+    return JSONResponse(status_code=status.HTTP_200_OK, content=result.model_dump())
+
+
+@router.post("/generate/pptx", dependencies=[Depends(require_data_write)])
+async def generate_pptx(request: Request):
+    """Build, verify and store a PowerPoint deck."""
+    user_id = request.state.user_id
+    try:
+        payload = await request.json()
+        body = PresentationRequest.model_validate(payload)
+    except ValidationError as exc:
+        return _spec_error(f"Invalid presentation spec: {_format_validation_error(exc)}")
+    except Exception as exc:  # noqa: BLE001
+        return _spec_error(f"Request body must be JSON with a 'spec' object: {exc}")
+
+    spec = body.spec
+    images: Dict[str, bytes] = {}
+    for file_id in collect_deck_image_ids(spec):
+        data = await _fetch_image(request, file_id)
+        if data:
+            images[file_id] = data
+
+    try:
+        async with _GEN_SEMAPHORE:
+            out = await asyncio.to_thread(build_presentation, spec, images, _TOOL_TIMEOUT, body.thumbnail)
+    except OfficeToolError as exc:
+        logger.error("generate_pptx: tooling failure", user_id=user_id, error=str(exc))
+        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"error": str(exc)})
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("generate_pptx: build failed", user_id=user_id)
+        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": f"Presentation build failed: {exc}"})
+
+    metadata = {
+        "source": "generated",
+        "generator": "document_engine",
+        "kind": "pptx",
+        "title": spec.title,
+        "slides": out.stats.get("slides"),
+        "validation_ok": out.report.ok,
+    }
+    if body.conversation_id:
+        metadata["conversation_id"] = body.conversation_id
+    try:
+        stored = await _store(request, spec.filename, PPTX_MIME, out.data, metadata, body.library_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("generate_pptx: store failed", user_id=user_id)
+        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": f"Presentation built but could not be stored: {exc}"})
+    file_id = stored["fileId"]
+
+    thumb_id: Optional[str] = None
+    if out.thumbnail:
+        try:
+            thumb_meta = {"source": "generated", "generator": "document_engine", "kind": "thumbnail", "of_file_id": file_id}
+            thumb_stored = await _store(request, f"{spec.filename.rsplit('.', 1)[0]} - slide 1.png", "image/png", out.thumbnail, thumb_meta, None)
+            thumb_id = thumb_stored["fileId"]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("generate_pptx: thumbnail store failed", user_id=user_id, error=str(exc))
+
+    result = GenerateResult(
+        success=out.report.ok,
+        filename=spec.filename,
+        mime_type=PPTX_MIME,
+        size_bytes=len(out.data),
+        file_id=file_id,
+        download_url=_download_url(file_id),
+        thumbnail_file_id=thumb_id,
+        thumbnail_url=_media_url(thumb_id) if thumb_id else None,
+        validation=out.report,
+        summary=out.summary,
+        error=None if out.report.ok else "The deck was built with structural problems; see validation.issues.",
+    )
+    logger.info("generate_pptx: stored", user_id=user_id, file_id=file_id, ok=out.report.ok, slides=out.stats.get("slides"), thumbnail=bool(thumb_id))
     return JSONResponse(status_code=status.HTTP_200_OK, content=result.model_dump())

@@ -5,6 +5,7 @@ here is the contract the model relies on — a typed spec in, a download link
 and readable issues out, and never a claimed file that does not exist.
 """
 
+import datetime
 import json
 
 import httpx
@@ -13,7 +14,7 @@ import pytest
 from app.agents.base_agent import DOCUMENT_TOOLS_DIRECTIVE, TOOL_CLASSES, TOOL_SCOPES, ToolRegistry
 from app.agents.chat_agent import ChatAgent
 from app.tools import document_tools as dt
-from busibox_common.document_specs import DocumentSpec, WorkbookSpec
+from busibox_common.document_specs import DocumentSpec, PresentationSpec, WorkbookSpec
 
 
 class _Client:
@@ -84,7 +85,7 @@ def _use(monkeypatch, response=None, raise_exc=None):
 
 
 WORKBOOK = {
-    "filename": "Crew hours",
+    "title": "Crew Hours by Week",
     "sheets": [{
         "name": "Hours",
         "columns": [{"header": "Crew", "type": "text"}, {"header": "Hours", "type": "number"}, {"header": "Rate", "type": "currency"}, {"header": "Cost", "type": "currency"}],
@@ -96,8 +97,8 @@ WORKBOOK = {
 }
 
 DOCUMENT = {
-    "filename": "Safety memo",
     "title": "Safety Plan Summary",
+    "kind": "Memo",
     "sections": [{"heading": "Summary", "markdown": "All good.\n\n![chart](/portal/api/media/11111111-2222-3333-4444-555555555555)"}],
     "sources": [{"title": "Plan", "url": "https://x"}],
 }
@@ -107,6 +108,22 @@ OK_XLSX = {
     "download_url": "/portal/api/media/f1?download=1",
     "validation": {"ok": True, "checks": ["recalculated 3 formula(s)"], "issues": [], "formula_count": 3, "recalculated": True, "pages": None},
     "summary": "Crew hours.xlsx: Hours (2 rows × 4 cols, totals). 3 formula(s), recalculated and error-free.",
+}
+
+DECK = {
+    "title": "Bid Results Review",
+    "kind": "Briefing",
+    "slides": [
+        {"layout": "bullets", "title": "Bottom line", "bullets": ["We won 3 of 5", "- Margin held at 12%"]},
+        {"layout": "chart", "title": "Bids by month", "chart": {"type": "column", "categories": ["Jul", "Aug"], "series": [{"name": "Bids", "values": [2, 3]}]}},
+    ],
+}
+
+OK_PPTX = {
+    "success": True, "filename": "Bid Results Review - Briefing - 2026-09-15.pptx", "file_id": "p1",
+    "download_url": "/portal/api/media/p1?download=1", "thumbnail_file_id": "t2", "thumbnail_url": "/portal/api/media/t2",
+    "validation": {"ok": True, "checks": [], "issues": [{"severity": "warning", "location": "slide 2", "message": "dense slide (10 bullets, 900 characters)"}], "pages": 3},
+    "summary": "Bid Results Review - Briefing - 2026-09-15.pptx: 3 slide(s), 1 chart(s).",
 }
 
 OK_DOCX = {
@@ -123,18 +140,20 @@ OK_DOCX = {
 
 
 def test_tools_are_registered_scoped_and_slow():
-    for name in ("create_spreadsheet", "create_document"):
+    for name in ("create_spreadsheet", "create_document", "create_presentation"):
         assert ToolRegistry.has(name)
         assert TOOL_SCOPES[name] == ["data.write"]
         assert TOOL_CLASSES[name]["class"] == "slow"
         # Outer kill switch must exceed the tool's own HTTP timeout.
         assert TOOL_CLASSES[name]["timeout"] > 180
-    assert {"create_spreadsheet", "create_document"} <= set(ChatAgent().config.tools)
+    assert {"create_spreadsheet", "create_document", "create_presentation"} <= set(ChatAgent().config.tools)
 
 
 def test_loop_prompt_explains_when_to_make_a_file():
     assert "only when the user asks" in DOCUMENT_TOOLS_DIRECTIVE
     assert "Never claim a file exists" in DOCUMENT_TOOLS_DIRECTIVE
+    assert "create_presentation" in DOCUMENT_TOOLS_DIRECTIVE
+    assert "Name every file after its subject" in DOCUMENT_TOOLS_DIRECTIVE
 
 
 def test_tool_schemas_expose_the_typed_spec():
@@ -144,6 +163,7 @@ def test_tool_schemas_expose_the_typed_spec():
 
     assert inspect.signature(dt.create_spreadsheet).parameters["spec"].annotation is WorkbookSpec
     assert inspect.signature(dt.create_document).parameters["spec"].annotation is DocumentSpec
+    assert inspect.signature(dt.create_presentation).parameters["spec"].annotation is PresentationSpec
     schema = WorkbookSpec.model_json_schema()
     assert "column_formulas" in schema["properties"]["sheets"]["items"]["properties"] or "SheetSpec" in schema.get("$defs", {})
 
@@ -164,7 +184,7 @@ async def test_spreadsheet_posts_the_spec_as_the_user_and_returns_a_link(monkeyp
     call = _FakeHttp.calls[0]
     assert call["url"].endswith("/files/generate/xlsx")
     assert call["headers"] == {"Authorization": "Bearer tok"}
-    assert call["json"]["spec"]["filename"] == "Crew hours.xlsx"
+    assert call["json"]["spec"]["filename"] == f"Crew Hours by Week - Spreadsheet - {datetime.date.today().isoformat()}.xlsx"
     assert call["json"]["spec"]["sheets"][0]["column_formulas"][0]["formula"] == "=B{row}*C{row}"
     assert call["json"]["conversation_id"] == "conv-1"
 
@@ -177,6 +197,27 @@ async def test_document_returns_link_and_preview(monkeypatch):
     assert "![First page of Safety memo.docx](/portal/api/media/t1)" in out.markdown
     assert _FakeHttp.calls[0]["url"].endswith("/files/generate/docx")
     assert _FakeHttp.calls[0]["json"]["thumbnail"] is True
+
+
+async def test_presentation_returns_link_preview_and_warnings(monkeypatch):
+    _use(monkeypatch, _Resp(200, OK_PPTX))
+    out = await dt.create_presentation(_Ctx(), DECK)
+    assert out.success and out.pages == 3
+    assert out.markdown.splitlines()[0].startswith("[Download the slides: Bid Results Review - Briefing - 2026-09-15.pptx](/portal/api/media/p1?download=1)")
+    assert "![First slide of Bid Results Review" in out.markdown
+    assert out.issues == ["warning at slide 2: dense slide (10 bullets, 900 characters)"]
+    sent = _FakeHttp.calls[0]
+    assert sent["url"].endswith("/files/generate/pptx")
+    assert sent["json"]["spec"]["filename"] == f"Bid Results Review - Briefing - {datetime.date.today().isoformat()}.pptx"
+    assert sent["json"]["spec"]["slides"][1]["chart"]["series"][0]["values"] == [2.0, 3.0]
+
+
+async def test_bad_slide_is_rejected_client_side(monkeypatch):
+    _use(monkeypatch, _Resp(200, OK_PPTX))
+    bad = dict(DECK, slides=[{"layout": "chart", "title": "no chart here"}])
+    out = await dt.create_presentation(_Ctx(), bad)
+    assert not out.success and "needs 'chart'" in out.error
+    assert _FakeHttp.calls == []
 
 
 async def test_plan_path_dict_spec_is_coerced(monkeypatch):
@@ -208,6 +249,22 @@ async def test_denied_formula_is_rejected_client_side(monkeypatch):
     out = await dt.create_spreadsheet(_Ctx(), bad)
     assert not out.success and "WEBSERVICE" in out.error
     assert _FakeHttp.calls == []
+
+
+async def test_generic_names_are_rejected_with_guidance(monkeypatch):
+    _use(monkeypatch, _Resp(200, OK_XLSX))
+    out = await dt.create_spreadsheet(_Ctx(), dict(WORKBOOK, title="Report"))
+    assert not out.success and "descriptive name" in out.error
+    out = await dt.create_document(_Ctx(), dict(DOCUMENT, title="Untitled document", filename="doc.docx"))
+    assert not out.success and "descriptive name" in out.error
+    assert _FakeHttp.calls == []
+
+
+async def test_document_names_carry_kind_and_date(monkeypatch):
+    _use(monkeypatch, _Resp(200, OK_DOCX))
+    await dt.create_document(_Ctx(), DOCUMENT)
+    sent = _FakeHttp.calls[0]["json"]["spec"]["filename"]
+    assert sent == f"Safety Plan Summary - Memo - {datetime.date.today().isoformat()}.docx"
 
 
 async def test_no_token_is_an_error_not_a_request(monkeypatch):

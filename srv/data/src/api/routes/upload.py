@@ -112,6 +112,7 @@ SUPPORTED_MIME_TYPES = {
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # DOCX
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",  # XLSX (extractor: openpyxl)
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",  # PPTX (extractor: python-pptx)
     "text/plain",
     "text/html",
     "text/markdown",

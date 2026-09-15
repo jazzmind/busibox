@@ -33,6 +33,9 @@ class _Stream:
     "build a budget workbook with totals",
     "I need this as a downloadable document",
     "can you create a word doc summarizing the safety plan",
+    "turn that into a short slide deck for the ops meeting",
+    "make a powerpoint presentation on the bid results",
+    "give me 10 slides summarizing the research",
 ])
 def test_file_requests_are_detected(query):
     out = document_intent_guard(query)
@@ -47,6 +50,8 @@ def test_file_requests_are_detected(query):
     "summarize this document",
     "excel file",  # too short to be a request
     "is the spreadsheet up to date",
+    "what did the presentation say about safety",
+    "how many slides are in the pptx",
 ])
 def test_questions_about_files_are_not_requests_for_files(query):
     assert not document_intent_guard(query).triggered
@@ -58,7 +63,8 @@ def test_routes_yaml_sends_file_requests_to_the_complex_tier():
     route = router._parse_config()["document_generation"]
     assert route.complexity == "complex" and route.needs_tools is True
     assert route.action_type == "analysis"
-    assert len(route.utterances) >= 8
+    assert len(route.utterances) >= 12
+    assert any("slide" in u for u in route.utterances)
 
 
 async def test_guard_lifts_the_turn_to_the_complex_tier():

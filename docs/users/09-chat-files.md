@@ -1,17 +1,27 @@
 ---
-title: "Chat: Excel and Word files"
+title: "Chat: Excel, Word and PowerPoint files"
 category: "platform"
 order: 9
-description: "Ask AI Chat for a spreadsheet or a Word document and get a working, downloadable file"
+description: "Ask AI Chat for a spreadsheet, a Word document or a slide deck and get a working, downloadable file"
 published: true
 ---
 
-# Chat: Excel and Word files
+# Chat: Excel, Word and PowerPoint files
 
 AI Chat can hand you real files, not just text. Ask for a spreadsheet and
 you get an `.xlsx` with live formulas; ask for a document and you get a
-`.docx` with headings, tables, charts and a sources list. Deep-research
+`.docx` with headings, tables, charts and a sources list; ask for slides
+and you get a `.pptx` with native charts and speaker notes. Deep-research
 reports are exported to Word automatically.
+
+## File names
+
+Every generated file is named after its subject, so it is easy to find in
+your Documents library later: **Subject - Kind - Date**, for example
+`Q3 Crew Hours by Week - Spreadsheet - 2026-09-15.xlsx` or
+`SpaceX Launch Economics - Research Report - 2026-09-15.docx`. Generic
+names ("report", "document", "data") are refused; the chat picks a title
+that says what the file is about, and you can ask for a different one.
 
 ## Asking for a spreadsheet
 
@@ -60,6 +70,21 @@ Each document is rendered to PDF behind the scenes to confirm it opens and
 to count pages; the answer shows a preview of the first page next to the
 download link.
 
+## Asking for slides
+
+- "Turn that into a short slide deck for the ops meeting."
+- "Make a PowerPoint on the bid results, ten slides max."
+- "Give me a presentation summarizing the research, with the charts."
+
+Decks are 16:9 with a clean built-in style: title slide, section dividers,
+bullet slides (with optional picture), two-column comparisons, tables,
+native editable charts drawn from real numbers, image slides for charts
+the chat rendered earlier, and closing Sources slides. The narration goes
+into the speaker notes. Each deck is opened and checked — every slide
+titled, charts and tables present, one rendered page per slide — and the
+answer shows a preview of the first slide next to the download link.
+Slides too dense to read are flagged so the chat can split them.
+
 ## Deep research reports
 
 When you run a deep-research pass (the one you confirm with **Yes**), the
@@ -69,7 +94,10 @@ appended under the report. If the export fails for any reason the report
 itself is unaffected; you can still ask "export that to Word" afterwards.
 
 Administrators can turn the automatic export off with the agent setting
-`RESEARCH_EXPORT_DOCX=false`.
+`RESEARCH_EXPORT_DOCX=false`, and can additionally have every research
+turn produce a slide deck with `RESEARCH_EXPORT_PPTX=true` (off by
+default — it costs one more model pass; "make slides from that" works on
+demand either way).
 
 ## Limits and good to know
 
@@ -82,7 +110,7 @@ Administrators can turn the automatic export off with the agent setting
   Excel's formula language is.
 - Percent columns expect fractions (0.125 for 12.5%).
 - A workbook can hold up to 12 sheets and 20,000 rows per sheet; a
-  document up to 60 sections.
+  document up to 60 sections; a deck up to 60 slides.
 - Only images stored in Busibox (for example charts the chat drew) are
   embedded in documents; images from the open web are replaced by their
   caption.
@@ -93,7 +121,7 @@ Administrators can turn the automatic export off with the agent setting
 
 | Symptom | What it means |
 |---|---|
-| "Document generation is not available on this server right now" | LibreOffice or pandoc is missing in the data container. Ask an administrator to redeploy the `data` service. |
+| "Document generation is not available on this server right now" | LibreOffice (calc/writer/impress) or pandoc is missing in the data container. Ask an administrator to redeploy the `data` service. |
 | The chat says the workbook had formula errors | A formula referenced the wrong cell or a text value. The chat normally retries with a corrected spec; if not, ask it to try again or to show the table inline. |
 | The download opens in the browser instead of saving | Use the link the chat gave you (it ends in `?download=1`); a plain media link displays the file inline. |
 | The first-page preview is missing | Thumbnails need `pdftoppm` (poppler) in the data container. The document itself is unaffected. |

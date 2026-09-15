@@ -37,6 +37,23 @@ changes — see release notes per version.
   settings: `DOCUMENT_GENERATION_TIMEOUT_SECONDS`, `RESEARCH_EXPORT_DOCX`.
   See `docs/users/09-chat-files.md` and
   `docs/developers/chat-document-generation-plan.md`.
+- **PowerPoint decks from AI Chat.** `create_presentation` takes a
+  `PresentationSpec` (title/section/bullets/two-column/image/table/chart
+  slides with speaker notes and Sources slides) and
+  `POST /files/generate/pptx` builds a 16:9 deck with python-pptx — native
+  editable charts, real tables, `render_chart` images — then re-opens it to
+  check every slide has its title and figures, renders it through
+  LibreOffice (page count must equal slide count) and returns a
+  first-slide thumbnail. Consented research turns can also produce a deck
+  (`RESEARCH_EXPORT_PPTX`, default off; `RESEARCH_DECK_MAX_SLIDES`) via one
+  structured-output pass over the report. `libreoffice-impress-nogui`
+  added to the data container; `.pptx` accepted as an upload type.
+- **Descriptive names for generated files.** Every generated file is
+  named `Subject - Kind - YYYY-MM-DD.ext` from the spec's `title` and
+  `kind` (e.g. `SpaceX Launch Economics - Research Report - 2026-09-15.docx`);
+  generic names (report, document, data, untitled…) are rejected with
+  guidance, `filename` is optional, and the research lead is asked to open
+  its report with a subject-naming title.
 - **Media proxy `?download=1` and restored portal route (busibox-frontend).**
   `apps/portal/src/app/api/media/[fileId]` is back — the agent's image,
   chart, audio and file links all point at `/portal/api/media/{id}` and

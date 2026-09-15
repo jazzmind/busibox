@@ -328,6 +328,17 @@ class Settings(BaseSettings):
                     "charts and sources) as a Word document and post the link under the "
                     "answer. Non-fatal: an export failure never loses the report.",
     )
+    research_export_pptx: bool = Field(
+        False,
+        description="Also distil the research report into a slide deck (one extra "
+                    "structured-output model call on `chat`, ~30-60 s) and post the link. "
+                    "Off by default; the create_presentation tool covers 'make slides' "
+                    "requests on demand.",
+    )
+    research_deck_max_slides: int = Field(
+        12,
+        description="Upper bound on content slides in the automatic research deck.",
+    )
 
     research_mermaid_enabled: bool = Field(
         False,

@@ -338,6 +338,7 @@ class ChatAgent(BaseStreamingAgent):
                 "render_chart",
                 "create_spreadsheet",
                 "create_document",
+                "create_presentation",
                 "transcribe_audio",
                 "memory_search",
                 "memory_save",
@@ -466,6 +467,11 @@ class ChatAgent(BaseStreamingAgent):
             "word_document": "create_document",
             "docx": "create_document",
             "create_document": "create_document",
+            "presentation": "create_presentation",
+            "powerpoint": "create_presentation",
+            "slides": "create_presentation",
+            "pptx": "create_presentation",
+            "create_presentation": "create_presentation",
             "transcription": "transcribe_audio",
             "transcribe_audio": "transcribe_audio",
             "tts": "text_to_speech",
@@ -1051,6 +1057,7 @@ class ChatAgent(BaseStreamingAgent):
             "- 'make me a spreadsheet of the crew hours by week' -> action_type=analysis, needs_tools=true, complexity=complex\n"
             "- 'put that in an excel file' -> action_type=analysis, needs_tools=true, complexity=complex\n"
             "- 'write this up as a word document I can send' -> action_type=analysis, needs_tools=true, complexity=complex\n"
+            "- 'turn that into a short slide deck for the ops meeting' -> action_type=analysis, needs_tools=true, complexity=complex\n"
             + (
                 "- User has uploaded attachments. If the question is about the attachments, "
                 "set needs_tools=true and respond with something like 'Let me review that attachment.' "
@@ -1358,8 +1365,8 @@ class ChatAgent(BaseStreamingAgent):
             f"- Do NOT include `transcribe_audio` unless the user provided an audio file.{' Audio attachment detected.' if has_audio else ' No audio attachment present.'}\n"
             f"- Do NOT include `generate_image` unless the user explicitly asked for image generation.{' Image generation requested.' if has_image_request else ' No image request detected.'}\n"
             "- Do NOT include `text_to_speech` unless the user asked for voice/audio output.\n"
-            "- Do NOT include `create_spreadsheet` or `create_document` unless the user asked for a spreadsheet/Excel file or a Word document/.docx; "
-            "when they did, gather the data first (document_search / query_data / web_search) and pass the values in `spec`.\n"
+            "- Do NOT include `create_spreadsheet`, `create_document` or `create_presentation` unless the user asked for a spreadsheet/Excel file, "
+            "a Word document/.docx, or slides/a deck/PowerPoint; when they did, gather the data first (document_search / query_data / web_search) and pass the values in `spec`.\n"
             "- Do NOT include `create_task` unless the user explicitly asked to create a scheduled task.\n"
             "- Do NOT include `send_notification` unless the user explicitly asked to send a notification.\n"
             "- Do NOT include `memory_search` or `memory_save` unless the user asks about previous conversations or preferences.\n"

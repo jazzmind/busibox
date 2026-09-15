@@ -184,6 +184,9 @@ routes:
       - "give me a docx version of the summary"
       - "create a memo in word summarizing the safety plan"
       - "I need this as a downloadable document"
+      - "turn that into a short slide deck for the ops meeting"
+      - "make a powerpoint presentation on the bid results"
+      - "give me 10 slides summarizing the research"
 
   greeting:
     # Pure greetings are answered directly without tools. The response

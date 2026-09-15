@@ -46,7 +46,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -107,6 +107,79 @@ DECOMPOSITION_SCHEMA: Dict[str, Any] = {
     },
     "required": ["sub_questions"],
 }
+
+
+# The automatic research deck: a structured-output pass that distils the
+# finished report into slides. Hand-written (no $defs) so it survives every
+# provider's response_format conversion; mapped onto PresentationSpec after.
+DECK_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "subtitle": {"type": "string"},
+        "slides": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "layout": {"type": "string", "enum": ["section", "bullets", "two_column", "image", "table", "chart"]},
+                    "title": {"type": "string"},
+                    "subtitle": {"type": "string"},
+                    "bullets": {"type": "array", "items": {"type": "string"}},
+                    "right_bullets": {"type": "array", "items": {"type": "string"}},
+                    "left_heading": {"type": "string"},
+                    "right_heading": {"type": "string"},
+                    "image_file_id": {"type": "string"},
+                    "image_caption": {"type": "string"},
+                    "table": {
+                        "type": "object",
+                        "properties": {
+                            "headers": {"type": "array", "items": {"type": "string"}},
+                            "rows": {"type": "array", "items": {"type": "array", "items": {"type": ["string", "number", "null"]}}},
+                        },
+                        "required": ["headers", "rows"],
+                    },
+                    "chart": {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string", "enum": ["column", "bar", "line", "pie"]},
+                            "categories": {"type": "array", "items": {"type": "string"}},
+                            "series": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {"name": {"type": "string"}, "values": {"type": "array", "items": {"type": "number"}}},
+                                    "required": ["name", "values"],
+                                },
+                            },
+                            "number_format": {"type": "string"},
+                            "source": {"type": "string"},
+                        },
+                        "required": ["type", "categories", "series"],
+                    },
+                    "notes": {"type": "string"},
+                },
+                "required": ["layout", "title"],
+            },
+        },
+    },
+    "required": ["title", "slides"],
+}
+
+DECK_SYSTEM = """You turn a finished research report into a short slide deck for a
+business audience. Return JSON matching the schema.
+
+- {max_slides} content slides at most, one idea per slide. Lead with the bottom
+  line, then the evidence, then open questions and next steps. A title slide
+  and Sources slides are added for you — do not write them.
+- `title`: the subject in a few words (it names the file). `subtitle`: one line.
+- bullets: 3–6 per slide, under 12 words each, plain statements with the
+  numbers in them. Prefix a sub-point with "- ". Put the narration in `notes`.
+- Use `chart` when the report has a numeric series (copy the real values;
+  never invent), `table` for comparisons (max 8 rows), `two_column` for
+  A-vs-B, `image` only with one of the chart file ids listed below, `section`
+  sparingly.
+- Keep every claim traceable to the report; no new facts."""
 
 
 @dataclass
@@ -365,7 +438,7 @@ def build_report_spec(question: str, text: str, bundle: ResearchBundle):
     the text; the data-api embeds them. Worker sources are appended as a
     Sources section unless the report already has one.
     """
-    from busibox_common.document_specs import DocumentSpec, SectionSpec, SourceSpec, safe_filename
+    from busibox_common.document_specs import DocumentSpec, SectionSpec, SourceSpec
 
     title, parts = _split_report(text)
     title = (title or _title_from_question(question))[:300]
@@ -388,14 +461,73 @@ def build_report_spec(question: str, text: str, bundle: ResearchBundle):
             seen.add(url)
             sources.append(SourceSpec(title=name[:300], url=url[:2000] or None))
     return DocumentSpec(
-        filename=safe_filename(title, ".docx"),
         title=title,
+        kind="Research Report",  # file name becomes "<title> - Research Report - <date>.docx"
         subtitle="Deep research report",
         author="Busibox AI Chat",
         toc=True,
         sections=sections or [SectionSpec(markdown=text)],
         sources=sources,
     )
+
+
+_MEDIA_IMG_RE = re.compile(r"!\[([^\]]*)\]\([^)]*?/api/media/([0-9a-fA-F-]{36})[^)]*\)")
+
+
+def report_chart_ids(text: str) -> List[Tuple[str, str]]:
+    """(file_id, alt text) for every Busibox media image in the report."""
+    seen: Dict[str, str] = {}
+    for m in _MEDIA_IMG_RE.finditer(text or ""):
+        seen.setdefault(m.group(2), m.group(1))
+    return list(seen.items())
+
+
+def build_deck_spec(data: Dict[str, Any], question: str, bundle: ResearchBundle, chart_ids: List[Tuple[str, str]], max_slides: int):
+    """Map the deck model's JSON onto a validated ``PresentationSpec``.
+
+    Slides that fail validation are dropped individually (a bad chart must
+    not sink the deck); the result must still have at least three slides.
+    Returns (spec, dropped_count).
+    """
+    from busibox_common.document_specs import PresentationSpec, SlideSpec, SourceSpec
+    from pydantic import ValidationError
+
+    known = {fid for fid, _ in chart_ids}
+    slides = []
+    dropped = 0
+    for raw in (data.get("slides") or [])[:max_slides]:
+        item: Dict[str, Any] = {k: v for k, v in raw.items() if v not in (None, "", [], {})}
+        fid = item.pop("image_file_id", None)
+        caption = item.pop("image_caption", None)
+        if fid and fid in known:
+            item["image"] = {"file_id": fid, "caption": caption or dict(chart_ids).get(fid) or None}
+        elif item.get("layout") == "image":
+            item["layout"] = "bullets"  # unknown image: keep the words, drop the picture
+        try:
+            slides.append(SlideSpec.model_validate(item))
+        except ValidationError as exc:
+            dropped += 1
+            logger.info("research deck: dropped slide %r: %s", item.get("title"), str(exc).splitlines()[0])
+    if len(slides) < 3:
+        raise ValueError(f"only {len(slides)} usable slide(s)")
+    title = (data.get("title") or "").strip() or _title_from_question(question)
+    seen_urls = set()
+    sources = []
+    for src in bundle.sources[:20]:
+        url = (src.get("url") or "").strip()
+        name = (src.get("title") or url or "").strip()
+        if name and url not in seen_urls:
+            seen_urls.add(url)
+            sources.append(SourceSpec(title=name[:300], url=url[:2000] or None))
+    spec = PresentationSpec(
+        title=title[:200],
+        kind="Research Briefing",
+        subtitle=(data.get("subtitle") or "Deep research summary")[:200],
+        author="Busibox AI Chat",
+        slides=slides,
+        sources=sources,
+    )
+    return spec, dropped
 
 
 class ResearchOrchestrator:
@@ -629,7 +761,9 @@ class ResearchOrchestrator:
             + (f" ({bundle.failed_workers} returned nothing)" if bundle.failed_workers else "")
             + ".\n\n"
             f"{findings_md}\n\n"
-            "Write the full report now."
+            "Write the full report now. Begin with a single `#` title that names the "
+            "subject in a few words (it becomes the document title and file name), "
+            "then the `##` sections."
         )
         await lead._execute_llm_driven(prompt, lead_stream, cancel, ctx)
         text = str(ctx.tool_results.get("llm_response") or "").strip()
@@ -687,6 +821,62 @@ class ResearchOrchestrator:
             return out.markdown
         except Exception as exc:  # noqa: BLE001 — never lose the report over the export
             logger.warning("research export raised: %s", exc, exc_info=True)
+            return ""
+
+    async def _export_deck(
+        self, question: str, text: str, bundle: ResearchBundle,
+        parent_ctx: AgentContext, stream: StreamCallback,
+    ) -> str:
+        """Optional slide-deck export (settings.research_export_pptx). One
+        structured-output call distils the report; the data-api renders it.
+        Non-fatal, like the Word export."""
+        if not getattr(self.settings, "research_export_pptx", False):
+            return ""
+        deps = getattr(parent_ctx, "deps", None)
+        if deps is None:
+            return ""
+        try:
+            from app.tools.document_tools import export_presentation
+
+            max_slides = int(getattr(self.settings, "research_deck_max_slides", 12))
+            charts = report_chart_ids(text)
+            await stream(thought(
+                source="research", message="Distilling the report into slides…",
+                data={"phase": "export_deck", "charts": len(charts)},
+            ))
+            chart_note = ("\n\nChart images available for `image_file_id` (use the id exactly):\n"
+                          + "\n".join(f"- {fid}: {alt or 'chart'}" for fid, alt in charts)) if charts else ""
+            report_text = text if len(text) <= 60000 else text[:60000] + "\n\n[report truncated]"
+            t0 = time.monotonic()
+            raw = await self.parent._call_structured_output(
+                prompt=f"Research question:\n{question}\n\nReport:\n{report_text}{chart_note}",
+                system_prompt=DECK_SYSTEM.replace("{max_slides}", str(max_slides)),
+                response_schema=DECK_SCHEMA,
+                max_tokens=6000,
+            )
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            spec, dropped = build_deck_spec(data, question, bundle, charts, max_slides)
+            out = await export_presentation(deps, spec)
+            elapsed_ms = round((time.monotonic() - t0) * 1000)
+            parent_ctx.record_tool_call(
+                "create_presentation", {"filename": spec.filename, "slides": len(spec.slides), "dropped": dropped},
+                out, elapsed_ms, source="lead",
+            )
+            if not out.success or not out.markdown:
+                logger.warning("research deck export failed: %s | %s", out.error, "; ".join(out.issues[:3]))
+                await stream(thought(
+                    source="research", message=f"Slide export skipped: {out.error or 'verification failed'}",
+                    data={"phase": "export_deck", "ok": False, "issues": out.issues[:5]},
+                ))
+                return ""
+            await stream(thought(
+                source="research", message=f"Slides exported: {out.summary}",
+                data={"phase": "export_deck", "ok": True, "file_id": out.file_id, "slides": len(spec.slides), "dropped": dropped, "ms": elapsed_ms},
+            ))
+            return out.markdown
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("research deck export raised: %s", exc, exc_info=True)
+            await stream(thought(source="research", message=f"Slide export skipped: {exc}", data={"phase": "export_deck", "ok": False}))
             return ""
 
     # -- run ----------------------------------------------------------------
@@ -781,11 +971,14 @@ class ResearchOrchestrator:
                 return ""
 
         if ok_count and text and not cancel.is_set():
-            export_md = await self._export_report(question, text, bundle, parent_ctx, stream)
-            if export_md:
-                # Stream the link as a final content chunk (the lead's text
-                # already streamed) and persist it as part of the answer.
-                tail = f"\n\n---\n\n{export_md}"
+            links = [md for md in (
+                await self._export_report(question, text, bundle, parent_ctx, stream),
+                await self._export_deck(question, text, bundle, parent_ctx, stream),
+            ) if md]
+            if links:
+                # Stream the links as a final content chunk (the lead's text
+                # already streamed) and persist them as part of the answer.
+                tail = "\n\n---\n\n" + "\n\n".join(links)
                 await stream(content(source="research", message=tail, data={"streaming": True, "partial": True}))
                 text = f"{text}{tail}"
 

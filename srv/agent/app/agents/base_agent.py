@@ -266,7 +266,7 @@ RESEARCH_CHART_DIRECTIVE = """- **Charts**: when the findings contain a numeric 
 # Appended to the loop prompt when create_spreadsheet / create_document are
 # available. The tool docstrings carry the how; this carries the when — a
 # file is something the user asked for, not a default output format.
-DOCUMENT_TOOLS_DIRECTIVE = """## Files — spreadsheets and documents
+DOCUMENT_TOOLS_DIRECTIVE = """## Files — spreadsheets, documents and slides
 
 - `create_spreadsheet` — only when the user asks for a spreadsheet, Excel
   file, workbook, or an editable/sortable table. Gather the numbers first
@@ -276,11 +276,18 @@ DOCUMENT_TOOLS_DIRECTIVE = """## Files — spreadsheets and documents
 - `create_document` — only when the user asks for a Word document, .docx,
   or a report/memo "as a file". Write the content as Markdown sections; put
   the `render_chart` image lines in the body so the charts embed.
-- Both return `markdown` with the download link: paste it into your answer
-  and describe the file in one sentence. If `success` is false, fix what
-  `issues` says and retry once or twice; if it still fails, say so plainly
-  and give the content inline instead. Never claim a file exists when the
-  tool did not return a link."""
+- `create_presentation` — only when the user asks for slides, a deck, a
+  presentation or a PowerPoint. One idea per slide, 3–6 short bullets,
+  native charts from real numbers, narration in the notes.
+- Name every file after its subject: `title` is what the file is about
+  ("Q3 Crew Hours by Week", "Harbor Dredging Bid Comparison"), `kind` a
+  short noun ("Budget", "Memo", "Briefing"). The file is saved as
+  "Title - Kind - date". "Report", "Document" or "Data" alone are rejected.
+- All three return `markdown` with the download link: paste it into your
+  answer and describe the file in one sentence. If `success` is false, fix
+  what `issues` says and retry once or twice; if it still fails, say so
+  plainly and give the content inline instead. Never claim a file exists
+  when the tool did not return a link."""
 
 # Tools a loop-first turn may never call on its own. deep_research is a paid,
 # multi-minute pass behind a Yes/No consent gate and is run by the research
@@ -492,6 +499,7 @@ TOOL_SCOPES: Dict[str, List[str]] = {
     "render_chart": ["data.write"],  # stores the PNG through the same upload path
     "create_spreadsheet": ["data.write"],  # data-api document engine stores the file as the user
     "create_document": ["data.write"],
+    "create_presentation": ["data.write"],
     "transcribe_audio": ["data.read"],
     "text_to_speech": ["data.write"],
     "memory_search": [],
@@ -549,6 +557,7 @@ TOOL_CLASSES: Dict[str, Dict[str, Any]] = {
     # inner limit, this is the outer kill switch.
     "create_spreadsheet": {"class": "slow", "timeout": 240},
     "create_document": {"class": "slow", "timeout": 240},
+    "create_presentation": {"class": "slow", "timeout": 240},
     "transcribe_audio": {"class": "slow", "timeout": 60},
     "text_to_speech": {"class": "slow", "timeout": 180},
     "send_notification": {"class": "slow", "timeout": 30},
@@ -742,9 +751,10 @@ def _register_builtin_tools():
     # come from busibox_common so the schema the model sees is the one the
     # engine validates.
     try:
-        from app.tools.document_tools import create_document, create_spreadsheet, DocumentFileOutput
+        from app.tools.document_tools import create_document, create_presentation, create_spreadsheet, DocumentFileOutput
         ToolRegistry.register("create_spreadsheet", create_spreadsheet, DocumentFileOutput)
         ToolRegistry.register("create_document", create_document, DocumentFileOutput)
+        ToolRegistry.register("create_presentation", create_presentation, DocumentFileOutput)
     except ImportError as e:
         logger.warning(f"Could not register document generation tools: {e}")
     ToolRegistry.register("transcribe_audio", transcribe_audio, TranscriptionOutput)
@@ -2938,7 +2948,7 @@ class BaseStreamingAgent(StreamingAgent):
                     parts.append(RESEARCH_CHART_DIRECTIVE)
                 if getattr(get_settings(), "research_mermaid_enabled", False):
                     parts.append(RESEARCH_MERMAID_DIRECTIVE)
-            if available & {"create_spreadsheet", "create_document"}:
+            if available & {"create_spreadsheet", "create_document", "create_presentation"}:
                 parts.append("")
                 parts.append(DOCUMENT_TOOLS_DIRECTIVE)
 

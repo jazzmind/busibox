@@ -42,6 +42,7 @@
     name:
       - libreoffice-calc-nogui
       - libreoffice-writer-nogui
+      - libreoffice-impress-nogui
       - pandoc
       - fonts-crosextra-carlito
       - fonts-crosextra-caladea
