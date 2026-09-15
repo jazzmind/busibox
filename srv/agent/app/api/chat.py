@@ -17,15 +17,15 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.auth.dependencies import get_principal
-from app.db.session import get_session
+from app.db.session import _should_use_test_db, get_session
 from app.models.domain import Conversation, Message, ChatAttachment, ChatSettings
 from app.schemas.auth import Principal
 from app.services.platform_config import get_platform_insights_enabled
@@ -991,478 +991,142 @@ async def send_chat_message_stream(
     )
 
 
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",  # Disable nginx buffering
+}
+
+
 @router.post("/message/stream/agentic")
 async def send_chat_message_stream_agentic(
     payload: ChatMessageRequest,
+    request: Request,
     principal: Principal = Depends(get_principal),
-    session: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
     """
     Send a chat message using the agentic dispatcher with real-time streaming.
-    
-    This endpoint provides a more interactive experience where:
-    - The dispatcher explains what it's doing in real-time
-    - Agents stream their thoughts and tool usage
-    - Users can see the research process as it happens
-    
-    Event types:
-    - thought: Dispatcher/agent reasoning (for collapsible thinking section)
-    - tool_start: Starting a tool execution
-    - tool_result: Tool completed with result
-    - content: Final response content (streams to chat message)
-    - complete: Execution finished
-    - error: Error occurred
-    
-    Args:
-        payload: Chat message request
-        principal: Authenticated user
-        session: Database session
-        
-    Returns:
-        StreamingResponse with SSE events
+
+    The turn runs as a server-side job (``services/chat_turns.py``); this
+    response is a *subscription* to it. Closing the browser, sleeping the
+    laptop or navigating away only unsubscribes — the agent keeps working,
+    the answer is committed when it finishes, and the user is emailed if they
+    were not attached at the time. Reattach with
+    ``GET /chat/turns/{turn_id}/stream?after=<last event id>``.
+
+    Event types (unchanged from the inline implementation, plus two):
+    - turn_started: first event; carries ``turn_id`` for reattaching
+    - conversation_created / title_update
+    - thought, plan, progress, tool_start, tool_result, content, prompt,
+      clarify_parallel, interim, error
+    - message_complete: assistant message committed (``message_id``)
+    - turn_finished: terminal; ``status`` is completed | failed | cancelled | interrupted
+
+    Every SSE frame carries an ``id:`` line — the cursor to resume from.
+
+    Returns 404 (conversation not found), 409 (a response is already running
+    in this conversation) or 429 (too many running turns) as JSON before any
+    streaming starts.
     """
-    from app.services.agentic_dispatcher import run_agentic_dispatcher
-    
-    # Create cancellation event
-    cancel_event = asyncio.Event()
-    
-    async def generate_events() -> AsyncGenerator[str, None]:
-        """Generate SSE events from agentic dispatcher."""
-        import time as _time
-        _t_request = _time.monotonic()
-        logger.info(
-            "Agentic chat request started",
-            extra={
-                "user_id": principal.sub,
-                "message_preview": payload.message[:80],
-                "conversation_id": str(payload.conversation_id) if payload.conversation_id else None,
-                "agent_id": payload.agent_id if hasattr(payload, 'agent_id') else None,
-                "selected_agents": payload.selected_agents if hasattr(payload, 'selected_agents') else None,
-            }
-        )
-        try:
-            suppress_thinking_events = _is_bridge_request(payload.metadata)
-            # Get or create conversation
-            title_updated = False
-            if payload.conversation_id:
-                result = await session.execute(
-                    select(Conversation).where(
-                        Conversation.id == payload.conversation_id,
-                        Conversation.user_id == principal.sub
-                    )
-                )
-                conversation = result.scalar_one_or_none()
-                
-                if not conversation:
-                    yield f"event: error\ndata: {json.dumps({'error': 'Conversation not found'})}\n\n"
-                    return
-                
-                # Update title if it's still the default "New Conversation"
-                if conversation.title == "New Conversation":
-                    generated_title = payload.message[:50] + "..." if len(payload.message) > 50 else payload.message
-                    conversation.title = generated_title
-                    title_updated = True
-                    # Send title update event
-                    yield f"event: title_update\ndata: {json.dumps({'conversation_id': str(conversation.id), 'title': generated_title})}\n\n"
-            else:
-                # Generate title from first message (truncate to 50 chars)
-                generated_title = payload.message[:50] + "..." if len(payload.message) > 50 else payload.message
-                conversation = Conversation(
-                    title=generated_title,
-                    user_id=principal.sub
-                )
-                session.add(conversation)
-                await session.flush()
-                
-                # Send conversation created event with title
-                yield f"event: conversation_created\ndata: {json.dumps({'conversation_id': str(conversation.id), 'title': generated_title})}\n\n"
-            
-            # Store user message
-            user_message = Message(
-                conversation_id=conversation.id,
-                role="user",
-                content=payload.message,
-                attachments=[att.model_dump() for att in payload.attachments] if payload.attachments else None
-            )
-            session.add(user_message)
-            await session.flush()
+    from app.services.chat_turns import ConversationBusyError, TurnLimitError, start_turn, subscribe
 
-            # Load uploaded chat-attachments and link them to the user message
-            attachment_metadata: List[Dict[str, Any]] = []
-            if payload.attachment_ids:
-                attachment_result = await session.execute(
-                    select(ChatAttachment).where(ChatAttachment.id.in_(payload.attachment_ids))
-                )
-                attachments = attachment_result.scalars().all()
-                requested_ids = {str(att_id) for att_id in payload.attachment_ids}
-                found_ids = {str(att.id) for att in attachments}
-                missing_ids = requested_ids - found_ids
-                if missing_ids:
-                    logger.warning(
-                        "Some attachment IDs were not found",
-                        extra={
-                            "user_sub": principal.sub,
-                            "conversation_id": str(conversation.id),
-                            "missing_attachment_ids": sorted(missing_ids),
-                        },
-                    )
-
-                for attachment in attachments:
-                    attachment.message_id = user_message.id
-                    attachment_metadata.append({
-                        "id": str(attachment.id),
-                        "file_id": _extract_file_id_from_url(attachment.file_url),
-                        "filename": attachment.filename,
-                        "mime_type": attachment.mime_type,
-                        "file_url": attachment.file_url,
-                        "parsed_content": attachment.parsed_content,
-                    })
-            
-            # Get the most recent 20 messages for context (in chronological order).
-            # Exclude the just-inserted user message to avoid duplicating it in
-            # the prompt (agents add it separately as "Current Query").
-            recent_ids_subq = (
-                select(Message.id)
-                .where(Message.conversation_id == conversation.id)
-                .where(Message.id != user_message.id)
-                .order_by(desc(Message.created_at))
-                .limit(20)
-                .scalar_subquery()
-            )
-            history_result = await session.execute(
-                select(Message)
-                .where(Message.id.in_(recent_ids_subq))
-                .order_by(Message.created_at.asc())
-            )
-            history_messages = history_result.scalars().all()
-
-            # Attachments live on the message they were sent with, so a
-            # follow-up like "what's the attached?" used to arrive with no
-            # attachment at all and the agent would deny a file existed.
-            # Annotate the history with the filenames each turn carried, and
-            # when this message has no files of its own, carry the most recent
-            # turn's files forward (flagged so the agent can decide whether
-            # the new message is actually about them).
-            prior_files_by_message: Dict[uuid.UUID, List[ChatAttachment]] = {}
-            prior_user_ids = [msg.id for msg in history_messages if msg.role == "user"]
-            if prior_user_ids:
-                prior_result = await session.execute(
-                    select(ChatAttachment).where(ChatAttachment.message_id.in_(prior_user_ids))
-                )
-                for prior in prior_result.scalars().all():
-                    prior_files_by_message.setdefault(prior.message_id, []).append(prior)
-
-            history_dicts = []
-            for msg in history_messages:
-                content_text = msg.content or ""
-                prior_files = prior_files_by_message.get(msg.id)
-                if prior_files:
-                    names = ", ".join(p.filename for p in prior_files)
-                    content_text = f"{content_text}\n[Attached: {names}]".strip()
-                entry: Dict[str, Any] = {"role": msg.role, "content": content_text}
-                # Expose the routing action of earlier assistant turns so the
-                # clarify-loop guard can see that a question was already asked,
-                # and the question a deep-research offer is waiting on so
-                # "yes" on the next turn resumes it.
-                if msg.role == "assistant" and isinstance(msg.routing_decision, dict):
-                    for t in msg.routing_decision.get("thoughts") or []:
-                        data = t.get("data") if isinstance(t, dict) else None
-                        if isinstance(data, dict) and data.get("phase") == "intent_routing":
-                            entry["action_type"] = data.get("action_type")
-                            if data.get("pending_research"):
-                                entry["pending_research"] = data["pending_research"]
-                            break
-                history_dicts.append(entry)
-
-            if not attachment_metadata and prior_files_by_message:
-                for msg in reversed(history_messages):
-                    prior_files = prior_files_by_message.get(msg.id)
-                    if not prior_files:
-                        continue
-                    for prior in prior_files:
-                        attachment_metadata.append({
-                            "id": str(prior.id),
-                            "file_id": _extract_file_id_from_url(prior.file_url),
-                            "filename": prior.filename,
-                            "mime_type": prior.mime_type,
-                            "file_url": prior.file_url,
-                            "parsed_content": prior.parsed_content,
-                            "carried_forward": True,
-                        })
-                    break
-
-            # Determine available agents
-            # Default to chat agent only - it's the versatile general-purpose agent
-            # that can use tools (web search, documents, etc.) when needed
-            if payload.selected_agents:
-                available_agents = payload.selected_agents
-            else:
-                available_agents = ["chat"]
-
-            # Collect content for storing
-            full_content = []
-            # Fast-ack text is excluded from full_content (on tool-path turns it
-            # is an acknowledgment, not the answer) but kept here so direct-path
-            # turns — where the fast response IS the final answer — still persist
-            # real content instead of the "No response generated." placeholder.
-            fast_ack_content = None
-            thoughts = []
-            run_events = []
-            selected_agent_id = None
-            # Citations gathered from document_search tool results, keyed by file_id.
-            # Stored as a dict to deduplicate (keep highest score, earliest page).
-            citations_by_file: Dict[str, Any] = {}
-
-            # Run agentic dispatcher
-            dispatcher_metadata: Dict[str, Any] = dict(payload.metadata or {})
-            dispatcher_metadata["conversation_id"] = str(conversation.id)
-            async for event in run_agentic_dispatcher(
-                query=payload.message,
-                user_id=principal.sub,
-                session=session,
-                cancel=cancel_event,
-                available_agents=available_agents,
-                conversation_history=history_dicts,
-                principal=principal,
-                metadata=dispatcher_metadata,
-                attachment_metadata=attachment_metadata,
-                insights_enabled=get_platform_insights_enabled(),
-            ):
-                # Yield event to client (hide verbose thinking events for bridge channels)
-                if not (suppress_thinking_events and event.type in BRIDGE_FILTERED_AGENTIC_EVENTS):
-                    yield f"event: {event.type}\ndata: {event.model_dump_json()}\n\n"
-                
-                # Collect content and thoughts
-                if event.type == "content":
-                    phase = event.data.get("phase") if isinstance(event.data, dict) else None
-                    if phase == "fast_ack":
-                        fast_ack_content = event.message
-                    elif phase == "interim":
-                        pass  # interim previews are streamed but not stored
-                    else:
-                        full_content.append(event.message)
-                elif event.type in ("thought", "tool_start", "tool_result", "plan", "progress"):
-                    thought_item = {
-                        "type": event.type,
-                        "source": event.source,
-                        "message": event.message,
-                    }
-                    # Persist structured data for diagnostics and UI re-rendering.
-                    if event.type == "thought" and isinstance(event.data, dict):
-                        phase = event.data.get("phase")
-                        if phase == "intent_routing":
-                            thought_item["data"] = {
-                                "phase": "intent_routing",
-                                "action_type": event.data.get("action_type"),
-                                "needs_tools": event.data.get("needs_tools"),
-                                "confidence": event.data.get("confidence"),
-                                "routing_source": event.data.get("routing_source"),
-                                "follow_up_question": event.data.get("follow_up_question"),
-                                "preferred_tool": event.data.get("preferred_tool"),
-                                "pending_research": event.data.get("pending_research"),
-                            }
-                        elif phase:
-                            # Preserve phase for all other thought types (e.g. model_reasoning)
-                            # so the UI can re-render the thinking section after completion.
-                            thought_item["data"] = {"phase": phase}
-                    thoughts.append(thought_item)
-
-                # Accumulate document_search results for deterministic citation list.
-                if (
-                    event.type == "tool_result"
-                    and event.source == "document_search"
-                    and isinstance(event.data, dict)
-                ):
-                    for item in event.data.get("results", []):
-                        fid = item.get("file_id") or item.get("fileId")
-                        if not fid:
-                            continue
-                        new_score = float(item.get("score", 0.0))
-                        page = item.get("page_number") or item.get("pageNumber") or None
-                        if fid not in citations_by_file or new_score > citations_by_file[fid]["score"]:
-                            citations_by_file[fid] = {
-                                "file_id": fid,
-                                "filename": item.get("filename", ""),
-                                "page_number": page,
-                                "score": new_score,
-                            }
-                
-                # Build run event log for RunRecord
-                run_events.append({
-                    "type": event.type,
-                    "source": event.source,
-                    "message": event.message[:500] if event.message else "",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
-                
-                # Capture the selected agent ID from dispatcher routing
-                if event.data and isinstance(event.data, dict):
-                    if "selected_agent" in event.data:
-                        selected_agent_id = event.data["selected_agent"]
-            
-            # Store assistant message
-            # Join without separator - content chunks are already properly formatted.
-            # Direct-path turns stream only the fast-ack, so fall back to it
-            # before admitting defeat with the placeholder.
-            response_text = (
-                "".join(full_content) if full_content
-                else (fast_ack_content or "No response generated.")
-            )
-            
-            # Build routing_decision payload.  Always include citations even when
-            # no thoughts/agents present, so the frontend can render source chips.
-            collected_citations = sorted(
-                citations_by_file.values(), key=lambda c: -c["score"]
-            )
-            routing_payload: Dict[str, Any] = {}
-            if thoughts or available_agents:
-                routing_payload["thoughts"] = thoughts
-                routing_payload["selected_agents"] = available_agents
-            # Always present, even when empty: a missing key reads as "not
-            # collected yet" and left the UI showing "Sources pending" forever
-            # on answers that had no document sources.
-            routing_payload["citations"] = collected_citations
-
-            assistant_message = Message(
-                conversation_id=conversation.id,
-                role="assistant",
-                content=response_text,
-                routing_decision=routing_payload if routing_payload else None,
-            )
-            session.add(assistant_message)
-            
-            conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-            
-            # Create a RunRecord so this chat shows in agent API logs
-            try:
-                from app.models.domain import RunRecord, AgentDefinition
-                
-                agent_uuid = None
-                if selected_agent_id:
-                    try:
-                        agent_uuid = uuid.UUID(selected_agent_id)
-                    except (ValueError, TypeError):
-                        # Name-based agent, look up UUID
-                        agent_name = selected_agent_id
-                        agent_row = (await session.execute(
-                            select(AgentDefinition).where(AgentDefinition.name == agent_name)
-                        )).scalar_one_or_none()
-                        if agent_row:
-                            agent_uuid = agent_row.id
-                
-                if not agent_uuid:
-                    # Fallback: look up "chat" agent by name
-                    chat_row = (await session.execute(
-                        select(AgentDefinition).where(AgentDefinition.name == "chat")
-                    )).scalar_one_or_none()
-                    if chat_row:
-                        agent_uuid = chat_row.id
-                
-                if agent_uuid:
-                    elapsed_s = round((_time.monotonic() - _t_request), 2)
-                    run_record = RunRecord(
-                        agent_id=agent_uuid,
-                        status="completed",
-                        input={"prompt": payload.message, "source": "chat", "conversation_id": str(conversation.id)},
-                        output={"response": response_text[:2000]},
-                        events=run_events[-50:],
-                        created_by=principal.sub,
-                    )
-                    session.add(run_record)
-            except Exception as run_err:
-                logger.warning(f"Failed to create chat RunRecord (non-critical): {run_err}")
-            
-            await session.commit()
-            await session.refresh(assistant_message)
-
-            # Trigger insights generation + pending follow-up question for the agentic path.
-            pending_follow_up_question: Optional[str] = None
-            try:
-                from sqlalchemy import func
-                count_result = await session.execute(
-                    select(func.count()).select_from(Message).where(Message.conversation_id == conversation.id)
-                )
-                message_count = count_result.scalar_one()
-                if get_platform_insights_enabled() and should_generate_insights(conversation, message_count):
-                    pending_follow_up_question = await _generate_insights_and_pending_question(
-                        conversation=conversation,
-                        messages=history_messages + [user_message, assistant_message],
-                        user_id=principal.sub,
-                        user_token=principal.token,
-                    )
-            except Exception as exc:
-                logger.error("Failed to trigger agentic insights generation: %s", exc, exc_info=True)
-
-            if pending_follow_up_question:
-                interim_payload = {
-                    "type": "interim",
-                    "source": "insights",
-                    "message": pending_follow_up_question,
-                    "data": {
-                        "kind": "profile_follow_up",
-                        "bridge_channels": payload.metadata.get("bridge_channels", []) if payload.metadata else [],
-                    },
-                }
-                yield f"event: interim\ndata: {json.dumps(interim_payload)}\n\n"
-
-            # Online eval: sample a percentage of production conversations for
-            # background LLM quality grading (fire-and-forget).
-            try:
-                from app.services.eval_runner import sample_online_eval
-                asyncio.ensure_future(
-                    sample_online_eval(
-                        session=session,
-                        conversation_id=conversation.id,
-                        message_id=assistant_message.id,
-                        query=payload.message,
-                        response=response_text,
-                        agent_id=selected_agent_id,
-                        user_id=principal.sub,
-                    )
-                )
-            except Exception as _eval_exc:
-                logger.debug(f"Online eval hook skipped: {_eval_exc}")
-            
-            # Send completion event with message ID
-            completion_data = {
-                'message_id': str(assistant_message.id),
-                'conversation_id': str(conversation.id),
-                'citations': collected_citations,
-            }
-            yield f"event: message_complete\ndata: {json.dumps(completion_data)}\n\n"
-
-            logger.info(
-                "Agentic chat request complete",
-                extra={
-                    "total_ms": round((_time.monotonic() - _t_request) * 1000),
-                    "conversation_id": str(conversation.id),
-                    "response_length": len(response_text),
-                }
-            )
-            
-        except asyncio.CancelledError:
-            logger.info(
-                "Agentic chat cancelled by client",
-                extra={"elapsed_ms": round((_time.monotonic() - _t_request) * 1000)},
-            )
-            cancel_event.set()
-        except Exception as e:
-            logger.error(
-                f"Agentic streaming chat failed: {e}",
-                extra={"elapsed_ms": round((_time.monotonic() - _t_request) * 1000)},
-                exc_info=True,
-            )
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-    
-    return StreamingResponse(
-        generate_events(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"  # Disable nginx buffering
-        }
+    use_test_db = _should_use_test_db(request)
+    logger.info(
+        "Agentic chat request started",
+        extra={
+            "user_id": principal.sub,
+            "message_preview": payload.message[:80],
+            "conversation_id": str(payload.conversation_id) if payload.conversation_id else None,
+            "selected_agents": payload.selected_agents,
+        },
     )
+    try:
+        turn = await start_turn(payload, principal, use_test_db=use_test_db)
+    except LookupError as exc:
+        return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"error": str(exc)})
+    except ConversationBusyError as exc:
+        return JSONResponse(status_code=status.HTTP_409_CONFLICT, content={"error": str(exc)})
+    except TurnLimitError as exc:
+        return JSONResponse(status_code=status.HTTP_429_TOO_MANY_REQUESTS, content={"error": str(exc)})
+
+    return StreamingResponse(subscribe(turn.id), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+@router.get("/turns/{turn_id}/stream")
+async def stream_turn(
+    turn_id: uuid.UUID,
+    request: Request,
+    after: Optional[str] = Query(None, description="Last event id already seen; replay starts after it"),
+    principal: Principal = Depends(get_principal),
+) -> StreamingResponse:
+    """Reattach to a running (or recently finished) turn's event stream."""
+    from app.services.chat_turns import get_turn, subscribe
+
+    turn = await get_turn(turn_id, use_test_db=_should_use_test_db(request))
+    if turn is None or turn.user_id != principal.sub:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Turn not found")
+    return StreamingResponse(subscribe(turn.id, after), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+@router.get("/turns/{turn_id}")
+async def get_turn_status(
+    turn_id: uuid.UUID,
+    request: Request,
+    principal: Principal = Depends(get_principal),
+) -> Dict[str, Any]:
+    from app.services.chat_turns import get_turn
+
+    turn = await get_turn(turn_id, use_test_db=_should_use_test_db(request))
+    if turn is None or turn.user_id != principal.sub:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Turn not found")
+    return _turn_dict(turn)
+
+
+@router.post("/turns/{turn_id}/stop")
+async def stop_turn_endpoint(
+    turn_id: uuid.UUID,
+    request: Request,
+    principal: Principal = Depends(get_principal),
+) -> Dict[str, Any]:
+    """Stop a running turn. Whatever was produced so far is kept as a
+    '[Response stopped]' message."""
+    from app.services.chat_turns import get_turn, stop_turn
+
+    turn = await get_turn(turn_id, use_test_db=_should_use_test_db(request))
+    if turn is None or turn.user_id != principal.sub:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Turn not found")
+    stopped = await stop_turn(turn_id)
+    return {"turn_id": str(turn_id), "stopping": stopped, "status": turn.status}
+
+
+@router.get("/{conversation_id}/active-turn")
+async def get_active_turn(
+    conversation_id: uuid.UUID,
+    request: Request,
+    principal: Principal = Depends(get_principal),
+) -> Dict[str, Any]:
+    """The running turn in a conversation, if any — what a reloaded page
+    reattaches to."""
+    from app.services.chat_turns import active_turn_for_conversation
+
+    turn = await active_turn_for_conversation(conversation_id, principal.sub, use_test_db=_should_use_test_db(request))
+    return {"turn": _turn_dict(turn) if turn else None}
+
+
+def _turn_dict(turn) -> Dict[str, Any]:
+    return {
+        "id": str(turn.id),
+        "conversation_id": str(turn.conversation_id),
+        "status": turn.status,
+        "query": turn.query,
+        "user_message_id": str(turn.user_message_id) if turn.user_message_id else None,
+        "assistant_message_id": str(turn.assistant_message_id) if turn.assistant_message_id else None,
+        "error": turn.error,
+        "event_count": turn.event_count,
+        "last_event_id": turn.last_event_id,
+        "started_at": turn.started_at.isoformat() if turn.started_at else None,
+        "finished_at": turn.finished_at.isoformat() if turn.finished_at else None,
+    }
 
 
 @router.post("/{conversation_id}/generate-insights")

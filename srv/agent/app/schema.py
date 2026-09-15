@@ -365,6 +365,56 @@ def get_agent_schema() -> SchemaManager:
         )
     """)
     
+    # Chat turns: server-side jobs behind every chat request (services/chat_turns.py)
+    schema.add_table("""
+        CREATE TABLE IF NOT EXISTS chat_turns (
+            id UUID PRIMARY KEY,
+            conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+            user_id VARCHAR(255) NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'running',
+            query TEXT NOT NULL,
+            user_message_id UUID,
+            assistant_message_id UUID,
+            error TEXT,
+            event_count INTEGER NOT NULL DEFAULT 0,
+            last_event_id VARCHAR(64),
+            notified_at TIMESTAMP,
+            started_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            finished_at TIMESTAMP
+        )
+    """)
+    schema.add_migration("""
+        DO $$ BEGIN
+            ALTER TABLE chat_settings ADD COLUMN notify_email_on_completion BOOLEAN NOT NULL DEFAULT true;
+        EXCEPTION WHEN duplicate_column THEN NULL;
+        END $$
+    """)
+
+    # Personal memory files (services/user_memory.py). Owner-only by
+    # construction; the RLS policy that enforces it at the database level is
+    # applied by the administrator (docs/developers/user-memory.md).
+    schema.add_table("""
+        CREATE TABLE IF NOT EXISTS user_memory_files (
+            id UUID PRIMARY KEY,
+            user_id VARCHAR(255) NOT NULL,
+            path VARCHAR(200) NOT NULL,
+            description VARCHAR(300),
+            content BYTEA NOT NULL,
+            is_encrypted BOOLEAN NOT NULL DEFAULT true,
+            blob_id UUID NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1,
+            size_bytes INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """)
+    schema.add_migration("""
+        DO $$ BEGIN
+            ALTER TABLE chat_settings ADD COLUMN memory_enabled BOOLEAN NOT NULL DEFAULT true;
+        EXCEPTION WHEN duplicate_column THEN NULL;
+        END $$
+    """)
+
     # ==========================================================================
     # Tool Configuration Tables
     # ==========================================================================
@@ -558,6 +608,13 @@ def get_agent_schema() -> SchemaManager:
 
     # chat_settings indexes
     schema.add_index("CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_settings_user_id ON chat_settings(user_id)")
+
+    # chat_turns indexes
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_chat_turns_conversation_status ON chat_turns(conversation_id, status)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_chat_turns_user_status ON chat_turns(user_id, status)")
+
+    # user_memory_files indexes
+    schema.add_index("CREATE UNIQUE INDEX IF NOT EXISTS uq_user_memory_files_user_path ON user_memory_files(user_id, path)")
     
     # tool_configs indexes
     schema.add_index("CREATE INDEX IF NOT EXISTS ix_tool_configs_tool_id ON tool_configs(tool_id)")
@@ -607,6 +664,8 @@ def get_agent_schema() -> SchemaManager:
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON conversation_shares TO busibox_user")
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON chat_attachments TO busibox_user")
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON chat_settings TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON chat_turns TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON user_memory_files TO busibox_user")
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON tool_configs TO busibox_user")
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON agent_tasks TO busibox_user")
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON task_executions TO busibox_user")

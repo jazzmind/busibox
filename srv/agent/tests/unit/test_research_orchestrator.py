@@ -171,7 +171,10 @@ def test_bundle_is_a_research_report_with_failures_marked():
     assert isinstance(b, ResearchBundle)
     assert b.worker_count == 3 and b.failed_workers == 1
     assert [s["url"] for s in b.sources] == ["https://t", "https://u"]
-    assert "Breadth report (Tavily research)" in b.report
+    assert "## Broad web survey of the whole question" in b.report
+    assert "## Findings on: sub one" in b.report
+    # Internal labels never reach the bundle the report is written from.
+    assert "Worker" not in b.report and "Breadth report" not in b.report
     assert "worker one text" in b.report
     assert "did not return findings (timed out)" in b.report
 
@@ -502,3 +505,22 @@ def test_failed_workers_sources_are_not_offered_to_the_lead():
     ]
     b = ResearchOrchestrator.bundle("Q", findings, 0)
     assert [s["url"] for s in b.sources] == ["https://good"]
+
+
+def test_user_facing_text_never_says_worker_breadth_or_lead():
+    """The reader of a research report should see the subject, not how the
+    research was organised. Prompts, bundle headings and progress messages
+    use plain wording; the internal names stay in code and logs only."""
+    import inspect
+
+    for text in (ro.WORKER_INSTRUCTIONS, ro.LEAD_INSTRUCTIONS):
+        lowered = text.lower()
+        assert "breadth report" not in lowered
+        assert "you are the lead" not in lowered and "research worker" not in lowered
+    # LEAD_INSTRUCTIONS tells the writer not to expose the process at all.
+    assert 'no "workers"' in ro.LEAD_INSTRUCTIONS
+
+    src = inspect.getsource(ro.ResearchOrchestrator)
+    for banned in ('message=f"Worker', 'message="Breadth worker', "Breadth report (Tavily research)"):
+        assert banned not in src, banned
+    assert ro._short("a " * 100).endswith("…") and len(ro._short("short question")) == len("short question")

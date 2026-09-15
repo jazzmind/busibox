@@ -342,6 +342,9 @@ class ChatAgent(BaseStreamingAgent):
                 "transcribe_audio",
                 "memory_search",
                 "memory_save",
+                "memory_recall",
+                "memory_remember",
+                "memory_forget",
             ],
             execution_mode=ExecutionMode.RUN_ONCE,
             tool_strategy=ToolStrategy.LLM_DRIVEN,
@@ -474,6 +477,12 @@ class ChatAgent(BaseStreamingAgent):
             "create_presentation": "create_presentation",
             "transcription": "transcribe_audio",
             "transcribe_audio": "transcribe_audio",
+            "remember": "memory_remember",
+            "memory_remember": "memory_remember",
+            "forget": "memory_forget",
+            "memory_forget": "memory_forget",
+            "recall": "memory_recall",
+            "memory_recall": "memory_recall",
             "tts": "text_to_speech",
             "text_to_speech": "text_to_speech",
             "list_documents": "list_data_documents",
@@ -2063,7 +2072,7 @@ class ChatAgent(BaseStreamingAgent):
             # Consented deep research: lead + parallel workers instead of a
             # single Tavily call. Runs in the deep pass below.
             execution_plan = ExecutionPlan(
-                summary="Deep research: parallel workers, then a written report.",
+                summary="Deep research: several angles researched in parallel, then a written report.",
                 steps=[], source="orchestrator",
             )
         elif loop_tier:

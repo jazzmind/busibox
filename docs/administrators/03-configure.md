@@ -94,6 +94,38 @@ Environment-specific settings are managed through Ansible inventory files.
 | `ENABLE_RERANKING` | Enable search result reranking | false |
 | `RERANKER_MODEL` | Model for reranking | (configurable) |
 
+#### AI Chat (agent-api)
+
+Chat responses run as server-side jobs that outlive the browser
+connection; see `docs/developers/chat-detached-turns.md`.
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `CHAT_NOTIFY_EMAIL_ENABLED` | Email the user when a response finishes while they are not connected | true |
+| `CHAT_NOTIFY_MIN_SECONDS` | Responses at least this long also email a connected user | 120 |
+| `CHAT_MAX_RUNNING_TURNS_PER_USER` | Concurrent responses per user (429 beyond this) | 3 |
+| `CHAT_TURN_STOP_GRACE_SECONDS` | Seconds a stopped response gets to wind down before it is cancelled | 5 |
+| `CHAT_TURN_EVENT_TTL_SECONDS` | How long a finished response can still be reattached to (Redis) | 86400 |
+| `CHAT_TURN_EVENT_MAXLEN` | Events kept per response in Redis | 5000 |
+| `PORTAL_BASE_URL` | Base URL used in email links | (auto-configured) |
+| `BRIDGE_API_URL` | Email transport for notifications (else SMTP via `EMAIL_PROVIDER`) | (auto-configured) |
+
+#### Personal memory (agent-api)
+
+Per-user memory files, encrypted under the user's own key and readable only
+in that user's chat turns; see `docs/developers/user-memory.md` — including
+the one-time row-level-security policy to apply.
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `MEMORY_ENABLED` | Platform switch for personal memory | true |
+| `MEMORY_ENCRYPTION_REQUIRED` | Refuse to store memory in clear if the authz keystore is unreachable | true |
+| `MEMORY_CURATOR_PURPOSE` | Model purpose that curates memory after turns (`agent` = local) | agent |
+| `MEMORY_GATE_PURPOSE` | Model purpose for the cheap "anything durable here?" check | fast |
+| `MEMORY_MAX_FILES` | Files per user | 40 |
+| `MEMORY_MAX_FILE_BYTES` | Size cap per file | 8000 |
+| `MEMORY_CORE_MAX_CHARS` | profile + preferences characters injected per turn | 3000 |
+
 #### Security
 
 | Variable | Purpose | Default |

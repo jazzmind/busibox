@@ -524,6 +524,27 @@ Choose the most appropriate single agent for the query.""",
                 }
             )
             
+            # Step 1.4: The user's personal memory, for this turn only. Loaded
+            # under the caller's principal (owner-only store, decrypted with
+            # the caller's token); the object never leaves the AgentContext.
+            memory_ctx = None
+            if principal is not None:
+                try:
+                    from app.services.memory_reader import load_memory_context
+
+                    memory_ctx = await load_memory_context(
+                        principal, use_test_db=bool((metadata or {}).get("use_test_db")),
+                    )
+                except Exception as exc:  # noqa: BLE001 — memory is best-effort
+                    logger.warning("personal memory unavailable for this turn: %s", exc)
+                    memory_ctx = None
+            if memory_ctx is not None:
+                yield thought(
+                    source="dispatcher",
+                    message=f"Using your memory ({memory_ctx.file_count} file{'s' if memory_ctx.file_count != 1 else ''}).",
+                    data={"phase": "memory", "files": memory_ctx.file_count},
+                )
+
             # Step 1.5: Fetch relevant insights (agent memories) for the query
             t_insights = time.monotonic()
             relevant_insights = []
@@ -760,6 +781,7 @@ Choose the most appropriate single agent for the query.""",
                         "user_id": user_id,
                         "session": session,  # Pass DB session for token exchange
                         "relevant_insights": relevant_insights,  # Agent memories from dispatcher
+                        "memory": memory_ctx,  # Personal memory (this turn only, see memory_reader.py)
                         "missing_profile_fields": missing_profile_fields,
                         "pending_questions": pending_questions,
                         "insights_enabled": insights_enabled and get_platform_insights_enabled(),

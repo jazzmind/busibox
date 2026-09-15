@@ -181,6 +181,68 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Detached chat turns (services/chat_turns.py). Every chat request runs as
+    # a server-side job; the HTTP stream is only a subscriber, so a browser
+    # that sleeps or reloads neither cancels the work nor loses the answer.
+    chat_turn_event_ttl_seconds: int = Field(
+        86400,
+        description="How long a turn's event log (Redis stream chat:turn:{id}) stays replayable.",
+    )
+    chat_turn_event_maxlen: int = Field(
+        5000,
+        description="Cap on events kept per turn in Redis (content deltas dominate).",
+    )
+    chat_max_running_turns_per_user: int = Field(
+        3,
+        description="Concurrent running turns allowed per user; a fourth request is refused with 429.",
+    )
+    chat_turn_stop_grace_seconds: float = Field(
+        5.0,
+        description="After a stop request, seconds the loop gets to wind down cooperatively before the task is cancelled.",
+    )
+    chat_notify_email_enabled: bool = Field(
+        True,
+        description="Email the user when a turn finishes and nobody is attached to its stream (or it ran "
+                    "longer than chat_notify_min_seconds). Needs BRIDGE_API_URL or SMTP and an email claim on the JWT.",
+    )
+    chat_notify_min_seconds: int = Field(
+        120,
+        description="Turns shorter than this only email when the user has disconnected; longer turns "
+                    "email regardless, since the user has probably moved on.",
+    )
+
+    # Personal memory (services/user_memory.py, memory_curator.py). Markdown
+    # files per user, encrypted under the user's keystore key, read only
+    # into that user's own chat turns and curated after them.
+    memory_enabled: bool = Field(
+        True,
+        description="Platform switch for personal memory. Off: nothing is injected into prompts and nothing is written.",
+    )
+    memory_encryption_required: bool = Field(
+        True,
+        description="Refuse to store memory in clear when the authz keystore is unavailable. "
+                    "Set false only for local development without authz.",
+    )
+    memory_curator_purpose: str = Field(
+        "agent",
+        description="Model purpose the curator runs on. 'agent' keeps every conversation on the local model; "
+                    "'chat' files more accurately but sends the exchange to the chat model's provider.",
+    )
+    memory_gate_purpose: str = Field(
+        "fast",
+        description="Model purpose for the cheap 'does this turn contain a durable fact about the user?' check.",
+    )
+    memory_max_files: int = Field(40, description="Files per user; the curator must consolidate beyond this.")
+    memory_max_file_bytes: int = Field(8000, description="Size cap per memory file (UTF-8 bytes).")
+    memory_core_max_chars: int = Field(
+        3000,
+        description="Combined cap on profile.md + preferences.md injected into every turn; the rest is read on demand.",
+    )
+    memory_curate_max_turn_chars: int = Field(
+        6000,
+        description="How much of the exchange (user message + answer) the curator sees.",
+    )
+
     # Chat turn budget (escalation guards)
     chat_max_tool_steps: int = Field(
         6,

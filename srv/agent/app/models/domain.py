@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, Column, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, LargeBinary, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -619,11 +619,90 @@ class ChatSettings(Base):
     model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     temperature: Mapped[float] = mapped_column(Float, default=0.7)
     max_tokens: Mapped[int] = mapped_column(Integer, default=2000)
+    # Email the user when a chat turn finishes while they are not watching
+    # (see services/chat_turns.py). Off switches every completion email.
+    notify_email_on_completion: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default="true")
+    # Personal memory (services/user_memory.py): read into the user's own chat
+    # turns and curated after them. Off = nothing injected, nothing written.
+    memory_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
     def __repr__(self) -> str:
         return f"<ChatSettings(id={self.id}, user_id={self.user_id})>"
+
+
+class ChatTurn(Base):
+    """One chat request, run as a server-side job that outlives the HTTP
+    connection that started it.
+
+    The row is the durable record: it exists before the agent starts (so an
+    interrupted turn is never silently lost), carries the terminal status, and
+    points at the user/assistant messages the turn produced. The live event
+    stream is kept in Redis (``chat:turn:{id}``) and replayed to any client
+    that attaches, including one that comes back after a sleep or reload.
+    """
+    __tablename__ = "chat_turns"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    # running | completed | failed | cancelled | interrupted
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    user_message_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    assistant_message_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    event_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_event_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("idx_chat_turns_conversation_status", "conversation_id", "status"),
+        Index("idx_chat_turns_user_status", "user_id", "status"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ChatTurn(id={self.id}, conversation_id={self.conversation_id}, status={self.status})>"
+
+
+class UserMemoryFile(Base):
+    """One markdown document of a user's personal memory (``profile.md``,
+    ``preferences.md``, ``topics/<x>.md`` …). See ``services/user_memory.py``.
+
+    Only the owner can reach a row: every query filters on ``user_id`` from
+    the caller's JWT, the store sets ``app.user_id`` for the row-level
+    security policy documented in ``docs/developers/user-memory.md``, and
+    the content is envelope-encrypted through the authz keystore under the
+    user's own key (``blob_id`` is the keystore file id of the current
+    ciphertext). There is deliberately no admin path to these rows.
+    """
+    __tablename__ = "user_memory_files"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    path: Mapped[str] = mapped_column(String(200), nullable=False)
+    # One-line frontmatter description, kept in clear so the listing (which
+    # the model reads to pick files) needs no decryption.
+    description: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    is_encrypted: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    blob_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, default=_uuid)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now, nullable=False)
+
+    __table_args__ = (
+        Index("uq_user_memory_files_user_path", "user_id", "path", unique=True),
+    )
+
+    def __repr__(self) -> str:
+        return f"<UserMemoryFile(user_id={self.user_id}, path={self.path}, v{self.version})>"
 
 
 class AgentTask(Base):
