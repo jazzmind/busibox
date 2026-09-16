@@ -58,6 +58,45 @@ _YES_NO_PATTERNS = [
 ]
 
 
+_MAX_CLARIFY_OPTIONS = 4
+_MAX_CLARIFY_OPTION_CHARS = 60
+
+
+def _clean_clarify_options(options: Any) -> List[str]:
+    """Normalise model-provided clarify options: strings only, trimmed, de-duplicated, capped."""
+    if not isinstance(options, list):
+        return []
+    out: List[str] = []
+    seen = set()
+    for item in options:
+        text = str(item or "").strip().strip("-•*").strip()
+        if not text or len(text) > _MAX_CLARIFY_OPTION_CHARS:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+        if len(out) >= _MAX_CLARIFY_OPTIONS:
+            break
+    return out
+
+
+def _prompt_payload_for(question: str, options: Optional[List[str]]) -> Dict[str, Any]:
+    """Build the `prompt` event payload for a clarifying question.
+
+    Yes/no questions get confirm chips; questions with model-supplied choices
+    get those choices (the client adds its own "Something else" affordance);
+    anything else is an open prompt.
+    """
+    if _ends_with_yes_no_question(question):
+        return {"prompt_type": "confirm", "options": ["Yes", "No"]}
+    cleaned = _clean_clarify_options(options)
+    if len(cleaned) >= 2:
+        return {"prompt_type": "choice", "options": cleaned}
+    return {"prompt_type": "open", "options": []}
+
+
 def _ends_with_yes_no_question(text: str) -> bool:
     """Return True if *text* ends with a genuinely binary yes/no question.
 
@@ -172,7 +211,21 @@ class FastAckDecision(BaseModel):
     needs_tools: bool = True
     response: str
     follow_up_question: Optional[str] = None
+    # 2-4 short answers the user can pick from instead of typing (rendered as
+    # chips by the client). Only meaningful when follow_up_question is set.
+    # A small model returning "Yes, No" or [1, 2] must not invalidate the
+    # whole decision: the before-validator below coerces or drops bad values.
+    follow_up_options: Optional[List[str]] = None
     confidence: float = 0.75
+
+    @field_validator("follow_up_options", mode="before")
+    @classmethod
+    def _coerce_follow_up_options(cls, value: Any) -> Optional[List[str]]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = [part for part in re.split(r"[\n;|,]", value)]
+        return _clean_clarify_options(value) or None
     routing_source: str = "llm"
     complexity: str = "moderate"  # simple | moderate | complex
     # Tool the planner must include (set by the semantic router's route or
@@ -715,7 +768,7 @@ class ChatAgent(BaseStreamingAgent):
     _CLARIFY_REVIEW_PROMPT = (
         "A small classifier flagged this user message as too ambiguous to answer and wants to ask a "
         "clarifying question. Decide whether that is right.\n\n"
-        "Return ONLY JSON with keys: ambiguous (boolean), question (string), reason (string).\n"
+        "Return ONLY JSON with keys: ambiguous (boolean), question (string), options (array of strings), reason (string).\n"
         "Rules:\n"
         "- ambiguous=false when the message is a well-formed request that could be answered by searching "
         "company documents or the web, even if the answer might not be found. Not knowing the answer is "
@@ -724,6 +777,8 @@ class ChatAgent(BaseStreamingAgent):
         "or an unresolved reference with nothing in the conversation to resolve it ('what about that one?').\n"
         "- If ambiguous=true, 'question' must be ONE specific question, max 20 words, that would let you "
         "proceed. Never ask the user to restate what they already said.\n"
+        "- If ambiguous=true, 'options' lists 2-4 short (max 6 words) likely answers the user could click; "
+        "otherwise options=[].\n"
         "- reason: at most 12 words.\n"
     )
 
@@ -787,6 +842,9 @@ class ChatAgent(BaseStreamingAgent):
             question = str(parsed.get("question", "")).strip()
             if question and not _looks_like_prompt_echo(question):
                 decision.follow_up_question = question
+                # A rewritten question invalidates the classifier's options;
+                # take the reviewer's, if any.
+                decision.follow_up_options = _clean_clarify_options(parsed.get("options")) or None
             decision.routing_source = f"{decision.routing_source}+clarify_review:kept"
             logger.info(
                 "clarify_review: kept clarify",
@@ -1021,7 +1079,7 @@ class ChatAgent(BaseStreamingAgent):
         prompt = (
             f"Today is {_today}. Use this as the current date for any time-relative reasoning.\n"
             "You are deciding how to handle a user message.\n"
-            "Return ONLY JSON with keys: action_type, needs_tools, response, follow_up_question, confidence, complexity.\n"
+            "Return ONLY JSON with keys: action_type, needs_tools, response, follow_up_question, follow_up_options, confidence, complexity.\n"
             "Rules:\n"
             "- action_type must be one of: direct, research, search, analysis, clarify, multi_step.\n"
             "- needs_tools=true when external tools or fresh system data are useful "
@@ -1030,6 +1088,8 @@ class ChatAgent(BaseStreamingAgent):
             "a direct response is enough.\n"
             "- use action_type=clarify when the request is ambiguous or underspecified.\n"
             "- if action_type=clarify, set needs_tools=false and provide a follow_up_question.\n"
+            "- if action_type=clarify, also provide follow_up_options: 2-4 short (max 6 words each), mutually exclusive answers "
+            "the user is most likely to give, so they can click instead of type. Otherwise follow_up_options=[].\n"
             "- response must be concise (max 1 sentence, max 120 chars).\n"
             "- If needs_tools=true, response should acknowledge and indicate you are working on it.\n"
             "  Good examples: 'Let me look into that for you.', 'Sure, checking now.', 'On it — gathering info.'\n"
@@ -1115,6 +1175,9 @@ class ChatAgent(BaseStreamingAgent):
                 parsed.needs_tools = False
                 if not parsed.follow_up_question:
                     parsed.follow_up_question = "Could you clarify what you want me to focus on?"
+                parsed.follow_up_options = _clean_clarify_options(parsed.follow_up_options) or None
+            else:
+                parsed.follow_up_options = None
             parsed.routing_source = "llm"
             if parsed.needs_tools:
                 # Never let the fast model state a factual answer before tools
@@ -1934,7 +1997,7 @@ class ChatAgent(BaseStreamingAgent):
                         source=self.name,
                         message=question,
                         data={
-                            "options": ["Yes", "No"] if _ends_with_yes_no_question(question) else None,
+                            "options": _prompt_payload_for(question, decision.follow_up_options)["options"] or None,
                             "background_status": "Searching for relevant context while you decide...",
                         },
                     ))
@@ -1971,18 +2034,11 @@ class ChatAgent(BaseStreamingAgent):
                 bg_task = asyncio.create_task(bg_search())
 
                 # Emit the prompt so the frontend shows quick-reply buttons
-                if _ends_with_yes_no_question(question):
-                    await stream(prompt(
-                        source=self.name,
-                        message=question,
-                        data={"prompt_type": "confirm", "options": ["Yes", "No"]},
-                    ))
-                else:
-                    await stream(prompt(
-                        source=self.name,
-                        message=question,
-                        data={"prompt_type": "open", "options": []},
-                    ))
+                await stream(prompt(
+                    source=self.name,
+                    message=question,
+                    data=_prompt_payload_for(question, decision.follow_up_options),
+                ))
 
                 bg_cancel.set()
                 await bg_task
@@ -1995,11 +2051,12 @@ class ChatAgent(BaseStreamingAgent):
                     message=decision.follow_up_question,
                     data={"phase": "clarify", "partial": False},
                 ))
-                if _ends_with_yes_no_question(decision.follow_up_question):
+                payload = _prompt_payload_for(decision.follow_up_question, decision.follow_up_options)
+                if payload["options"]:
                     await stream(prompt(
                         source=self.name,
                         message=decision.follow_up_question,
-                        data={"prompt_type": "confirm", "options": ["Yes", "No"]},
+                        data=payload,
                     ))
                 return f"{fast_response}\n\n{decision.follow_up_question}".strip()
             return fast_response

@@ -500,6 +500,12 @@ class Conversation(Base):
     model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     is_private: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     agent_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    # Link sharing: 'private' (owner + explicit shares only) or 'org' (anyone
+    # authenticated in this deployment can open the conversation read-only).
+    link_access: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="private", server_default="private",
+        comment="'private' or 'org' — whether any signed-in user may view via link"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 

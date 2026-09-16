@@ -44,6 +44,7 @@ from app.services.insights_generator import (
 )
 from app.services.insights_service import ChatInsight
 from app.api.insights import get_insights_service
+from app.api.conversations import get_conversation_or_404
 from app.config.settings import get_settings
 from app.auth.token_exchange import exchange_token_zero_trust
 from app.services.load_monitor import get_load_monitor
@@ -1265,6 +1266,17 @@ async def send_chat_message_stream_agentic(
                             # Preserve phase for all other thought types (e.g. model_reasoning)
                             # so the UI can re-render the thinking section after completion.
                             thought_item["data"] = {"phase": phase}
+                    elif event.type in ("tool_start", "tool_result") and isinstance(event.data, dict):
+                        # Keep just enough for the client to rebuild the
+                        # "Searched documents · Searched the web" activity
+                        # summary on reload (never the raw tool output).
+                        tool_meta = {
+                            k: event.data.get(k)
+                            for k in ("tool_name", "display_name", "success")
+                            if event.data.get(k) is not None
+                        }
+                        if tool_meta:
+                            thought_item["data"] = tool_meta
                     thoughts.append(thought_item)
 
                 # Accumulate document_search results for deterministic citation list.
@@ -1624,20 +1636,8 @@ async def get_chat_history(
         ChatHistoryResponse with conversation and messages
     """
     try:
-        # Verify conversation exists and user owns it
-        result = await session.execute(
-            select(Conversation).where(
-                Conversation.id == conversation_id,
-                Conversation.user_id == principal.sub
-            )
-        )
-        conversation = result.scalar_one_or_none()
-        
-        if not conversation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Conversation {conversation_id} not found"
-            )
+        # Owner, explicit share, or org-wide link access (read-only) may read.
+        conversation = await get_conversation_or_404(conversation_id, session, principal.sub)
         
         # Get messages
         messages_result = await session.execute(

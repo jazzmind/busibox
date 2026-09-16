@@ -183,3 +183,14 @@ Then on the agent container: `journalctl -u agent-api -n 50 --no-pager | grep -i
 | Chat branding | `/srv/apps/busibox-chat/.env` + rebuild | `apps.yml` chat `env:` block |
 | Email domain allowlist | portal `.env` | vault `allowed_email_domains` |
 | Staging vault password | — | `/root/.busibox-vault-pass-<profile>` on Proxmox host |
+
+### B8. Conversation link sharing (agent DB, migration 009)
+
+The chat "Share" control needs `conversations.link_access` (Alembic revision
+`conversation_link_access_009`). The agent-api deploy runs `alembic upgrade head`;
+if the Share popover returns 500s after a deploy, the migration did not run:
+
+```bash
+pct exec 202 -- su - postgres -c "psql -d agent -c \"SELECT column_name FROM information_schema.columns WHERE table_name='conversations' AND column_name='link_access';\""
+# empty → on the agent container: cd /srv/agent && alembic upgrade head && systemctl restart agent-api
+```

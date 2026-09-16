@@ -89,11 +89,34 @@ async def get_conversation_or_404(
         share = share_result.scalar_one_or_none()
         if share:
             return conversation
+        # Link sharing: any authenticated user may read an 'org' conversation.
+        if getattr(conversation, "link_access", "private") == "org":
+            return conversation
     
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="You do not have access to this conversation"
     )
+
+
+async def resolve_access_role(
+    conversation: Conversation,
+    session: AsyncSession,
+    user_id: str,
+) -> str:
+    """Return 'owner' | 'editor' | 'viewer' for a user already known to have access."""
+    if conversation.user_id == user_id:
+        return "owner"
+    share_result = await session.execute(
+        select(ConversationShare).where(
+            ConversationShare.conversation_id == conversation.id,
+            ConversationShare.user_id == user_id,
+        )
+    )
+    share = share_result.scalar_one_or_none()
+    if share and share.role == "editor":
+        return "editor"
+    return "viewer"
 
 
 async def get_message_or_404(
@@ -247,6 +270,14 @@ async def list_conversations(
         conversations = result.scalars().all()
         
         # Build response with message counts and last messages
+        # Role of the caller on conversations shared with them (owner rows
+        # are detected by user_id). Non-editor shares are reported as viewer.
+        share_roles_result = await session.execute(
+            select(ConversationShare.conversation_id, ConversationShare.role)
+            .where(ConversationShare.user_id == principal.sub)
+        )
+        share_roles = {row[0]: row[1] for row in share_roles_result.all()}
+
         conversation_reads = []
         for conv in conversations:
             # Get message count
@@ -287,6 +318,11 @@ async def list_conversations(
                     agent_id=getattr(conv, 'agent_id', None),
                     message_count=message_count,
                     last_message=last_message_preview,
+                    link_access=getattr(conv, 'link_access', 'private') or 'private',
+                    access_role=(
+                        'owner' if conv.user_id == principal.sub
+                        else ('editor' if share_roles.get(conv.id) == 'editor' else 'viewer')
+                    ),
                     created_at=conv.created_at,
                     updated_at=conv.updated_at
                 )
@@ -407,6 +443,12 @@ async def get_conversation(
             id=conversation.id,
             title=conversation.title,
             user_id=conversation.user_id,
+            source=getattr(conversation, 'source', None),
+            model=getattr(conversation, 'model', None),
+            is_private=getattr(conversation, 'is_private', False),
+            agent_id=getattr(conversation, 'agent_id', None),
+            link_access=getattr(conversation, 'link_access', 'private') or 'private',
+            access_role=await resolve_access_role(conversation, session, principal.sub),
             created_at=conversation.created_at,
             updated_at=conversation.updated_at,
             messages=messages
@@ -441,6 +483,8 @@ async def update_conversation(
             conversation.is_private = payload.is_private
         if payload.model is not None:
             conversation.model = payload.model
+        if payload.link_access is not None:
+            conversation.link_access = payload.link_access
         
         await session.commit()
         await session.refresh(conversation)
@@ -466,6 +510,8 @@ async def update_conversation(
             is_private=conversation.is_private,
             agent_id=conversation.agent_id,
             message_count=message_count,
+            link_access=getattr(conversation, 'link_access', 'private') or 'private',
+            access_role='owner',
             created_at=conversation.created_at,
             updated_at=conversation.updated_at
         )
@@ -493,7 +539,7 @@ async def delete_conversation(
     Messages are cascade deleted automatically.
     """
     try:
-        conversation = await get_conversation_or_404(conversation_id, session, principal.sub)
+        conversation = await get_conversation_or_404(conversation_id, session, principal.sub, allow_shared=False)
         
         await session.delete(conversation)
         await session.commit()
@@ -754,7 +800,7 @@ async def list_conversation_shares(
 ) -> ConversationShareListResponse:
     """List all shares for a conversation. Owner or shared users can view."""
     try:
-        await get_conversation_or_404(conversation_id, session, principal.sub)
+        await get_conversation_or_404(conversation_id, session, principal.sub, allow_shared=False)
         
         result = await session.execute(
             select(ConversationShare)

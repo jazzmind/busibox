@@ -139,11 +139,24 @@ class ConversationCreate(BaseModel):
     agent_id: Optional[str] = Field(None, description="Agent used in conversation")
 
 
+LINK_ACCESS_VALUES = ("private", "org")
+
+
 class ConversationUpdate(BaseModel):
     """Schema for updating a conversation"""
     title: Optional[str] = Field(None, max_length=255, description="Updated conversation title")
     is_private: Optional[bool] = Field(None, description="Updated privacy setting")
     model: Optional[str] = Field(None, max_length=255, description="Updated model")
+    link_access: Optional[str] = Field(
+        None, description="'private' (owner + explicit shares) or 'org' (anyone signed in, read-only via link)"
+    )
+
+    @field_validator('link_access')
+    @classmethod
+    def validate_link_access(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in LINK_ACCESS_VALUES:
+            raise ValueError(f"link_access must be one of {LINK_ACCESS_VALUES}")
+        return v
 
 
 class ConversationRead(ConversationBase):
@@ -156,6 +169,10 @@ class ConversationRead(ConversationBase):
     agent_id: Optional[str] = None
     message_count: Optional[int] = None
     last_message: Optional[MessagePreview] = None
+    link_access: str = "private"
+    # How the requesting user may interact: owner | editor | viewer. Set by the
+    # API from ownership, explicit shares, or link access.
+    access_role: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
