@@ -222,6 +222,17 @@ changes — see release notes per version.
 
 ### Fixed
 
+- **Tables in Word and PowerPoint files were never embedded.** The DOCX
+  extractor built its text from `doc.paragraphs`, which excludes every
+  paragraph inside a table cell, and the PPTX extractor skipped table
+  shapes (they have no `.text`). Table content only reached
+  `ExtractionResult.tables`, which the ingest worker counts but never
+  chunks, so a leave-duration table or a state-by-state appendix was
+  invisible to search and to chat. Both extractors now render tables as
+  markdown inside the text, at the position where the table appears (DOCX
+  walks the body in document order), with merged cells emitted once.
+  Existing `.docx` / `.pptx` documents keep their old chunks until they are
+  re-uploaded or re-processed. (`srv/data`)
 - **Research reports and progress no longer talk about "workers", the
   "breadth report" or "the lead".** Those are the orchestrator's internal
   roles; a reader could take "Worker 2" or "breadth report" for something

@@ -3,8 +3,8 @@ Text extraction from various file formats.
 
 Supports:
 - PDF: Marker (primary), TATR (tables), pdfplumber (fallback)
-- DOCX: python-docx
-- PPTX: python-pptx
+- DOCX: python-docx (body walked in document order; tables rendered as markdown)
+- PPTX: python-pptx (text frames and table shapes)
 - XLSX: openpyxl
 - ODT: odfpy
 - TXT, HTML, XML, Markdown, CSV, JSON: Direct parsing
@@ -24,10 +24,60 @@ from typing import Callable, Dict, List, Optional, Tuple
 import pdfplumber
 import structlog
 from docx import Document
+from docx.oxml.ns import qn
+from docx.table import Table as DocxTable
+from docx.text.paragraph import Paragraph as DocxParagraph
 
 from processors.pdf_splitter import PDFSplitter, DEFAULT_PAGES_PER_SPLIT
 
 logger = structlog.get_logger()
+
+
+def table_rows_to_markdown(rows: List[List[str]]) -> str:
+    """Render a table (list of rows of cell strings) as a GitHub-style markdown table.
+
+    Used so table content becomes part of the extracted text and is chunked and
+    embedded like any other prose, instead of living only in ``ExtractionResult.tables``
+    (which the worker records as a count and never embeds). Empty rows are dropped,
+    ragged rows are padded, and pipes inside cells are escaped. Returns "" for a
+    table with no content.
+    """
+    cleaned = [[" ".join((c or "").split()) for c in row] for row in rows]
+    cleaned = [row for row in cleaned if any(row)]
+    if not cleaned:
+        return ""
+    width = max(len(row) for row in cleaned)
+    cleaned = [row + [""] * (width - len(row)) for row in cleaned]
+
+    def _cell(c: str) -> str:
+        return c.replace("|", "\\|")
+
+    lines = [
+        "| " + " | ".join(_cell(c) for c in cleaned[0]) + " |",
+        "|" + "---|" * width,
+    ]
+    lines.extend("| " + " | ".join(_cell(c) for c in row) + " |" for row in cleaned[1:])
+    return "\n".join(lines)
+
+
+def _docx_table_rows(table: DocxTable) -> List[List[str]]:
+    """Cell text for a python-docx table, one entry per visual cell.
+
+    python-docx repeats the same underlying ``<w:tc>`` for horizontally merged
+    cells, so consecutive duplicates are collapsed to a single cell.
+    """
+    rows: List[List[str]] = []
+    for row in table.rows:
+        cells: List[str] = []
+        seen: set = set()
+        for cell in row.cells:
+            key = id(cell._tc)
+            if key in seen:
+                continue
+            seen.add(key)
+            cells.append(cell.text)
+        rows.append(cells)
+    return rows
 
 
 def _create_resilient_converter(artifact_dict):
@@ -794,31 +844,40 @@ class TextExtractor:
             return ""
     
     def _extract_docx(self, file_path: str) -> ExtractionResult:
-        """Extract text from DOCX file."""
+        """Extract text from DOCX file.
+
+        Walks the document body in order so tables are emitted right after the
+        heading or sentence that introduces them, rendered as markdown tables.
+        ``doc.paragraphs`` alone skips every paragraph inside a table cell, which
+        silently dropped tabular content (rate tables, appendices) from the
+        embedded text.
+        """
         try:
             doc = Document(file_path)
-            text_parts = []
-            
-            for paragraph in doc.paragraphs:
-                if paragraph.text.strip():
-                    text_parts.append(paragraph.text)
-            
-            # Extract tables
-            tables = []
-            for table in doc.tables:
-                table_data = []
-                for row in table.rows:
-                    row_data = [cell.text for cell in row.cells]
-                    table_data.append(row_data)
-                tables.append({"data": table_data})
-            
+            text_parts: List[str] = []
+            tables: List[Dict] = []
+            paragraph_count = 0
+
+            for child in doc.element.body.iterchildren():
+                if child.tag == qn("w:p"):
+                    paragraph_count += 1
+                    text = DocxParagraph(child, doc).text
+                    if text.strip():
+                        text_parts.append(text)
+                elif child.tag == qn("w:tbl"):
+                    rows = _docx_table_rows(DocxTable(child, doc))
+                    tables.append({"data": rows})
+                    markdown = table_rows_to_markdown(rows)
+                    if markdown:
+                        text_parts.append("\n" + markdown + "\n")
+
             text_content = "\n".join(text_parts)
-            
+
             return ExtractionResult(
                 text=text_content,
-                page_count=len(doc.paragraphs) // 20,  # Estimate pages
+                page_count=paragraph_count // 20,  # Estimate pages (unchanged heuristic)
                 tables=tables,
-                metadata={"extraction_method": "python-docx"},
+                metadata={"extraction_method": "python-docx", "table_count": len(tables)},
             )
         
         except Exception as e:
@@ -978,12 +1037,19 @@ class TextExtractor:
             for slide in prs.slides:
                 slide_count += 1
                 slide_text = []
-                
-                # Extract text from shapes
+
+                # Extract text from shapes. Table shapes (GraphicFrame) have no
+                # .text, so they used to be skipped entirely; render them as
+                # markdown so the cell content is chunked and embedded.
                 for shape in slide.shapes:
-                    if hasattr(shape, "text") and shape.text.strip():
+                    if getattr(shape, "has_table", False):
+                        rows = [[cell.text for cell in row.cells] for row in shape.table.rows]
+                        markdown = table_rows_to_markdown(rows)
+                        if markdown:
+                            slide_text.append(markdown)
+                    elif hasattr(shape, "text") and shape.text.strip():
                         slide_text.append(shape.text.strip())
-                
+
                 if slide_text:
                     text_parts.append(f"=== Slide {slide_count} ===")
                     text_parts.extend(slide_text)
