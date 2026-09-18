@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin, agents, auth, chat, classify_tags, conversations, dispatcher, evals, execution_streams, extraction, health, insights, llm, runs, scores, streams, tasks, tools, webhooks, workflows
+from app.api import admin, agents, auth, chat, classify_tags, conversations, dispatcher, evals, execution_streams, extraction, health, insights, llm, memory, runs, scores, streams, tasks, tools, webhooks, workflows
 from app.config.settings import get_settings
 from app.db.session import SessionLocal
 from app.services.agent_registry import agent_registry
@@ -78,10 +78,26 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"LiteLLM model sync skipped: {e}")
 
+    # Chat turns from a previous process that died uncleanly are still
+    # 'running' in the database; mark them interrupted so the UI stops
+    # waiting for them.
+    try:
+        from app.services.chat_turns import sweep_orphans
+        await sweep_orphans()
+    except Exception as e:
+        logger.warning(f"Chat turn orphan sweep skipped: {e}")
+
     yield
     
     # Shutdown
     logger.info("Application shutting down")
+    # Running chat turns are interrupted (recorded + user emailed) rather
+    # than silently lost with the process.
+    try:
+        from app.services.chat_turns import shutdown as shutdown_chat_turns
+        await shutdown_chat_turns(timeout=10.0)
+    except Exception as e:
+        logger.warning(f"Chat turn shutdown skipped: {e}")
     await shutdown_platform_config()
     run_scheduler.shutdown(wait=False)
 
@@ -115,6 +131,7 @@ app.include_router(execution_streams.router)
 app.include_router(scores.router)
 app.include_router(conversations.router)
 app.include_router(insights.router)
+app.include_router(memory.router)
 app.include_router(tasks.router)
 app.include_router(webhooks.router)
 app.include_router(extraction.router)

@@ -193,6 +193,14 @@ class ChatSettingsBase(BaseModel):
     model: Optional[str] = Field(None, description="Preferred model")
     temperature: Optional[float] = Field(0.7, ge=0.0, le=2.0, description="Temperature setting")
     max_tokens: Optional[int] = Field(2000, ge=1, le=32000, description="Max tokens setting")
+    notify_email_on_completion: Optional[bool] = Field(
+        True,
+        description="Email me when a chat response finishes while I am not watching (long or interrupted turns)",
+    )
+    memory_enabled: Optional[bool] = Field(
+        True,
+        description="Read the user's personal memory into their chat turns and curate it afterwards",
+    )
 
     @field_validator('temperature')
     @classmethod

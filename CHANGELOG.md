@@ -11,6 +11,54 @@ changes — see release notes per version.
 
 ### Added
 
+- **Personal memory for AI Chat — readable only by its owner.** Each user
+  gets a small set of markdown memory files (`profile.md`,
+  `preferences.md`, `topics/`, `areas/`, `people/`) in the shape Claude's
+  memory uses. The two core files go into the system prompt of that user's
+  own chat turns; the rest are listed by description and opened on demand
+  with `memory_recall`. A curator runs in the background after a completed
+  turn (fast-model gate, then the local `agent` model proposes
+  write/str_replace/append/delete operations) and the chat agent handles
+  "remember that…" / "forget…" directly (`memory_remember`,
+  `memory_forget`). Three isolation layers: rows are owner-filtered and
+  every transaction binds `app.user_id` for a PostgreSQL row-level-security
+  policy (documented for the administrator to apply); content is
+  envelope-encrypted through the authz keystore under the user's own key
+  with the user's own token (writes are refused, not stored in clear, when
+  the keystore is down); memory is loaded only inside the owner's turn,
+  never persisted to messages/run records/event stream, and tool payloads
+  on the stream are redacted. Nothing is indexed — not in the Documents
+  library, Milvus or the graph — and there is no admin endpoint. New
+  `/users/me/memory` API (list/read/write/delete/delete-all/export),
+  `chat_settings.memory_enabled`, a Memory panel (brain icon) in the chat
+  app to view, edit, delete and export, and settings `MEMORY_ENABLED`,
+  `MEMORY_ENCRYPTION_REQUIRED`, `MEMORY_CURATOR_PURPOSE`,
+  `MEMORY_GATE_PURPOSE`, `MEMORY_MAX_FILES`, `MEMORY_MAX_FILE_BYTES`,
+  `MEMORY_CORE_MAX_CHARS`, `MEMORY_CURATE_MAX_TURN_CHARS`; Alembic
+  `user_memory_010`. See `docs/developers/user-memory.md`.
+- **Chat responses survive disconnects; email when they finish without
+  you.** A chat request no longer runs inside its own HTTP response. `POST
+  /chat/message/stream/agentic` now commits the user message and a
+  `chat_turns` row, starts the agent as a detached task in agent-api, and
+  streams a *subscription* to it: every event is appended to a Redis
+  Stream (`chat:turn:{id}`, in-process memory fallback) before any client
+  sees it, SSE frames carry `id:` lines, and `GET
+  /chat/turns/{id}/stream?after=` replays from any point. A sleeping
+  laptop, closed tab or navigation only unsubscribes — the answer is
+  committed whether or not anyone is attached, and the chat app reattaches
+  automatically on return (`useChatStream` backoff, `GET
+  /chat/{conversation_id}/active-turn` on open and on tab visibility).
+  Stop (`POST /chat/turns/{id}/stop`) is the one thing that cancels and it
+  keeps the partial answer; a restart records running turns as
+  `interrupted` with a marker. When a turn ends with nobody attached (or
+  ran longer than two minutes) the user is emailed a preview, file links
+  and a deep link to the conversation, through the existing Bridge/SMTP
+  email service; a bell icon in the chat header (`chat_settings.
+  notify_email_on_completion`) turns this off per user. New agent
+  settings: `CHAT_NOTIFY_EMAIL_ENABLED`, `CHAT_NOTIFY_MIN_SECONDS`,
+  `CHAT_MAX_RUNNING_TURNS_PER_USER`, `CHAT_TURN_STOP_GRACE_SECONDS`,
+  `CHAT_TURN_EVENT_TTL_SECONDS`, `CHAT_TURN_EVENT_MAXLEN`; Alembic
+  `chat_turns_009`. See `docs/developers/chat-detached-turns.md`.
 - **Excel and Word files from AI Chat.** Two new agent tools,
   `create_spreadsheet` and `create_document`, take a typed spec
   (`busibox_common.document_specs.WorkbookSpec` / `DocumentSpec`) and hand
@@ -174,6 +222,31 @@ changes — see release notes per version.
 
 ### Fixed
 
+- **Tables in Word and PowerPoint files were never embedded.** The DOCX
+  extractor built its text from `doc.paragraphs`, which excludes every
+  paragraph inside a table cell, and the PPTX extractor skipped table
+  shapes (they have no `.text`). Table content only reached
+  `ExtractionResult.tables`, which the ingest worker counts but never
+  chunks, so a leave-duration table or a state-by-state appendix was
+  invisible to search and to chat. Both extractors now render tables as
+  markdown inside the text, at the position where the table appears (DOCX
+  walks the body in document order), with merged cells emitted once.
+  Existing `.docx` / `.pptx` documents keep their old chunks until they are
+  re-uploaded or re-processed. (`srv/data`)
+- **Research reports and progress no longer talk about "workers", the
+  "breadth report" or "the lead".** Those are the orchestrator's internal
+  roles; a reader could take "Worker 2" or "breadth report" for something
+  about the topic. Progress messages now say what is being researched
+  ("Researching: …", "Broad web survey done: 81 sources"), the findings the
+  report is written from are headed by sub-question, and the report writer
+  is told to write as a single author and never describe the research
+  process. Internal names are unchanged in code and logs.
+- **Deep research runs vanished when the laptop slept.** The agentic
+  stream handler ran the whole turn in one transaction inside the SSE
+  generator; a client disconnect cancelled it and rolled back the
+  conversation, the user's question and minutes of work (`Agentic chat
+  cancelled by client` after ~6 min). Turns are now detached from the
+  request — see *Chat responses survive disconnects* above.
 - **Word export failed on Debian 12 with "pandoc failed: Could not find data
   file data/data/docx/[Content_Types].xml".** The engine passed `--sandbox`
   to pandoc ≥ 2.15; Debian's pandoc is built without embedded data files, so

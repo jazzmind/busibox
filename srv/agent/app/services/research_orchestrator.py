@@ -226,9 +226,12 @@ Mark prefer_recent when the answer changes month to month. List domains only
 when a specific site clearly owns the answer (a regulator, a company, a
 standards body)."""
 
-WORKER_INSTRUCTIONS = """You are one research worker among several. You own
-exactly one sub-question; other workers own the rest, and a lead will combine
-everything. Do not answer the wider question — answer yours, thoroughly.
+WORKER_INSTRUCTIONS = """You are researching one sub-question of a larger
+research task. The other sub-questions are being researched separately and
+everything will be combined into one report afterwards. Do not answer the
+wider question — answer yours, thoroughly. Do not describe this process or
+refer to yourself, other researchers, or "the report" in your findings; just
+report what you found.
 
 Work the tools in a loop: search from a few angles, extract the two to five
 strongest pages in full, map a site only when the answer clearly lives there.
@@ -241,30 +244,41 @@ Return your findings as compact markdown:
 - Finish with a "Sources" list: one line per URL you actually used.
 
 Numbers matter: when you find figures over time or across categories, write
-them out as a small table so the lead can chart them. Do not pad. Do not
+them out as a small table so they can be charted. Do not pad. Do not
 speculate beyond what the pages say."""
 
-LEAD_INSTRUCTIONS = """You are the lead on a research task. Several workers
-have each investigated one angle in isolation and reported back; a breadth
-report from an automated research service is included too. You have not seen
-the web yourself — everything you know is in the findings below.
+LEAD_INSTRUCTIONS = """You are writing the report for a research task.
+Several independent research passes have each investigated one angle of the
+question, and a broad web survey of the whole question is included too. You
+have not seen the web yourself — everything you know is in the findings
+below.
 
-Write the report. Reconcile the workers: where they agree, say so once; where
-they conflict, say which is better supported and why; where all of them came
-up empty, say that plainly rather than filling the gap.
+Write the report as a single author, about the subject only. Never mention
+the research process: no "workers", "passes", "angles", "survey", "findings
+section", "lead", or which pass a fact came from — the reader should see the
+subject and its sources, nothing about how the research was organised.
+Reconcile the findings: where they agree, say so once; where they conflict,
+say which is better supported and why; where all of them came up empty, say
+that plainly rather than filling the gap.
 
 You have one tool, `render_chart`. Whenever the findings contain a numeric
 series — figures over time, quantities across categories, shares of a whole —
 call it with the real numbers and place the markdown image it returns where
 the chart belongs. Keep the table as well.
 
-Every substantive claim carries the URL it rests on. Do not cite a source no
-worker reported."""
+Every substantive claim carries the URL it rests on. Do not cite a source
+that does not appear in the findings."""
 
 
 # ---------------------------------------------------------------------------
 # Agents
 # ---------------------------------------------------------------------------
+
+
+def _short(text: str, limit: int = 70) -> str:
+    """A sub-question shortened for a one-line progress message."""
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 def resolve_worker_purpose() -> str:
@@ -290,7 +304,7 @@ class ResearchWorkerAgent(BaseStreamingAgent):
     def __init__(self, worker_id: str, purpose: str):
         super().__init__(AgentConfig(
             name=f"research-worker-{worker_id}",
-            display_name=f"Research worker {worker_id}",
+            display_name=f"Research angle {worker_id}",
             instructions=WORKER_INSTRUCTIONS,
             tools=list(WORKER_TOOLS),
             model=purpose,
@@ -585,11 +599,11 @@ class ResearchOrchestrator:
         async def worker_stream(ev: StreamEvent) -> None:
             if ev.type in ("content", "complete"):
                 return
-            await stream(ev.model_copy(update={"source": f"worker {worker_id}: {ev.source}"}))
+            await stream(ev.model_copy(update={"source": f"angle {worker_id}: {ev.source}"}))
 
         await stream(progress(
             source="research",
-            message=f"Worker {worker_id}: {sub.question}",
+            message=f"Researching: {sub.question}",
             data={"phase": "worker_start", "worker": worker_id, "angle": sub.angle},
         ))
 
@@ -610,9 +624,9 @@ class ResearchOrchestrator:
             )
             text = str(ctx.tool_results.get("llm_response") or "").strip()
             ok = bool(text)
-            err = None if ok else "worker produced no findings"
+            err = None if ok else "no findings were produced"
         except asyncio.TimeoutError:
-            text, ok, err = "", False, f"worker exceeded {self.settings.research_worker_budget_seconds + 120}s"
+            text, ok, err = "", False, f"exceeded {self.settings.research_worker_budget_seconds + 120}s"
         except Exception as exc:  # noqa: BLE001 — one worker must not sink the pass
             logger.warning("research worker %s failed: %s", worker_id, exc, exc_info=True)
             text, ok, err = "", False, str(exc)
@@ -626,9 +640,9 @@ class ResearchOrchestrator:
         await stream(progress(
             source="research",
             message=(
-                f"Worker {worker_id} done: {len(finding.sources)} sources, "
+                f"Finished “{_short(sub.question)}”: {len(finding.sources)} sources, "
                 f"{len(ctx.tool_calls)} tool calls, {elapsed // 1000}s"
-                if ok else f"Worker {worker_id} failed: {err}"
+                if ok else f"Could not research “{_short(sub.question)}”: {err}"
             ),
             data={"phase": "worker_done", "worker": worker_id, "ok": ok, "elapsed_ms": elapsed,
                   "sources": len(finding.sources), "tool_calls": len(ctx.tool_calls)},
@@ -644,7 +658,7 @@ class ResearchOrchestrator:
 
         t0 = time.monotonic()
         await stream(progress(
-            source="research", message="Breadth worker: Tavily research pass",
+            source="research", message="Broad web survey of the whole question started",
             data={"phase": "worker_start", "worker": "tavily"},
         ))
         try:
@@ -663,8 +677,8 @@ class ResearchOrchestrator:
         elapsed = round((time.monotonic() - t0) * 1000)
         await stream(progress(
             source="research",
-            message=(f"Breadth worker done: {len(sources)} sources, {elapsed // 1000}s"
-                     if ok else f"Breadth worker failed: {err}"),
+            message=(f"Broad web survey done: {len(sources)} sources, {elapsed // 1000}s"
+                     if ok else f"Broad web survey failed: {err}"),
             data={"phase": "worker_done", "worker": "tavily", "ok": ok, "elapsed_ms": elapsed},
         ))
         return WorkerFinding(
@@ -680,13 +694,15 @@ class ResearchOrchestrator:
         all_sources: Dict[str, Dict[str, str]] = {}
         failed = 0
         for f in findings:
-            label = "Breadth report (Tavily research)" if f.worker_id == "tavily" else f"Worker {f.worker_id}"
-            parts.append(f"\n## {label}\n**Sub-question:** {f.sub_question}\n")
+            if f.worker_id == "tavily":
+                parts.append("\n## Broad web survey of the whole question\n")
+            else:
+                parts.append(f"\n## Findings on: {f.sub_question}\n")
             if f.ok:
                 parts.append(f.findings.strip())
             else:
                 failed += 1
-                parts.append(f"_This worker did not return findings ({f.error})._")
+                parts.append(f"_This pass did not return findings ({f.error})._")
             # Only sources behind findings the lead can cite.
             if f.ok:
                 for s in f.sources:
@@ -891,14 +907,14 @@ class ResearchOrchestrator:
         settings = self.settings
 
         await stream(thought(
-            source="research", message="Breaking the question into angles for parallel workers…",
+            source="research", message="Breaking the question into angles to research in parallel…",
             data={"phase": "decompose"},
         ))
         subs = await self.decompose(question)
         purpose = resolve_worker_purpose()
         await stream(thought(
             source="research",
-            message=f"{len(subs)} angle(s) plus a breadth pass; workers on `{purpose}`.",
+            message=f"{len(subs)} angle(s) plus a broad web survey; researching on `{purpose}`.",
             data={"phase": "fan_out", "workers": len(subs), "purpose": purpose,
                   "angles": [s.question for s in subs]},
         ))
@@ -933,7 +949,7 @@ class ResearchOrchestrator:
         ok_count = sum(1 for f in findings if f.ok)
         await stream(thought(
             source="research",
-            message=f"{ok_count}/{len(findings)} workers returned findings "
+            message=f"{ok_count}/{len(findings)} research passes returned findings "
                     f"({len(bundle.sources)} distinct sources). Writing the report…",
             data={"phase": "synthesize", "ok": ok_count, "total": len(findings),
                   "sources": len(bundle.sources), "fan_out_ms": fan_out_ms},
@@ -941,7 +957,7 @@ class ResearchOrchestrator:
 
         if ok_count == 0:
             text = (
-                "I wasn't able to gather research on this: every worker came back empty "
+                "I wasn't able to gather research on this: every research pass came back empty "
                 + (f"({findings[0].error})" if findings and findings[0].error else "")
                 + ". Ask again to retry, or ask a narrower question for a standard search."
             )

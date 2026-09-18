@@ -503,6 +503,9 @@ TOOL_SCOPES: Dict[str, List[str]] = {
     "transcribe_audio": ["data.read"],
     "text_to_speech": ["data.write"],
     "memory_search": [],
+    "memory_recall": [],   # personal memory: bound to the caller's principal, keystore via own token
+    "memory_remember": [],
+    "memory_forget": [],
     "memory_save": [],
     "calendar_list_events": [],
     "calendar_create_event": [],
@@ -530,6 +533,9 @@ TOOL_CLASSES: Dict[str, Dict[str, Any]] = {
     "graph_explore": {"class": "fast", "timeout": 15},
     "graph_relate": {"class": "fast", "timeout": 15},
     "memory_search": {"class": "fast", "timeout": 10},
+    "memory_recall": {"class": "fast", "timeout": 15},
+    "memory_remember": {"class": "fast", "timeout": 15},
+    "memory_forget": {"class": "fast", "timeout": 15},
     "memory_save": {"class": "fast", "timeout": 10},
     "search_users": {"class": "fast", "timeout": 10},
     "calendar_list_events": {"class": "fast", "timeout": 15},
@@ -760,6 +766,15 @@ def _register_builtin_tools():
     ToolRegistry.register("transcribe_audio", transcribe_audio, TranscriptionOutput)
     ToolRegistry.register("text_to_speech", text_to_speech, TTSOutput)
     ToolRegistry.register("memory_search", memory_search, MemorySearchOutput)
+    try:
+        from app.tools.user_memory_tools import (
+            MemoryRecallOutput, MemoryWriteOutput, memory_forget, memory_recall, memory_remember,
+        )
+        ToolRegistry.register("memory_recall", memory_recall, MemoryRecallOutput)
+        ToolRegistry.register("memory_remember", memory_remember, MemoryWriteOutput)
+        ToolRegistry.register("memory_forget", memory_forget, MemoryWriteOutput)
+    except ImportError as e:
+        logger.warning(f"Could not register personal memory tools: {e}")
     ToolRegistry.register("memory_save", memory_save, MemorySaveOutput)
     ToolRegistry.register("calendar_list_events", calendar_list_events, CalendarListOutput)
     ToolRegistry.register("calendar_create_event", calendar_create_event, CalendarCreateOutput)
@@ -887,6 +902,9 @@ class AgentContext:
     pending_questions: List[Dict[str, Any]] = field(default_factory=list)
     # Whether the platform-level insights system is enabled
     insights_enabled: bool = True
+    # The user's personal memory for this turn only (services/memory_reader.py).
+    # Rendered into the system prompt, never persisted, never logged.
+    memory: Optional[Any] = None
     # Application context metadata (e.g. projectId, appName) from the chat request
     metadata: Dict[str, Any] = field(default_factory=dict)
     # Raw attachment metadata from chat request (unresolved)
@@ -1571,6 +1589,7 @@ class BaseStreamingAgent(StreamingAgent):
         # Get relevant insights from context (passed by dispatcher)
         # The dispatcher fetches these based on the query before calling the agent
         if context:
+            agent_context.memory = context.get("memory")
             agent_context.relevant_insights = context.get("relevant_insights", [])
             if agent_context.relevant_insights:
                 logger.info(
@@ -1998,7 +2017,9 @@ class BaseStreamingAgent(StreamingAgent):
             await stream(tool_result(
                 source=step.tool,
                 message=self._format_tool_result_message(step.tool, result),
-                data=result_data if isinstance(result_data, dict) else {"result": result_data}
+                data=self._stream_safe_result_data(
+                    step.tool, result_data if isinstance(result_data, dict) else {"result": result_data}
+                ),
             ))
             
             return result
@@ -2017,6 +2038,15 @@ class BaseStreamingAgent(StreamingAgent):
             ))
             return None
     
+    @staticmethod
+    def _stream_safe_result_data(tool_name: str, result_data: Any) -> Any:
+        """What a tool result looks like on the event stream. Personal-memory
+        reads go to the model, not to the stream/event log: the stream keeps
+        the path and outcome only."""
+        if tool_name in ("memory_recall", "memory_remember", "memory_forget") and isinstance(result_data, dict):
+            return {k: v for k, v in result_data.items() if k in ("success", "path", "message", "error")} | {"redacted": True}
+        return result_data
+
     def _format_tool_result_message(self, tool_name: str, result: Any) -> str:
         """Format a human-readable message for tool results."""
         if hasattr(result, 'error') and getattr(result, 'error'):
@@ -2144,7 +2174,7 @@ class BaseStreamingAgent(StreamingAgent):
                             await stream(tool_result(
                                 source=_tool_name,
                                 message=self._format_tool_result_message(_tool_name, result),
-                                data=result_data,
+                                data=self._stream_safe_result_data(_tool_name, result_data),
                             ))
                             return result
                         except asyncio.TimeoutError:
@@ -2971,6 +3001,12 @@ class BaseStreamingAgent(StreamingAgent):
                 else:
                     parts.append(f"- **{key}**: {value}")
 
+        if context.memory is not None and not getattr(context.memory, "empty", True):
+            parts.append("")
+            parts.append(context.memory.prompt_block(
+                tools_available="memory_recall" in set(self.config.tools or [])
+            ))
+            parts.append("")
         if context.insights_enabled:
             if context.relevant_insights:
                 parts.append("")
@@ -3159,6 +3195,12 @@ class BaseStreamingAgent(StreamingAgent):
                 parts.append(f"- **{key}**: {value}")
             parts.append("")
         
+        if context.memory is not None and not getattr(context.memory, "empty", True):
+            parts.append("")
+            parts.append(context.memory.prompt_block(
+                tools_available="memory_recall" in set(self.config.tools or [])
+            ))
+            parts.append("")
         if context.insights_enabled:
             if context.relevant_insights:
                 parts.append("## Relevant User Context (from past conversations)")
@@ -3523,6 +3565,12 @@ class BaseStreamingAgent(StreamingAgent):
         except Exception as e:
             logger.debug(f"Failed to render skills prompt: {e}")
 
+        if context.memory is not None and not getattr(context.memory, "empty", True):
+            parts.append("")
+            parts.append(context.memory.prompt_block(
+                tools_available="memory_recall" in set(self.config.tools or [])
+            ))
+            parts.append("")
         if context.insights_enabled:
             if context.relevant_insights:
                 parts.append("## Relevant User Context (from past conversations)")

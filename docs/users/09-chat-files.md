@@ -89,7 +89,7 @@ Slides too dense to read are flagged so the chat can split them.
 
 When you run a deep-research pass (the one you confirm with **Yes**), the
 finished report is exported to Word automatically once it is on screen —
-with its charts, tables and every source the workers found. The link is
+with its charts, tables and every source it found. The link is
 appended under the report. If the export fails for any reason the report
 itself is unaffected; you can still ask "export that to Word" afterwards.
 

@@ -52,6 +52,10 @@ NEXT_PUBLIC_CHAT_EMPTY_HEADING="What can I help you with today?"
 NEXT_PUBLIC_CHAT_SUGGESTED_PROMPTS='[{"description":"...","prompt":"..."}]'
 ```
 
+A prompt may contain one `{{placeholder}}` — the new-chat screen then shows an
+inline text box in its place and sends the completed sentence, e.g.
+`{"description":"Deep research on any subject.","prompt":"Deep dive into the topic {{topic}}"}`.
+
 Build, sync assets, restart:
 
 ```bash

@@ -969,6 +969,10 @@ async def update_chat_settings(
             settings.temperature = payload.temperature
         if payload.max_tokens is not None:
             settings.max_tokens = payload.max_tokens
+        if payload.notify_email_on_completion is not None:
+            settings.notify_email_on_completion = payload.notify_email_on_completion
+        if payload.memory_enabled is not None:
+            settings.memory_enabled = payload.memory_enabled
         
         await session.commit()
         await session.refresh(settings)
