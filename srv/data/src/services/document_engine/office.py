@@ -149,10 +149,13 @@ def pandoc_markdown_to_docx(
 ) -> Path:
     """Render a Markdown file to ``.docx`` with pandoc.
 
-    Images resolve only from ``resource_path``; on pandoc ≥ 2.15 ``--sandbox``
-    additionally forbids reading anything else (Ubuntu 22.04 ships 2.9, so
-    the caller must not rely on it — the engine rewrites every image link
-    itself).
+    Images resolve only from ``resource_path``. pandoc's ``--sandbox`` is
+    deliberately *not* used: distribution builds of pandoc (Debian 12 ships
+    2.17 without ``embed_data_files``) read the docx writer's own data files
+    from disk, which the sandbox forbids — the writer then fails with
+    "Could not find data file data/data/docx/[Content_Types].xml". Input
+    isolation is done by the engine instead: it rewrites every image link
+    to a file it fetched itself, so nothing else is referenced.
     """
     cmd = [
         PANDOC_BIN,
@@ -164,8 +167,6 @@ def pandoc_markdown_to_docx(
         "--output",
         str(out_path),
     ]
-    if pandoc_version() >= (2, 15):
-        cmd.append("--sandbox")
     if reference_doc is not None:
         cmd += ["--reference-doc", str(reference_doc)]
     if resource_path is not None:
